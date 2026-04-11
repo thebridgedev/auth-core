@@ -248,11 +248,16 @@ export interface CheckoutSession {
   publicKey: string;
 }
 
-/** Workspace (tenant) for workspace selection in SDK auth */
+/** Workspace (tenantUser) for workspace selection in SDK auth */
 export interface Workspace {
   id: string;
-  name: string;
-  logo?: string;
+  username: string;
+  fullName: string;
+  tenant: {
+    id: string;
+    name: string;
+    logo: string;
+  };
 }
 
 /** Events emitted by BridgeAuth */

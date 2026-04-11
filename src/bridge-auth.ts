@@ -39,6 +39,7 @@ import type {
   SubscriptionStatus,
   TenantUser,
   TokenSet,
+  Workspace,
 } from './types.js';
 
 export class BridgeAuth {
@@ -238,9 +239,29 @@ export class BridgeAuth {
     return this.directAuth.resetUserMfaSetup(backupCode, session);
   }
 
-  /** Returns the list of workspaces (tenants) the user has access to, as returned during authentication. */
-  getWorkspaces(): TenantUser[] {
-    return this.stateManager.getTenantUsers();
+  /** Returns the list of workspaces (tenants) the user has access to during login, or fetches from API post-login. */
+  async getWorkspaces(): Promise<Workspace[]> {
+    // During login flow, tenantUsers are available in state
+    const stateTenants = this.stateManager.getTenantUsers();
+    if (stateTenants.length > 0) {
+      return stateTenants;
+    }
+    // Post-login: fetch from API using the access token
+    const tokens = this.tokenManager.getTokens();
+    if (!tokens?.accessToken) return [];
+    return this.directAuth.listWorkspaces(tokens.accessToken);
+  }
+
+  /** Switch to a different workspace. Issues new tokens scoped to the target tenant. */
+  async switchWorkspace(targetTenantUserId: string): Promise<TokenSet> {
+    const tokens = this.tokenManager.getTokens();
+    if (!tokens?.accessToken) throw new Error('Not authenticated.');
+    const newTokens = await this.directAuth.switchWorkspace(tokens.accessToken, targetTenantUserId);
+    this.tokenManager.setTokens(newTokens);
+    this.emitter.emit('auth:workspace-changed', newTokens);
+    // Ensure profile store reflects the new workspace before callers proceed
+    await this.getProfile();
+    return newTokens;
   }
 
   async selectTenant(tenantUserId: string): Promise<TokenSet> {

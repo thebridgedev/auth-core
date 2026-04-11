@@ -11,6 +11,7 @@ import type {
   ResolvedConfig,
   SignupResult,
   TokenSet,
+  Workspace,
 } from './types.js';
 
 interface DirectTokenResponse {
@@ -91,6 +92,30 @@ export class DirectAuthService {
         scope: 'openid profile email onboarding tenant',
         mode: 'sdk',
       },
+    }, this.logger);
+
+    return {
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      idToken: data.id_token,
+    };
+  }
+
+  // --- Workspace listing & switching ---
+
+  async listWorkspaces(accessToken: string): Promise<Workspace[]> {
+    const url = `${this.config.authBaseUrl}/token/workspace-list`;
+    return httpFetch<Workspace[]>(url, {
+      method: 'POST',
+      body: { accessToken },
+    }, this.logger);
+  }
+
+  async switchWorkspace(accessToken: string, targetTenantUserId: string): Promise<TokenSet> {
+    const url = `${this.config.authBaseUrl}/token/workspace-switch`;
+    const data = await httpFetch<DirectTokenResponse>(url, {
+      method: 'POST',
+      body: { accessToken, targetTenantUserId },
     }, this.logger);
 
     return {
