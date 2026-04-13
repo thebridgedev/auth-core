@@ -209,7 +209,7 @@ describe('BridgeAuth', () => {
       await auth.authenticate('u@test.com', 'p');
 
       // MFA commit
-      mockHttpFetch.mockResolvedValueOnce({ session: 'sess2', expires: 3600 });
+      mockHttpFetch.mockResolvedValueOnce({ session: 'sess2', expires: 3600, mfaState: 'COMPLETED' });
       // Auto select tenant
       mockHttpFetch.mockResolvedValueOnce({
         access_token: 'at',
@@ -249,6 +249,130 @@ describe('BridgeAuth', () => {
 
     it('verifyMfa throws when no active session', async () => {
       await expect(auth.verifyMfa('123')).rejects.toThrow('No active session');
+    });
+
+    it('setupMfa stores the session returned by startMfaUserSetup', async () => {
+      // First authenticate with MFA setup required
+      mockHttpFetch.mockResolvedValueOnce({
+        session: 'sess-initial',
+        expires: 3600,
+        mfaState: 'SETUP',
+        tenantUsers: [{ id: 'tu1', username: 'u', fullName: 'U', tenant: { id: 't1', name: 'T', logo: '' } }],
+      });
+      await auth.authenticate('u@test.com', 'p');
+      expect(auth.getAuthState()).toBe('mfa-setup-required');
+
+      // startMfaUserSetup returns a new session (with codeHash embedded server-side)
+      mockHttpFetch.mockResolvedValueOnce({
+        session: 'sess-with-code-hash',
+        expires: 3600,
+        mfaState: 'SETUP',
+      });
+
+      await auth.setupMfa('+15551234567');
+
+      // The critical assertion: the session on subsequent calls must be the
+      // one just returned, not the initial one from authenticate().
+      // Verified indirectly by checking confirmMfaSetup sends the right session.
+      mockHttpFetch.mockResolvedValueOnce({
+        session: 'sess-final', expires: 3600, mfaState: 'COMPLETED', backupCode: 'BCUP',
+      });
+
+      await auth.confirmMfaSetup('123456');
+
+      const finishCall = mockHttpFetch.mock.calls.find(
+        ([url]: any[]) => typeof url === 'string' && url.includes('/finishMfaUserSetup'),
+      );
+      expect(finishCall).toBeTruthy();
+      expect(finishCall![1].body).toMatchObject({ session: 'sess-with-code-hash' });
+    });
+
+    it('confirmMfaSetup returns backupCode but stays in mfa-setup-required (UI shows backup code)', async () => {
+      // Authenticate with MFA setup required
+      mockHttpFetch.mockResolvedValueOnce({
+        session: 'sess-initial',
+        expires: 3600,
+        mfaState: 'SETUP',
+        tenantUsers: [{ id: 'tu1', username: 'u', fullName: 'U', tenant: { id: 't1', name: 'T', logo: '' } }],
+      });
+      await auth.authenticate('u@test.com', 'p');
+
+      // finishMfaUserSetup returns backupCode + session advanced to COMPLETED on server
+      mockHttpFetch.mockResolvedValueOnce({
+        session: 'sess-final',
+        expires: 3600,
+        mfaState: 'COMPLETED',
+        backupCode: 'BACKUP-CODE-XYZ',
+      });
+
+      const result = await auth.confirmMfaSetup('123456');
+
+      // UI state must stay so MfaSetup component can display the backup code.
+      expect(auth.getAuthState()).toBe('mfa-setup-required');
+      expect(result.backupCode).toBe('BACKUP-CODE-XYZ');
+      expect(auth.isAuthenticated()).toBe(false);
+    });
+
+    it('completeMfaSetup auto-selects tenant and transitions to authenticated', async () => {
+      // Set up state: authenticate → confirm MFA (updates session, stays in setup)
+      mockHttpFetch.mockResolvedValueOnce({
+        session: 'sess-initial',
+        expires: 3600,
+        mfaState: 'SETUP',
+        tenantUsers: [{ id: 'tu1', username: 'u', fullName: 'U', tenant: { id: 't1', name: 'T', logo: '' } }],
+      });
+      await auth.authenticate('u@test.com', 'p');
+
+      mockHttpFetch.mockResolvedValueOnce({
+        session: 'sess-post-confirm',
+        expires: 3600,
+        mfaState: 'COMPLETED',
+        backupCode: 'B',
+      });
+      await auth.confirmMfaSetup('123456');
+      expect(auth.getAuthState()).toBe('mfa-setup-required');
+
+      // Auto-select tenant token exchange
+      mockHttpFetch.mockResolvedValueOnce({
+        access_token: 'at',
+        refresh_token: 'rt',
+        id_token: 'idt',
+      });
+
+      await auth.completeMfaSetup();
+
+      expect(auth.isAuthenticated()).toBe(true);
+      expect(auth.getAuthState()).toBe('authenticated');
+
+      // selectTenant must have been called with the session from confirmMfaSetup, not initial
+      const selectCall = mockHttpFetch.mock.calls.find(
+        ([url]: any[]) => typeof url === 'string' && url.includes('/token/direct'),
+      );
+      expect(selectCall).toBeTruthy();
+      expect(selectCall![1].body).toMatchObject({ session: 'sess-post-confirm' });
+    });
+
+    it('resetMfa transitions state from mfa-required to mfa-setup-required', async () => {
+      // Authenticate with MFA required
+      mockHttpFetch.mockResolvedValueOnce({
+        session: 'sess-challenge',
+        expires: 3600,
+        mfaState: 'REQUIRED',
+        tenantUsers: [{ id: 'tu1', username: 'u', fullName: 'U', tenant: { id: 't1', name: 'T', logo: '' } }],
+      });
+      await auth.authenticate('u@test.com', 'p');
+      expect(auth.getAuthState()).toBe('mfa-required');
+
+      // resetUserMfaSetup returns a new session with mfaState=SETUP
+      mockHttpFetch.mockResolvedValueOnce({
+        session: 'sess-after-reset',
+        expires: 3600,
+        mfaState: 'SETUP',
+      });
+
+      await auth.resetMfa('BACKUP-CODE');
+
+      expect(auth.getAuthState()).toBe('mfa-setup-required');
     });
 
     it('selectTenant throws when no active session', async () => {

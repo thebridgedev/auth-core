@@ -196,11 +196,12 @@ export class BridgeAuth {
     const session = this.stateManager.getSession();
     if (!session) throw new Error('No active session. Call authenticate() first.');
     const result = await this.directAuth.commitMfaCode(code, session);
-    this.stateManager.onMfaCompleted(result.session, result.expires);
+    this.stateManager.onMfaStateChanged(result.session, result.expires, result.mfaState);
 
-    // Auto-select tenant if only one
+    // Auto-select tenant if only one and MFA is done
+    const mfaDone = result.mfaState === 'COMPLETED' || result.mfaState === 'DISABLED';
     const tenantUsers = this.stateManager.getTenantUsers();
-    if (tenantUsers.length === 1) {
+    if (mfaDone && tenantUsers.length === 1) {
       const tokens = await this.directAuth.selectTenant(result.session, tenantUsers[0].id);
       this.tokenManager.setTokens(tokens);
       this.stateManager.onAuthenticated();
@@ -213,30 +214,50 @@ export class BridgeAuth {
   async setupMfa(phoneNumber: string): Promise<MfaResult> {
     const session = this.stateManager.getSession();
     if (!session) throw new Error('No active session. Call authenticate() first.');
-    return this.directAuth.startMfaUserSetup(phoneNumber, session);
+    const result = await this.directAuth.startMfaUserSetup(phoneNumber, session);
+    this.stateManager.onMfaStateChanged(result.session, result.expires, result.mfaState);
+    return result;
   }
 
   async confirmMfaSetup(code: string): Promise<MfaResult> {
     const session = this.stateManager.getSession();
     if (!session) throw new Error('No active session. Call authenticate() first.');
     const result = await this.directAuth.finishMfaUserSetup(code, session);
-    this.stateManager.onMfaCompleted(result.session, result.expires);
+    // Session is advanced to MFA=COMPLETED on the server, but we intentionally
+    // do NOT transition UI state here — the MfaSetup component needs to stay
+    // mounted to display the backup code. Call completeMfaSetup() after the
+    // user acknowledges the backup code to finalize auth.
+    this.stateManager.updateSession(result.session, result.expires);
+    return result;
+  }
 
+  /**
+   * Finalize MFA setup after the user has seen and saved their backup code.
+   * Transitions from mfa-setup-required → tenant-selection (multi-tenant) or
+   * straight through to authenticated (single-tenant auto-select).
+   */
+  async completeMfaSetup(): Promise<void> {
+    const session = this.stateManager.getSession();
+    if (!session) throw new Error('No active session. Call confirmMfaSetup() first.');
     const tenantUsers = this.stateManager.getTenantUsers();
     if (tenantUsers.length === 1) {
-      const tokens = await this.directAuth.selectTenant(result.session, tenantUsers[0].id);
+      const tokens = await this.directAuth.selectTenant(session, tenantUsers[0].id);
       this.tokenManager.setTokens(tokens);
       this.stateManager.onAuthenticated();
       this.emitter.emit('auth:login', tokens);
+    } else {
+      // Multi-tenant: mark MFA as complete so LoginForm renders TenantSelector
+      const expires = this.stateManager.getSessionExpires() ?? 0;
+      this.stateManager.onMfaStateChanged(session, expires, 'COMPLETED');
     }
-
-    return result;
   }
 
   async resetMfa(backupCode: string): Promise<MfaResult> {
     const session = this.stateManager.getSession();
     if (!session) throw new Error('No active session. Call authenticate() first.');
-    return this.directAuth.resetUserMfaSetup(backupCode, session);
+    const result = await this.directAuth.resetUserMfaSetup(backupCode, session);
+    this.stateManager.onMfaStateChanged(result.session, result.expires, result.mfaState);
+    return result;
   }
 
   /** Returns the list of workspaces (tenants) the user has access to during login, or fetches from API post-login. */
@@ -284,6 +305,26 @@ export class BridgeAuth {
 
   async sendMagicLink(email: string): Promise<MagicLinkResult> {
     return this.directAuth.sendMagicLink(email);
+  }
+
+  async authenticateWithMagicLinkToken(token: string): Promise<AuthResult> {
+    const result = await this.directAuth.authenticateWithMagicLinkToken(token);
+    this.stateManager.onCredentialsValidated(
+      result.session,
+      result.expires,
+      result.mfaState,
+      result.tenantUsers,
+    );
+
+    const mfaReady = result.mfaState === 'COMPLETED' || result.mfaState === 'DISABLED';
+    if (mfaReady && result.tenantUsers.length === 1) {
+      const tokens = await this.directAuth.selectTenant(result.session, result.tenantUsers[0].id);
+      this.tokenManager.setTokens(tokens);
+      this.stateManager.onAuthenticated();
+      this.emitter.emit('auth:login', tokens);
+    }
+
+    return result;
   }
 
   // --- Password reset ---

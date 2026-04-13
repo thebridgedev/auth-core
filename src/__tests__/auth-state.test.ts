@@ -118,41 +118,85 @@ describe('AuthStateManager', () => {
   });
 
   // -------------------------------------------------------------------------
-  // onMfaCompleted
+  // updateSession
   // -------------------------------------------------------------------------
 
-  describe('onMfaCompleted', () => {
-    it('transitions to "tenant-selection" when multiple tenants remain', () => {
+  describe('updateSession', () => {
+    it('updates session and expires without changing state', () => {
+      const { manager, onStateChange } = makeManager();
+      manager.onCredentialsValidated(SESSION, EXPIRES, 'SETUP', [TENANT_USER_1]);
+      expect(manager.getState()).toBe('mfa-setup-required');
+      onStateChange.mockClear();
+
+      manager.updateSession('new-sess', 12345);
+
+      expect(manager.getSession()).toBe('new-sess');
+      expect(manager.getSessionExpires()).toBe(12345);
+      expect(manager.getState()).toBe('mfa-setup-required');
+      expect(manager.getMfaState()).toBe('SETUP');
+      expect(onStateChange).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // onMfaStateChanged
+  // -------------------------------------------------------------------------
+
+  describe('onMfaStateChanged', () => {
+    it('transitions to "tenant-selection" when multiple tenants remain and MFA is COMPLETED', () => {
       const { manager } = makeManager();
-      // Setup state with two tenant users first
       manager.onCredentialsValidated(SESSION, EXPIRES, 'REQUIRED', [TENANT_USER_1, TENANT_USER_2]);
 
-      manager.onMfaCompleted('new-session', EXPIRES);
+      manager.onMfaStateChanged('new-session', EXPIRES, 'COMPLETED');
       expect(manager.getState()).toBe('tenant-selection');
     });
 
-    it('transitions to "credentials-validated" when only a single tenant remains', () => {
+    it('transitions to "credentials-validated" when single tenant and MFA is COMPLETED', () => {
       const { manager } = makeManager();
       manager.onCredentialsValidated(SESSION, EXPIRES, 'REQUIRED', [TENANT_USER_1]);
 
-      manager.onMfaCompleted('new-session', EXPIRES);
+      manager.onMfaStateChanged('new-session', EXPIRES, 'COMPLETED');
       expect(manager.getState()).toBe('credentials-validated');
+    });
+
+    it('transitions to "credentials-validated" when MFA is DISABLED', () => {
+      const { manager } = makeManager();
+      manager.onCredentialsValidated(SESSION, EXPIRES, 'REQUIRED', [TENANT_USER_1]);
+
+      manager.onMfaStateChanged('new-session', EXPIRES, 'DISABLED');
+      expect(manager.getState()).toBe('credentials-validated');
+    });
+
+    it('transitions to "mfa-setup-required" when new state is SETUP', () => {
+      const { manager } = makeManager();
+      manager.onCredentialsValidated(SESSION, EXPIRES, 'REQUIRED', [TENANT_USER_1]);
+
+      manager.onMfaStateChanged('reset-session', EXPIRES, 'SETUP');
+      expect(manager.getState()).toBe('mfa-setup-required');
+    });
+
+    it('transitions to "mfa-required" when new state is REQUIRED', () => {
+      const { manager } = makeManager();
+      manager.onCredentialsValidated(SESSION, EXPIRES, 'SETUP', [TENANT_USER_1]);
+
+      manager.onMfaStateChanged('challenge-session', EXPIRES, 'REQUIRED');
+      expect(manager.getState()).toBe('mfa-required');
     });
 
     it('updates the session to the new value', () => {
       const { manager } = makeManager();
       manager.onCredentialsValidated(SESSION, EXPIRES, 'REQUIRED', [TENANT_USER_1]);
 
-      manager.onMfaCompleted('updated-session', EXPIRES);
+      manager.onMfaStateChanged('updated-session', EXPIRES, 'COMPLETED');
       expect(manager.getSession()).toBe('updated-session');
     });
 
-    it('sets mfaState to COMPLETED', () => {
+    it('updates mfaState to the new value', () => {
       const { manager } = makeManager();
       manager.onCredentialsValidated(SESSION, EXPIRES, 'REQUIRED', [TENANT_USER_1]);
 
-      manager.onMfaCompleted('s', EXPIRES);
-      expect(manager.getMfaState()).toBe('COMPLETED');
+      manager.onMfaStateChanged('s', EXPIRES, 'SETUP');
+      expect(manager.getMfaState()).toBe('SETUP');
     });
 
     it('fires the onStateChange callback', () => {
@@ -160,7 +204,7 @@ describe('AuthStateManager', () => {
       manager.onCredentialsValidated(SESSION, EXPIRES, 'REQUIRED', [TENANT_USER_1]);
       onStateChange.mockClear();
 
-      manager.onMfaCompleted('s', EXPIRES);
+      manager.onMfaStateChanged('s', EXPIRES, 'COMPLETED');
       expect(onStateChange).toHaveBeenCalledTimes(1);
     });
   });

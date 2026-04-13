@@ -21,6 +21,10 @@ export class AuthStateManager {
     return this.session;
   }
 
+  getSessionExpires(): number | null {
+    return this.sessionExpires;
+  }
+
   getTenantUsers(): TenantUser[] {
     return this.tenantUsers;
   }
@@ -46,16 +50,29 @@ export class AuthStateManager {
     }
   }
 
-  /** After MFA commit/finish */
-  onMfaCompleted(session: string, expires: number): void {
+  /**
+   * Refresh the stored session without changing UI state.
+   * Used by confirmMfaSetup where the backend advances the session to COMPLETED,
+   * but we need the UI to stay on MfaSetup so the user can acknowledge the
+   * backup code before the tenant-select + authentication transition fires.
+   */
+  updateSession(session: string, expires: number): void {
     this.session = session;
     this.sessionExpires = expires;
-    this.mfaState = 'COMPLETED';
+  }
 
-    if (this.tenantUsers.length > 1) {
-      this.transition('tenant-selection');
-    } else {
-      this.transition('credentials-validated');
+  /** After any MFA step — backend returns the new state, we trust it */
+  onMfaStateChanged(session: string, expires: number, mfaState: string): void {
+    this.session = session;
+    this.sessionExpires = expires;
+    this.mfaState = mfaState;
+
+    if (mfaState === 'COMPLETED' || mfaState === 'DISABLED') {
+      this.transition(this.tenantUsers.length > 1 ? 'tenant-selection' : 'credentials-validated');
+    } else if (mfaState === 'SETUP') {
+      this.transition('mfa-setup-required');
+    } else if (mfaState === 'REQUIRED') {
+      this.transition('mfa-required');
     }
   }
 

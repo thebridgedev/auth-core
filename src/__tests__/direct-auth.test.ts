@@ -159,13 +159,13 @@ describe('DirectAuthService', () => {
       expect(url).toBe('https://api.example.com/auth/auth/commitMfaCode');
     });
 
-    it('sends the session in the Cookie header', async () => {
+    it('sends the session in the body', async () => {
       mockHttpFetch.mockResolvedValue(MFA_RESULT);
 
       await service.commitMfaCode('123456', 'SESSION_TOKEN');
 
       const [, opts] = mockHttpFetch.mock.calls[0];
-      expect(opts.headers).toMatchObject({ Cookie: 'LOGIN_SESSION=SESSION_TOKEN' });
+      expect(opts.body).toMatchObject({ session: 'SESSION_TOKEN' });
     });
 
     it('sends mfaCode and mode in the body', async () => {
@@ -192,13 +192,13 @@ describe('DirectAuthService', () => {
       expect(url).toBe('https://api.example.com/auth/auth/startMfaUserSetup');
     });
 
-    it('sends the session in the Cookie header', async () => {
+    it('sends the session in the body', async () => {
       mockHttpFetch.mockResolvedValue(MFA_RESULT);
 
       await service.startMfaUserSetup('+1234567890', 'sess-tok');
 
       const [, opts] = mockHttpFetch.mock.calls[0];
-      expect(opts.headers).toMatchObject({ Cookie: 'LOGIN_SESSION=sess-tok' });
+      expect(opts.body).toMatchObject({ session: 'sess-tok' });
     });
 
     it('sends phoneNumber in the body', async () => {
@@ -225,13 +225,13 @@ describe('DirectAuthService', () => {
       expect(url).toBe('https://api.example.com/auth/auth/finishMfaUserSetup');
     });
 
-    it('sends the session in the Cookie header', async () => {
+    it('sends the session in the body', async () => {
       mockHttpFetch.mockResolvedValue(MFA_RESULT);
 
       await service.finishMfaUserSetup('112233', 'my-sess');
 
       const [, opts] = mockHttpFetch.mock.calls[0];
-      expect(opts.headers).toMatchObject({ Cookie: 'LOGIN_SESSION=my-sess' });
+      expect(opts.body).toMatchObject({ session: 'my-sess' });
     });
 
     it('sends mfaCode in the body', async () => {
@@ -258,13 +258,13 @@ describe('DirectAuthService', () => {
       expect(url).toBe('https://api.example.com/auth/auth/resetUserMfaSetup');
     });
 
-    it('sends the session in the Cookie header', async () => {
+    it('sends the session in the body', async () => {
       mockHttpFetch.mockResolvedValue(MFA_RESULT);
 
       await service.resetUserMfaSetup('BACKUP', 'session-id');
 
       const [, opts] = mockHttpFetch.mock.calls[0];
-      expect(opts.headers).toMatchObject({ Cookie: 'LOGIN_SESSION=session-id' });
+      expect(opts.body).toMatchObject({ session: 'session-id' });
     });
 
     it('sends backupCode in the body', async () => {

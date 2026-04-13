@@ -26,6 +26,17 @@ const logger: Logger = {
   error: vi.fn(),
 };
 
+const PROVIDERS = [
+  'google',
+  'github',
+  'ms-azure-ad',
+  'linkedin',
+  'facebook',
+  'apple',
+  'saml',
+  'oidc',
+] as const;
+
 // ---------------------------------------------------------------------------
 // DOM / window mocking helpers
 // ---------------------------------------------------------------------------
@@ -39,16 +50,12 @@ function createFakePopup(closed = false): Window {
   } as unknown as Window;
 }
 
-/**
- * Sets up the globals that SsoPopupManager relies on (window.open,
- * window.addEventListener, window.removeEventListener, screen, window.location).
- * Returns helpers for interacting with registered message listeners.
- */
-function setupWindowMocks(opts: { popupBlocked?: boolean; closedAfterMs?: number } = {}) {
+function setupWindowMocks(opts: { popupBlocked?: boolean } = {}) {
   const messageListeners: MessageListener[] = [];
   const fakePopup = opts.popupBlocked ? null : createFakePopup(false);
 
   const windowOpenSpy = vi.fn(() => fakePopup);
+  const locationAssignSpy = vi.fn();
   const addEventListenerSpy = vi.fn((type: string, listener: EventListener) => {
     if (type === 'message') {
       messageListeners.push(listener as MessageListener);
@@ -61,7 +68,7 @@ function setupWindowMocks(opts: { popupBlocked?: boolean; closedAfterMs?: number
       open: windowOpenSpy,
       addEventListener: addEventListenerSpy,
       removeEventListener: removeEventListenerSpy,
-      location: { origin: 'https://myapp.com' },
+      location: { origin: 'https://myapp.com', assign: locationAssignSpy },
     },
     writable: true,
     configurable: true,
@@ -80,6 +87,7 @@ function setupWindowMocks(opts: { popupBlocked?: boolean; closedAfterMs?: number
 
   return {
     windowOpenSpy,
+    locationAssignSpy,
     addEventListenerSpy,
     removeEventListenerSpy,
     fakePopup,
@@ -102,39 +110,88 @@ describe('SsoPopupManager', () => {
   });
 
   // -------------------------------------------------------------------------
-  // startSsoLogin — URL construction
+  // Redirect mode (default)
   // -------------------------------------------------------------------------
 
-  describe('startSsoLogin — URL construction', () => {
-    it('opens a popup with the federation URL for the given provider', () => {
-      const { windowOpenSpy } = setupWindowMocks();
+  describe('startSsoLogin — redirect mode (default)', () => {
+    it.each(PROVIDERS)(
+      'navigates the current tab to the federation URL for provider=%s with no mode/targetOrigin',
+      (provider) => {
+        const { locationAssignSpy, windowOpenSpy, addEventListenerSpy } = setupWindowMocks();
+
+        const manager = new SsoPopupManager(CONFIG, logger);
+        // Explicit redirect mode
+        manager.startSsoLogin(provider, { mode: 'redirect' });
+
+        expect(locationAssignSpy).toHaveBeenCalledTimes(1);
+        const [urlStr] = locationAssignSpy.mock.calls[0];
+        const url = new URL(urlStr as string);
+
+        expect(url.pathname).toBe('/auth/auth/federation/app1');
+        expect(url.searchParams.get('provider')).toBe(provider);
+        // Redirect mode MUST NOT include popup-only params
+        expect(url.searchParams.get('mode')).toBeNull();
+        expect(url.searchParams.get('targetOrigin')).toBeNull();
+
+        // And must not touch popup machinery
+        expect(windowOpenSpy).not.toHaveBeenCalled();
+        expect(addEventListenerSpy).not.toHaveBeenCalledWith('message', expect.any(Function));
+      },
+    );
+
+    it('uses redirect mode when no options are provided (default)', () => {
+      const { locationAssignSpy, windowOpenSpy } = setupWindowMocks();
 
       const manager = new SsoPopupManager(CONFIG, logger);
-      // Don't await — we'll verify the call synchronously
-      manager.startSsoLogin('google').catch(() => {});
+      manager.startSsoLogin('google');
 
-      const [url] = windowOpenSpy.mock.calls[0];
-      expect(url).toContain('/url/federation/app1');
+      expect(locationAssignSpy).toHaveBeenCalledTimes(1);
+      expect(windowOpenSpy).not.toHaveBeenCalled();
     });
 
-    it('includes provider, mode=popup, and targetOrigin in the URL query params', () => {
-      const { windowOpenSpy } = setupWindowMocks();
-
+    it('returns a promise that never resolves (tab is navigating away)', async () => {
+      setupWindowMocks();
       const manager = new SsoPopupManager(CONFIG, logger);
-      manager.startSsoLogin('github').catch(() => {});
 
-      const [urlStr] = windowOpenSpy.mock.calls[0];
-      const url = new URL(urlStr as string);
-      expect(url.searchParams.get('provider')).toBe('github');
-      expect(url.searchParams.get('mode')).toBe('popup');
-      expect(url.searchParams.get('targetOrigin')).toBe('https://myapp.com');
+      let settled = false;
+      manager.startSsoLogin('google', { mode: 'redirect' })
+        .then(() => { settled = true; })
+        .catch(() => { settled = true; });
+
+      // Advance timers far into the future
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      expect(settled).toBe(false);
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Popup mode — URL construction
+  // -------------------------------------------------------------------------
+
+  describe('startSsoLogin — popup mode URL construction', () => {
+    it.each(PROVIDERS)(
+      'opens a popup with the correct federation URL for provider=%s',
+      (provider) => {
+        const { windowOpenSpy } = setupWindowMocks();
+
+        const manager = new SsoPopupManager(CONFIG, logger);
+        manager.startSsoLogin(provider, { mode: 'popup' }).catch(() => {});
+
+        const [urlStr] = windowOpenSpy.mock.calls[0];
+        const url = new URL(urlStr as string);
+
+        expect(url.pathname).toBe('/auth/auth/federation/app1');
+        expect(url.searchParams.get('provider')).toBe(provider);
+        expect(url.searchParams.get('mode')).toBe('popup');
+        expect(url.searchParams.get('targetOrigin')).toBe('https://myapp.com');
+      },
+    );
 
     it('uses default dimensions (500 x 600) when no options are provided', () => {
       const { windowOpenSpy } = setupWindowMocks();
 
       const manager = new SsoPopupManager(CONFIG, logger);
-      manager.startSsoLogin('google').catch(() => {});
+      manager.startSsoLogin('google', { mode: 'popup' }).catch(() => {});
 
       const [, , features] = windowOpenSpy.mock.calls[0];
       expect(features).toContain('width=500');
@@ -145,7 +202,7 @@ describe('SsoPopupManager', () => {
       const { windowOpenSpy } = setupWindowMocks();
 
       const manager = new SsoPopupManager(CONFIG, logger);
-      manager.startSsoLogin('google', { width: 800, height: 700 }).catch(() => {});
+      manager.startSsoLogin('google', { mode: 'popup', width: 800, height: 700 }).catch(() => {});
 
       const [, , features] = windowOpenSpy.mock.calls[0];
       expect(features).toContain('width=800');
@@ -156,7 +213,7 @@ describe('SsoPopupManager', () => {
       const { addEventListenerSpy } = setupWindowMocks();
 
       const manager = new SsoPopupManager(CONFIG, logger);
-      manager.startSsoLogin('google').catch(() => {});
+      manager.startSsoLogin('google', { mode: 'popup' }).catch(() => {});
 
       expect(addEventListenerSpy).toHaveBeenCalledWith('message', expect.any(Function));
     });
@@ -171,7 +228,7 @@ describe('SsoPopupManager', () => {
       setupWindowMocks({ popupBlocked: true });
 
       const manager = new SsoPopupManager(CONFIG, logger);
-      await expect(manager.startSsoLogin('google')).rejects.toThrow(
+      await expect(manager.startSsoLogin('google', { mode: 'popup' })).rejects.toThrow(
         'Failed to open SSO popup',
       );
     });
@@ -180,7 +237,7 @@ describe('SsoPopupManager', () => {
       const { addEventListenerSpy } = setupWindowMocks({ popupBlocked: true });
 
       const manager = new SsoPopupManager(CONFIG, logger);
-      manager.startSsoLogin('google').catch(() => {});
+      manager.startSsoLogin('google', { mode: 'popup' }).catch(() => {});
 
       expect(addEventListenerSpy).not.toHaveBeenCalled();
     });
@@ -195,7 +252,7 @@ describe('SsoPopupManager', () => {
       const { dispatchMessage } = setupWindowMocks();
       const manager = new SsoPopupManager(CONFIG, logger);
 
-      const promise = manager.startSsoLogin('google');
+      const promise = manager.startSsoLogin('google', { mode: 'popup' });
 
       dispatchMessage({
         type: 'auth_success',
@@ -214,7 +271,7 @@ describe('SsoPopupManager', () => {
       const { dispatchMessage } = setupWindowMocks();
       const manager = new SsoPopupManager(CONFIG, logger);
 
-      const promise = manager.startSsoLogin('google');
+      const promise = manager.startSsoLogin('google', { mode: 'popup' });
 
       const payload = {
         type: 'auth_success',
@@ -240,7 +297,7 @@ describe('SsoPopupManager', () => {
       const { dispatchMessage, removeEventListenerSpy } = setupWindowMocks();
       const manager = new SsoPopupManager(CONFIG, logger);
 
-      const promise = manager.startSsoLogin('google');
+      const promise = manager.startSsoLogin('google', { mode: 'popup' });
       dispatchMessage({ type: 'auth_success' });
       await promise;
 
@@ -251,7 +308,7 @@ describe('SsoPopupManager', () => {
       const { dispatchMessage, fakePopup } = setupWindowMocks();
       const manager = new SsoPopupManager(CONFIG, logger);
 
-      const promise = manager.startSsoLogin('google');
+      const promise = manager.startSsoLogin('google', { mode: 'popup' });
       dispatchMessage({ type: 'auth_success' });
       await promise;
 
@@ -269,18 +326,15 @@ describe('SsoPopupManager', () => {
       const manager = new SsoPopupManager(CONFIG, logger);
 
       let settled = false;
-      const promise = manager.startSsoLogin('google')
+      const promise = manager.startSsoLogin('google', { mode: 'popup' })
         .then((r) => { settled = true; return r; })
         .catch(() => { settled = true; });
 
-      // Fire message from wrong origin — should be ignored
       dispatchMessage({ type: 'auth_success' }, 'https://evil.example.com');
 
-      // Give microtasks a chance
       await Promise.resolve();
       expect(settled).toBe(false);
 
-      // Clean up: resolve the promise by dispatching a valid message
       dispatchMessage({ type: 'auth_success' });
       await promise;
       expect(settled).toBe(true);
@@ -290,9 +344,8 @@ describe('SsoPopupManager', () => {
       const { dispatchMessage } = setupWindowMocks();
       const manager = new SsoPopupManager(CONFIG, logger);
 
-      const promise = manager.startSsoLogin('google');
+      const promise = manager.startSsoLogin('google', { mode: 'popup' });
 
-      // Send message from wrong origin — should be ignored
       dispatchMessage({ type: 'auth_success' }, 'https://evil.example.com');
       await Promise.resolve();
 
@@ -300,7 +353,6 @@ describe('SsoPopupManager', () => {
         expect.stringContaining('Ignoring postMessage'),
       );
 
-      // Clean up: send a valid message to resolve the promise
       dispatchMessage({ type: 'auth_success' });
       await promise;
     });
@@ -316,7 +368,7 @@ describe('SsoPopupManager', () => {
       const manager = new SsoPopupManager(CONFIG, logger);
 
       let settled = false;
-      const promise = manager.startSsoLogin('google')
+      const promise = manager.startSsoLogin('google', { mode: 'popup' })
         .then((r) => { settled = true; return r; })
         .catch(() => { settled = true; });
 
@@ -324,7 +376,6 @@ describe('SsoPopupManager', () => {
       await Promise.resolve();
       expect(settled).toBe(false);
 
-      // Clean up: send a valid auth message to resolve cleanly
       dispatchMessage({ type: 'auth_success' });
       await promise;
       expect(settled).toBe(true);
@@ -340,15 +391,12 @@ describe('SsoPopupManager', () => {
       const { fakePopup } = setupWindowMocks();
       const manager = new SsoPopupManager(CONFIG, logger);
 
-      // Attach rejection handler before advancing timers so it's handled synchronously
-      const rejection = expect(manager.startSsoLogin('google')).rejects.toThrow(
+      const rejection = expect(manager.startSsoLogin('google', { mode: 'popup' })).rejects.toThrow(
         'SSO popup was closed by user',
       );
 
-      // Simulate user closing the popup
       (fakePopup as unknown as { closed: boolean }).closed = true;
 
-      // Advance past the 500ms poll interval
       await vi.advanceTimersByTimeAsync(600);
 
       await rejection;
@@ -358,7 +406,7 @@ describe('SsoPopupManager', () => {
       const { fakePopup, removeEventListenerSpy } = setupWindowMocks();
       const manager = new SsoPopupManager(CONFIG, logger);
 
-      const promise = manager.startSsoLogin('google').catch(() => {});
+      const promise = manager.startSsoLogin('google', { mode: 'popup' }).catch(() => {});
 
       (fakePopup as unknown as { closed: boolean }).closed = true;
       await vi.advanceTimersByTimeAsync(600);
@@ -377,8 +425,7 @@ describe('SsoPopupManager', () => {
       setupWindowMocks();
       const manager = new SsoPopupManager(CONFIG, logger);
 
-      // Attach rejection handler before advancing timers
-      const rejection = expect(manager.startSsoLogin('google')).rejects.toThrow(
+      const rejection = expect(manager.startSsoLogin('google', { mode: 'popup' })).rejects.toThrow(
         'SSO popup timed out',
       );
 
@@ -397,7 +444,7 @@ describe('SsoPopupManager', () => {
       const { fakePopup } = setupWindowMocks();
       const manager = new SsoPopupManager(CONFIG, logger);
 
-      manager.startSsoLogin('google').catch(() => {});
+      manager.startSsoLogin('google', { mode: 'popup' }).catch(() => {});
       manager.close();
 
       expect((fakePopup as Window & { close: ReturnType<typeof vi.fn> }).close).toHaveBeenCalled();
@@ -407,7 +454,7 @@ describe('SsoPopupManager', () => {
       const { removeEventListenerSpy } = setupWindowMocks();
       const manager = new SsoPopupManager(CONFIG, logger);
 
-      manager.startSsoLogin('google').catch(() => {});
+      manager.startSsoLogin('google', { mode: 'popup' }).catch(() => {});
       manager.close();
 
       expect(removeEventListenerSpy).toHaveBeenCalledWith('message', expect.any(Function));

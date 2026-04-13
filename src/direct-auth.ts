@@ -49,8 +49,7 @@ export class DirectAuthService {
     const url = `${this.config.authBaseUrl}/auth/commitMfaCode`;
     return httpFetch<MfaResult>(url, {
       method: 'POST',
-      headers: { Cookie: `LOGIN_SESSION=${session}` },
-      body: { mfaCode, mode: 'sdk', appId: this.config.appId },
+      body: { mfaCode, session, mode: 'sdk', appId: this.config.appId },
     }, this.logger);
   }
 
@@ -58,8 +57,7 @@ export class DirectAuthService {
     const url = `${this.config.authBaseUrl}/auth/startMfaUserSetup`;
     return httpFetch<MfaResult>(url, {
       method: 'POST',
-      headers: { Cookie: `LOGIN_SESSION=${session}` },
-      body: { phoneNumber, mode: 'sdk', appId: this.config.appId },
+      body: { phoneNumber, session, mode: 'sdk', appId: this.config.appId },
     }, this.logger);
   }
 
@@ -67,8 +65,7 @@ export class DirectAuthService {
     const url = `${this.config.authBaseUrl}/auth/finishMfaUserSetup`;
     return httpFetch<MfaResult>(url, {
       method: 'POST',
-      headers: { Cookie: `LOGIN_SESSION=${session}` },
-      body: { mfaCode, mode: 'sdk', appId: this.config.appId },
+      body: { mfaCode, session, mode: 'sdk', appId: this.config.appId },
     }, this.logger);
   }
 
@@ -76,8 +73,7 @@ export class DirectAuthService {
     const url = `${this.config.authBaseUrl}/auth/resetUserMfaSetup`;
     return httpFetch<MfaResult>(url, {
       method: 'POST',
-      headers: { Cookie: `LOGIN_SESSION=${session}` },
-      body: { backupCode, mode: 'sdk', appId: this.config.appId },
+      body: { backupCode, session, mode: 'sdk', appId: this.config.appId },
     }, this.logger);
   }
 
@@ -142,6 +138,14 @@ export class DirectAuthService {
     return httpFetch<MagicLinkResult>(url, {
       method: 'POST',
       body: { username: email, mode: 'sdk', appId: this.config.appId },
+    }, this.logger);
+  }
+
+  async authenticateWithMagicLinkToken(token: string): Promise<AuthResult> {
+    const url = `${this.config.authBaseUrl}/auth/magic-link/authenticate`;
+    return httpFetch<AuthResult>(url, {
+      method: 'POST',
+      body: { token },
     }, this.logger);
   }
 

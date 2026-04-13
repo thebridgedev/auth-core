@@ -1,10 +1,18 @@
 import type { Logger } from './logger.js';
-import type { ResolvedConfig, SsoResult } from './types.js';
+import type { ResolvedConfig, SsoOptions, SsoResult } from './types.js';
 
 const DEFAULT_WIDTH = 500;
 const DEFAULT_HEIGHT = 600;
 const POPUP_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
+/**
+ * Manages SSO federation kickoff in either 'redirect' or 'popup' mode.
+ *
+ * Redirect mode (default) navigates the current tab to the federation endpoint
+ * and lets the provider's OAuth callback chain bring the user back normally.
+ * Popup mode opens window.open and resolves via postMessage — useful for
+ * embedded widgets.
+ */
 export class SsoPopupManager {
   private popup: Window | null = null;
   private messageHandler: ((event: MessageEvent) => void) | null = null;
@@ -14,15 +22,33 @@ export class SsoPopupManager {
     private readonly logger: Logger,
   ) {}
 
-  startSsoLogin(provider: string, opts?: { width?: number; height?: number }): Promise<SsoResult> {
+  startSsoLogin(provider: string, opts?: SsoOptions): Promise<SsoResult> {
+    const mode = opts?.mode ?? 'redirect';
+    if (mode === 'redirect') {
+      return this.startRedirect(provider);
+    }
+    return this.startPopup(provider, opts);
+  }
+
+  private startRedirect(provider: string): Promise<SsoResult> {
+    const url = new URL(`${this.config.authBaseUrl}/auth/federation/${this.config.appId}`);
+    url.searchParams.set('provider', provider);
+
+    this.logger.debug('SSO redirect kickoff', url.toString());
+    window.location.assign(url.toString());
+
+    // Tab is navigating away — this promise intentionally never resolves.
+    return new Promise<SsoResult>(() => { /* no-op */ });
+  }
+
+  private startPopup(provider: string, opts?: SsoOptions): Promise<SsoResult> {
     return new Promise((resolve, reject) => {
       const width = opts?.width ?? DEFAULT_WIDTH;
       const height = opts?.height ?? DEFAULT_HEIGHT;
       const left = Math.round((screen.width - width) / 2);
       const top = Math.round((screen.height - height) / 2);
 
-      // Build federation URL with popup mode params
-      const url = new URL(`${this.config.authBaseUrl}/url/federation/${this.config.appId}`);
+      const url = new URL(`${this.config.authBaseUrl}/auth/federation/${this.config.appId}`);
       url.searchParams.set('provider', provider);
       url.searchParams.set('mode', 'popup');
       url.searchParams.set('targetOrigin', window.location.origin);
@@ -43,7 +69,6 @@ export class SsoPopupManager {
         reject(new Error('SSO popup timed out'));
       }, POPUP_TIMEOUT_MS);
 
-      // Poll for popup close
       const pollTimer = setInterval(() => {
         if (this.popup?.closed) {
           clearInterval(pollTimer);
@@ -54,7 +79,6 @@ export class SsoPopupManager {
       }, 500);
 
       this.messageHandler = (event: MessageEvent) => {
-        // Validate origin against the auth base URL
         const expectedOrigin = new URL(this.config.authBaseUrl).origin;
         if (event.origin !== expectedOrigin) {
           this.logger.debug(`Ignoring postMessage from ${event.origin}, expected ${expectedOrigin}`);

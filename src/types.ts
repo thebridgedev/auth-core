@@ -129,15 +129,26 @@ export interface AuthResult {
 export interface MfaResult {
   session: string;
   expires: number;
-  mfaState?: string;
+  mfaState: string;
   backupCode?: string;
   qrCode?: string;
   phoneNumber?: string;
 }
 
-/** SSO popup options */
+/**
+ * SSO login options.
+ *
+ * `mode` selects the kickoff strategy:
+ *  - `'redirect'` (default) — `window.location.assign` the current tab to the
+ *    federation endpoint. The provider returns the user to your app via the
+ *    normal OAuth callback chain. Recommended for most apps.
+ *  - `'popup'` — `window.open` a popup and listen for a `postMessage` result.
+ *    Useful for embedded widgets or flows that must not unload the host page.
+ *    `width`/`height` apply only in this mode.
+ */
 export interface SsoOptions {
-  provider: string;
+  provider?: string;
+  mode?: 'redirect' | 'popup';
   width?: number;
   height?: number;
 }
@@ -220,6 +231,9 @@ export interface SubscriptionStatus {
   shouldSelectPlan: boolean;
   shouldSetupPayments: boolean;
   paymentFailed: boolean;
+  /** When false, the app has opted out of the platform's native plan-selection gate.
+   *  Consumers should not render a blocking plan selector; they may still render a custom one. */
+  paymentsAutoRedirect: boolean;
   trial: boolean;
   plan?: string;
 }
