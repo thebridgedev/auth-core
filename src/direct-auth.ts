@@ -127,7 +127,7 @@ export class DirectAuthService {
     const url = `${this.config.authBaseUrl}/auth/signup`;
     return httpFetch<SignupResult>(url, {
       method: 'POST',
-      body: { email, firstName, lastName, appId: this.config.appId },
+      body: { email, firstName, lastName, appId: this.config.appId, mode: 'sdk' },
     }, this.logger);
   }
 
