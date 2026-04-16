@@ -427,6 +427,35 @@ export class BridgeAuth {
   async getSubscriptionStatus(): Promise<SubscriptionStatus> {
     const token = this.tokenManager.getTokens()?.accessToken;
     if (!token) throw new Error('Not authenticated');
+
+    // If returning from Stripe Checkout (success_url includes ?session_id=),
+    // trigger a server-side sync that sets billing IDs + plan from the
+    // completed checkout session. This ensures the subsequent status fetch
+    // returns shouldSelectPlan: false. Works in all environments, including
+    // local dev where Stripe webhooks are not forwarded.
+    // Check both URL params (direct return) and sessionStorage (in case a
+    // framework redirect already stripped the param from the URL).
+    if (typeof window !== 'undefined') {
+      const pageUrl = new URL(window.location.href);
+      let sessionId = pageUrl.searchParams.get('session_id');
+      if (sessionId) {
+        pageUrl.searchParams.delete('session_id');
+        history.replaceState({}, '', pageUrl.toString());
+      } else if (typeof sessionStorage !== 'undefined') {
+        sessionId = sessionStorage.getItem('bridge_checkout_session_id');
+      }
+      if (sessionId) {
+        if (typeof sessionStorage !== 'undefined') {
+          sessionStorage.removeItem('bridge_checkout_session_id');
+        }
+        const syncUrl = `${this.config.apiBaseUrl}/account/stripe/checkoutSession/${sessionId}/metadata`;
+        await httpFetch(syncUrl, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${token}`, 'x-app-id': this.config.appId },
+        }, this.logger).catch(() => {});
+      }
+    }
+
     const url = `${this.config.apiBaseUrl}/account/subscription/status`;
     return httpFetch<SubscriptionStatus>(url, {
       method: 'GET',
@@ -444,14 +473,34 @@ export class BridgeAuth {
     }, this.logger);
   }
 
+  async selectFreePlan(planKey: string): Promise<void> {
+    const token = this.tokenManager.getTokens()?.accessToken;
+    if (!token) throw new Error('Not authenticated');
+    const url = `${this.config.apiBaseUrl}/account/subscription/select`;
+    await httpFetch<void>(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'x-app-id': this.config.appId },
+      body: { planKey },
+    }, this.logger);
+  }
+
   async startCheckout(planKey: string, priceOffer: PriceOfferSdk, options: { successUrl: string; cancelUrl: string }): Promise<CheckoutSession> {
     const token = this.tokenManager.getTokens()?.accessToken;
     if (!token) throw new Error('Not authenticated');
     const url = `${this.config.apiBaseUrl}/account/subscription/checkout`;
+    // Stripe requires absolute URLs for success_url / cancel_url. Callers often pass
+    // relative paths (e.g. "/plan"); resolve them against the current browser origin.
+    const origin = typeof window !== 'undefined' ? window.location.origin : undefined;
+    const toAbsolute = (u: string): string => {
+      if (!origin) return u;
+      try { return new URL(u, origin).toString(); } catch { return u; }
+    };
+    const successUrl = toAbsolute(options.successUrl);
+    const cancelUrl = toAbsolute(options.cancelUrl);
     return httpFetch<CheckoutSession>(url, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'x-app-id': this.config.appId },
-      body: { planKey, priceOffer, ...options },
+      body: { planKey, priceOffer, successUrl, cancelUrl },
     }, this.logger);
   }
 
