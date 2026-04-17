@@ -104,12 +104,12 @@ describe('AuthService', () => {
   describe('createLogoutUrl', () => {
     it('returns the correct logout URL', () => {
       const service = makeService();
-      expect(service.createLogoutUrl()).toBe('https://api.example.com/auth/url/logout/app1');
+      expect(service.createLogoutUrl()).toBe('https://hosted.example.com/auth/login/app1');
     });
 
     it('uses the appId from config', () => {
       const service = makeService({ appId: 'other-app' });
-      expect(service.createLogoutUrl()).toBe('https://api.example.com/auth/url/logout/other-app');
+      expect(service.createLogoutUrl()).toBe('https://hosted.example.com/auth/login/other-app');
     });
   });
 

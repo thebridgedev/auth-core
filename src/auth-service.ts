@@ -23,7 +23,7 @@ export class AuthService {
   }
 
   createLogoutUrl(): string {
-    return `${this.config.authBaseUrl}/url/logout/${this.config.appId}`;
+    return `${this.config.hostedUrl}/auth/login/${this.config.appId}`;
   }
 
   async exchangeCode(code: string): Promise<TokenSet> {
