@@ -47,6 +47,28 @@ export class AuthService {
     };
   }
 
+  /**
+   * TBP-125: redeem a one-shot cloud-views session ticket (minted by bridge-api's
+   * federated success path when oauthCtx.cli_flow is set) for SDK tokens. Used
+   * exclusively from `/cli/authorize` after a federated CLI login round-trip.
+   *
+   * The ticket itself is the only credential — no Authorization header required.
+   * Bridge-api validates signature, audience, expiry and single-use.
+   */
+  async exchangeCloudViewsSession(ticket: string): Promise<TokenSet> {
+    const url = `${this.config.authBaseUrl}/token/cloudviews-session`;
+    const data = await httpFetch<TokenResponse>(url, {
+      method: 'POST',
+      body: { ticket },
+    }, this.logger);
+
+    return {
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      idToken: data.id_token,
+    };
+  }
+
   async getCodeFromToken(accessToken: string, redirectUri?: string): Promise<string> {
     const url = `${this.config.authBaseUrl}/token/code-from-token/${this.config.appId}`;
     const body: Record<string, string> = { accessToken };

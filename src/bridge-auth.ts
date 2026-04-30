@@ -149,6 +149,20 @@ export class BridgeAuth {
     return tokens;
   }
 
+  /**
+   * TBP-125: redeem a single-use cloud-views session ticket for SDK tokens and
+   * establish an authenticated session (mirrors handleCallback's lifecycle —
+   * stores tokens, transitions auth state, emits auth:login). Called by
+   * cloud-views' /cli/authorize page when it receives `?cv_session=…`.
+   */
+  async redeemCloudViewsSession(ticket: string): Promise<TokenSet> {
+    const tokens = await this.authService.exchangeCloudViewsSession(ticket);
+    this.tokenManager.setTokens(tokens);
+    this.stateManager.onAuthenticated();
+    this.emitter.emit('auth:login', tokens);
+    return tokens;
+  }
+
   async getCodeFromToken(redirectUri?: string): Promise<string> {
     const tokens = this.tokenManager.getTokens();
     if (!tokens?.accessToken) throw new Error('Not authenticated');
