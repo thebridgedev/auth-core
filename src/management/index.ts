@@ -13,7 +13,7 @@ import { EventManagementService } from './event.service.js';
 import { OnboardingManagementService } from './onboarding.service.js';
 import { ManagementWorkflows } from './workflows.js';
 
-const DEFAULT_BASE_URL = 'https://account-api.thebridge.dev';
+const DEFAULT_BASE_URL = 'https://api.thebridge.dev';
 
 /**
  * Management API facade for Bridge platform.

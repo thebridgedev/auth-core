@@ -517,4 +517,92 @@ describe('BridgeAuth', () => {
       expect(() => auth.destroy()).not.toThrow();
     });
   });
+
+  // Regression: startCheckout forwarded relative successUrl/cancelUrl unchanged to the API,
+  // which caused Stripe checkout.sessions.create to reject with 400 "Not a valid URL".
+  // The fix normalizes relative paths against window.location.origin. (2026-04-15)
+  describe('startCheckout URL normalization', () => {
+    const priceOffer = { amount: 50, currency: 'EUR', recurrenceInterval: 'month' } as any;
+
+    // Helper: stub window.location.origin and return the captured checkout body.
+    async function captureCheckoutBody(
+      origin: string | undefined,
+      successUrl: string,
+      cancelUrl: string,
+    ) {
+      // Authenticate so startCheckout has an access token
+      mockHttpFetch.mockResolvedValueOnce({
+        access_token: 'at',
+        refresh_token: 'rt',
+        id_token: 'idt',
+      });
+      await auth.handleCallback('code');
+
+      // Stub window before the call
+      const originalWindow = (globalThis as any).window;
+      if (origin === undefined) {
+        delete (globalThis as any).window;
+      } else {
+        (globalThis as any).window = { location: { origin } };
+      }
+
+      // Return a valid CheckoutSession from the checkout endpoint
+      mockHttpFetch.mockResolvedValueOnce({ sessionId: 'cs_1', publicKey: 'pk_1' });
+
+      try {
+        await auth.startCheckout('premium', priceOffer, { successUrl, cancelUrl });
+      } finally {
+        // Restore window
+        if (originalWindow === undefined) {
+          delete (globalThis as any).window;
+        } else {
+          (globalThis as any).window = originalWindow;
+        }
+      }
+
+      const checkoutCall = mockHttpFetch.mock.calls.find(
+        ([url]: any[]) => typeof url === 'string' && url.includes('/account/subscription/checkout'),
+      );
+      expect(checkoutCall).toBeTruthy();
+      return checkoutCall![1].body as { successUrl: string; cancelUrl: string; planKey: string };
+    }
+
+    it('resolves relative paths against window.location.origin', async () => {
+      const body = await captureCheckoutBody('http://localhost:3023', '/plan', '/plan');
+      expect(body.successUrl).toBe('http://localhost:3023/plan');
+      expect(body.cancelUrl).toBe('http://localhost:3023/plan');
+      expect(body.planKey).toBe('premium');
+    });
+
+    it('passes absolute URLs through unchanged (no double-prepending)', async () => {
+      const body = await captureCheckoutBody(
+        'http://localhost:3023',
+        'https://admin.example.com/plan',
+        'https://admin.example.com/plan',
+      );
+      expect(body.successUrl).toBe('https://admin.example.com/plan');
+      expect(body.cancelUrl).toBe('https://admin.example.com/plan');
+    });
+
+    it('does not throw when window is undefined (SSR), leaves relative paths untouched', async () => {
+      const body = await captureCheckoutBody(undefined, '/plan', '/cancel');
+      // No origin available → fallback leaves inputs as-is
+      expect(body.successUrl).toBe('/plan');
+      expect(body.cancelUrl).toBe('/cancel');
+    });
+
+    it('falls back to original value when new URL throws on malformed input', async () => {
+      // An absolute-looking URL with an invalid IPv6-style host makes
+      // new URL(u, origin) throw. The catch block must swallow the error
+      // and return the original string unchanged.
+      const malformed = 'http://[invalid';
+      // Sanity check that this input actually throws so the catch branch is exercised.
+      expect(() => new URL(malformed, 'http://localhost:3023')).toThrow();
+
+      const body = await captureCheckoutBody('http://localhost:3023', malformed, '/plan');
+      expect(body.successUrl).toBe(malformed);
+      // /plan is still resolved normally
+      expect(body.cancelUrl).toBe('http://localhost:3023/plan');
+    });
+  });
 });
