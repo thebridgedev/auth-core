@@ -1,6 +1,6 @@
 {
   "name": "@nebulr-group/bridge-auth-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Framework-agnostic auth core for Bridge platform",
   "type": "module",
   "main": "./dist/index.js",
