@@ -1,6 +1,6 @@
 import type { Logger } from './logger.js';
-import { getTokenExpiry, shouldRefreshNow } from './token-utils.js';
-import type { TokenSet, TokenStorage } from './types.js';
+import { getTenantId, getTenantUserId, getTokenExpiry, shouldRefreshNow } from './token-utils.js';
+import type { SessionStalePayload, TokenSet, TokenStorage } from './types.js';
 
 const TOKEN_KEY = 'bridge_tokens';
 const MIN_CHECK_INTERVAL = 10_000; // 10 seconds
@@ -8,18 +8,33 @@ const MIN_CHECK_INTERVAL = 10_000; // 10 seconds
 export class TokenManager {
   private tokens: TokenSet | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private storageListener: ((e: StorageEvent) => void) | null = null;
+
+  /** tenantUserId of the workspace this tab booted in. Captured once at construction
+   *  so we can offer "switch back" if another tab races us. Null if no boot tokens. */
+  private readonly bootTenantUserId: string | null;
 
   constructor(
     private readonly storage: TokenStorage,
     private readonly refreshFn: (rt: string) => Promise<TokenSet | null>,
     private readonly logger: Logger,
     private readonly onTokensChanged: (tokens: TokenSet | null) => void,
+    private readonly onSessionStale?: (payload: SessionStalePayload) => void,
   ) {
     this.loadFromStorage();
+    this.bootTenantUserId = this.tokens?.accessToken
+      ? getTenantUserId(this.tokens.accessToken)
+      : null;
+    this.installStorageListener();
   }
 
   getTokens(): TokenSet | null {
     return this.tokens;
+  }
+
+  /** tenantUserId for the workspace this tab booted in — use to revert after a cross-tab race. */
+  getBootTenantUserId(): string | null {
+    return this.bootTenantUserId;
   }
 
   isAuthenticated(): boolean {
@@ -72,6 +87,7 @@ export class TokenManager {
 
   destroy(): void {
     this.stopRefresh();
+    this.uninstallStorageListener();
   }
 
   private loadFromStorage(): void {
@@ -83,6 +99,61 @@ export class TokenManager {
     } catch (err) {
       this.logger.error('Failed to load tokens from storage', err);
     }
+  }
+
+  /** Listen for cross-tab token writes. If a sibling tab's `switchWorkspace` overwrote our
+   *  storage with a different `tid`, fire `onSessionStale` so the consumer can prompt the user.
+   *  No-op outside browser environments and when `bootTenantUserId` is null (we never had a session). */
+  private installStorageListener(): void {
+    if (typeof window === 'undefined' || !this.bootTenantUserId) return;
+    const listener = (e: StorageEvent) => {
+      if (e.key !== TOKEN_KEY || e.newValue === e.oldValue) return;
+      try {
+        const previousTid = this.tokens?.accessToken
+          ? getTenantId(this.tokens.accessToken)
+          : null;
+        if (!previousTid) return;
+
+        if (!e.newValue) {
+          // Another tab logged out. Mirror state and let onTokensChanged fire downstream.
+          this.tokens = null;
+          this.stopRefresh();
+          this.onTokensChanged(null);
+          return;
+        }
+
+        const newTokens = JSON.parse(e.newValue) as TokenSet;
+        const newTid = newTokens.accessToken ? getTenantId(newTokens.accessToken) : null;
+        if (!newTid) return;
+
+        // Adopt the new tokens so any subsequent in-tab call uses the right header.
+        this.tokens = newTokens;
+        this.scheduleRefresh();
+
+        if (newTid !== previousTid) {
+          this.logger.warn('Cross-tab session change detected — workspace differs', {
+            previousTid,
+            newTid,
+          });
+          this.onSessionStale?.({
+            previousTid,
+            currentTid: newTid,
+            previousTenantUserId: this.bootTenantUserId,
+          });
+        }
+        // Same tid → just an external refresh in another tab; nothing to surface.
+      } catch (err) {
+        this.logger.error('Failed to handle storage event', err);
+      }
+    };
+    window.addEventListener('storage', listener);
+    this.storageListener = listener;
+  }
+
+  private uninstallStorageListener(): void {
+    if (typeof window === 'undefined' || !this.storageListener) return;
+    window.removeEventListener('storage', this.storageListener);
+    this.storageListener = null;
   }
 
   private scheduleRefresh(): void {

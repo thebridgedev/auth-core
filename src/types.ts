@@ -274,6 +274,23 @@ export interface Workspace {
   };
 }
 
+/** Payload for the cross-tab session-stale event.
+ *  Fired when another tab on the same origin overwrites `bridge_tokens` with
+ *  a token whose `tid` claim differs from the one this tab booted with.
+ *  Consumers should freeze writes and prompt the user to either reload
+ *  (continue in the new workspace) or call `switchWorkspace(previousTenantUserId)`
+ *  to revert to the workspace this tab was originally in.
+ */
+export interface SessionStalePayload {
+  /** tid (tenantId) of the workspace this tab booted in. */
+  previousTid: string;
+  /** tid present in the just-overwritten tokens (the workspace another tab switched to). */
+  currentTid: string;
+  /** tenantUserId of the original workspace, suitable for `switchWorkspace(...)` to revert.
+   *  May be null if the tab boot tokens are gone or malformed. */
+  previousTenantUserId: string | null;
+}
+
 /** Events emitted by BridgeAuth */
 export interface BridgeAuthEvents {
   'auth:login': TokenSet;
@@ -284,6 +301,7 @@ export interface BridgeAuthEvents {
   'auth:profile': Profile | null;
   'auth:error': Error;
   'auth:workspace-changed': TokenSet;
+  'auth:session-stale': SessionStalePayload;
 }
 
 export type BridgeAuthEventName = keyof BridgeAuthEvents;

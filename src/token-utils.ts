@@ -31,4 +31,16 @@ export function isTokenExpired(token: string): boolean {
   return Date.now() >= exp;
 }
 
+/** Read the `tid` (tenant) claim from a Bridge access token. Null if missing/malformed. */
+export function getTenantId(token: string): string | null {
+  const p = decodeJwtPayload(token);
+  return p && typeof p.tid === 'string' ? p.tid : null;
+}
+
+/** Read the `sub` (tenantUser) claim. Bridge access tokens use `sub` as the tenantUserId. */
+export function getTenantUserId(token: string): string | null {
+  const p = decodeJwtPayload(token);
+  return p && typeof p.sub === 'string' ? p.sub : null;
+}
+
 export { REFRESH_THRESHOLD_MS };
