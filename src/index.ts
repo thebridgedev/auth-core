@@ -27,6 +27,7 @@ export type {
   RouteGuard,
   RouteGuardConfig,
   RouteRule,
+  SessionStalePayload,
   SignupResult,
   SsoOptions,
   SsoResult,

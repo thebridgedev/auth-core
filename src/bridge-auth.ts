@@ -83,6 +83,7 @@ export class BridgeAuth {
           this.emitter.emit('auth:logout', undefined);
         }
       },
+      (payload) => this.emitter.emit('auth:session-stale', payload),
     );
 
     this.featureFlags = new FeatureFlagService(
@@ -285,6 +286,12 @@ export class BridgeAuth {
     const tokens = this.tokenManager.getTokens();
     if (!tokens?.accessToken) return [];
     return this.directAuth.listWorkspaces(tokens.accessToken);
+  }
+
+  /** tenantUserId of the workspace this tab booted in. Use to revert after a cross-tab race
+   *  (e.g. inside a session-stale handler: `await bridge.switchWorkspace(bridge.getBootTenantUserId()!)`). */
+  getBootTenantUserId(): string | null {
+    return this.tokenManager.getBootTenantUserId();
   }
 
   /** Switch to a different workspace. Issues new tokens scoped to the target tenant. */
