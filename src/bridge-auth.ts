@@ -13,6 +13,7 @@ import { createRouteGuard } from './route-guard.js';
 import { SsoPopupManager } from './sso-popup.js';
 import { TokenManager } from './token-manager.js';
 import { httpFetch } from './http.js';
+import { UsageReporter, type QueueStatus } from './usage/usage-reporter.js';
 import type {
   AppConfig,
   AuthConfigResponse,
@@ -56,6 +57,7 @@ export class BridgeAuth {
   private readonly ssoPopup: SsoPopupManager;
   private readonly stateManager: AuthStateManager;
   private readonly logger: ReturnType<typeof createLogger>;
+  private _usageReporter?: UsageReporter;
 
   constructor(config: BridgeAuthConfig) {
     this.config = resolveConfig(config);
@@ -72,6 +74,7 @@ export class BridgeAuth {
     });
 
     this.tokenManager = new TokenManager(
+      this.config.appId,
       this.config.storage,
       (rt) => this.authService.refreshToken(rt),
       this.logger,
@@ -135,11 +138,24 @@ export class BridgeAuth {
     this.tokenManager.clearTokens();
   }
 
-  async logout(): Promise<void> {
+  /**
+   * Read-only accessor for SDK plumbing (Billing 2.0 `useBridge().subscription.mount(...)`
+   * needs `apiBaseUrl + accessToken + appId`). Returns `accessToken: null` when
+   * not authenticated; callers should handle that explicitly.
+   */
+  getApiContext(): { apiBaseUrl: string; appId: string; accessToken: string | null } {
+    return {
+      apiBaseUrl: this.config.apiBaseUrl,
+      appId: this.config.appId,
+      accessToken: this.tokenManager.getTokens()?.accessToken ?? null,
+    };
+  }
+
+  async logout(options?: { redirectTo?: string }): Promise<void> {
     this.tokenManager.clearTokens();
     this.stateManager.onLogout();
     this.emitter.emit('auth:logout', undefined);
-    window.location.href = this.authService.createLogoutUrl();
+    window.location.href = options?.redirectTo ?? this.authService.createLogoutUrl();
   }
 
   async handleCallback(code: string): Promise<TokenSet> {
@@ -223,6 +239,14 @@ export class BridgeAuth {
       this.emitter.emit('auth:login', tokens);
     }
 
+    return result;
+  }
+
+  async resendMfaCode(): Promise<MfaResult> {
+    const session = this.stateManager.getSession();
+    if (!session) throw new Error('No active session. Call authenticate() first.');
+    const result = await this.directAuth.resendMfaCode(session);
+    this.stateManager.onMfaStateChanged(result.session, result.expires, result.mfaState);
     return result;
   }
 
@@ -548,6 +572,43 @@ export class BridgeAuth {
     return this.apiTokenService;
   }
 
+  // --- Usage reporting (Billing 2.0 US-10 / TBP-262) ---
+
+  /**
+   * `bridge.usage.report(metric, value?, idempotencyKey?)` — fire-and-forget
+   * usage event emitter. Events are batched (default 10 events / 1s) and
+   * POSTed to `${apiBaseUrl}/usage/ingest` with the current access token.
+   *
+   * Events are persisted via a `DurableStorage` layer (IndexedDB in browser,
+   * JSONL on disk in Node) so a process crash or page navigation cannot lose
+   * events accepted into `report()`. On next init the reporter hydrates and
+   * replays unsent events with their original idempotency keys.
+   *
+   * `getQueueStatus()` returns the current queue depth, retry count, and
+   * last-flush observability for dev-facing monitoring.
+   *
+   * Lazily constructs the underlying `UsageReporter` on first access so apps
+   * that never call `bridge.usage.report(...)` pay no cost.
+   */
+  get usage(): {
+    report: (metric: string, value?: number, idempotencyKey?: string) => void;
+    getQueueStatus: () => Promise<QueueStatus>;
+  } {
+    if (!this._usageReporter) {
+      this._usageReporter = new UsageReporter({
+        apiBaseUrl: this.config.apiBaseUrl,
+        getAccessToken: () => this.tokenManager.getTokens()?.accessToken ?? null,
+        logger: this.logger,
+      });
+    }
+    const reporter = this._usageReporter;
+    return {
+      report: (metric: string, value: number = 1, idempotencyKey?: string) =>
+        reporter.report(metric, value, idempotencyKey),
+      getQueueStatus: () => reporter.getQueueStatus(),
+    };
+  }
+
   // --- Route guard ---
 
   createRouteGuard(config: RouteGuardConfig): RouteGuard {
@@ -597,5 +658,6 @@ export class BridgeAuth {
     this.tokenManager.destroy();
     this.ssoPopup.close();
     this.emitter.removeAllListeners();
+    this._usageReporter?.shutdown();
   }
 }

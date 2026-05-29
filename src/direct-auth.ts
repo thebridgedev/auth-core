@@ -53,6 +53,14 @@ export class DirectAuthService {
     }, this.logger);
   }
 
+  async resendMfaCode(session: string): Promise<MfaResult> {
+    const url = `${this.config.authBaseUrl}/auth/resendMfaCode`;
+    return httpFetch<MfaResult>(url, {
+      method: 'POST',
+      body: { session, mode: 'sdk', appId: this.config.appId },
+    }, this.logger);
+  }
+
   async startMfaUserSetup(phoneNumber: string, session: string): Promise<MfaResult> {
     const url = `${this.config.authBaseUrl}/auth/startMfaUserSetup`;
     return httpFetch<MfaResult>(url, {

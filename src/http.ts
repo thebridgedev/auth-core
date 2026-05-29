@@ -1,5 +1,15 @@
-import { HttpError } from './errors.js';
+import { BillingLockedError, HttpError } from './errors.js';
+import { emitBillingLock } from './billing/lock-signal.js';
+import type { BillingLockedPayload } from './billing/types.js';
 import type { Logger } from './logger.js';
+
+function isBillingLockedPayload(body: unknown): body is BillingLockedPayload {
+  return (
+    typeof body === 'object' &&
+    body !== null &&
+    (body as { reason?: unknown }).reason === 'billing_locked'
+  );
+}
 
 export interface HttpOptions {
   method?: string;
@@ -34,6 +44,10 @@ export async function httpFetch<T>(url: string, options: HttpOptions, logger: Lo
       errorBody = await response.json();
     } catch {
       errorBody = await response.text().catch(() => null);
+    }
+    if (response.status === 402 && isBillingLockedPayload(errorBody)) {
+      emitBillingLock(errorBody);
+      throw new BillingLockedError(errorBody);
     }
     const message = typeof errorBody === 'object' && errorBody && 'message' in errorBody
       ? String((errorBody as any).message)

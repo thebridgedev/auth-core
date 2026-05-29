@@ -1,4 +1,5 @@
 import type { FeatureFlagService } from './feature-flag-service.js';
+import { useBridge } from './billing/use-bridge.js';
 import type { Logger } from './logger.js';
 import type {
   FlagRequirement,
@@ -66,11 +67,22 @@ export function createRouteGuard(
 
   async function checkRouteRestrictions(pathname: string): Promise<string | null> {
     const rule = findMatchingRule(pathname, guardConfig.rules);
-    if (!rule?.featureFlag) return null;
+    if (!rule) return null;
 
-    const ok = await evaluateFlagRequirement(rule.featureFlag);
-    logger.debug(`Route ${pathname} flag check: ${ok}`);
-    if (!ok) return rule.redirectTo ?? '/';
+    if (rule.featureFlag) {
+      const ok = await evaluateFlagRequirement(rule.featureFlag);
+      logger.debug(`Route ${pathname} flag check: ${ok}`);
+      if (!ok) return rule.redirectTo ?? '/';
+    }
+
+    if (rule.billing === 'hard') {
+      const gate = useBridge().gateState();
+      if (gate.locked) {
+        logger.debug(`Route ${pathname} billing-locked → recovery`);
+        return gate.recoveryUrl ?? rule.redirectTo ?? '/billing';
+      }
+    }
+
     return null;
   }
 

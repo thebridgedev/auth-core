@@ -2,7 +2,6 @@ import type { Logger } from './logger.js';
 import { getTenantId, getTenantUserId, getTokenExpiry, shouldRefreshNow } from './token-utils.js';
 import type { SessionStalePayload, TokenSet, TokenStorage } from './types.js';
 
-const TOKEN_KEY = 'bridge_tokens';
 const MIN_CHECK_INTERVAL = 10_000; // 10 seconds
 
 export class TokenManager {
@@ -14,7 +13,12 @@ export class TokenManager {
    *  so we can offer "switch back" if another tab races us. Null if no boot tokens. */
   private readonly bootTenantUserId: string | null;
 
+  private get tokenKey(): string {
+    return `bridge_tokens:${this.appId}`;
+  }
+
   constructor(
+    private readonly appId: string,
     private readonly storage: TokenStorage,
     private readonly refreshFn: (rt: string) => Promise<TokenSet | null>,
     private readonly logger: Logger,
@@ -43,7 +47,7 @@ export class TokenManager {
 
   setTokens(tokens: TokenSet): void {
     this.tokens = tokens;
-    this.storage.set(TOKEN_KEY, JSON.stringify(tokens));
+    this.storage.set(this.tokenKey, JSON.stringify(tokens));
     this.logger.debug('Tokens stored');
     this.onTokensChanged(tokens);
     this.scheduleRefresh();
@@ -51,7 +55,7 @@ export class TokenManager {
 
   clearTokens(): void {
     this.tokens = null;
-    this.storage.remove(TOKEN_KEY);
+    this.storage.remove(this.tokenKey);
     this.stopRefresh();
     this.onTokensChanged(null);
   }
@@ -92,7 +96,7 @@ export class TokenManager {
 
   private loadFromStorage(): void {
     try {
-      const raw = this.storage.get(TOKEN_KEY);
+      const raw = this.storage.get(this.tokenKey);
       if (raw) {
         this.tokens = JSON.parse(raw);
       }
@@ -107,7 +111,7 @@ export class TokenManager {
   private installStorageListener(): void {
     if (typeof window === 'undefined' || !this.bootTenantUserId) return;
     const listener = (e: StorageEvent) => {
-      if (e.key !== TOKEN_KEY || e.newValue === e.oldValue) return;
+      if (e.key !== this.tokenKey || e.newValue === e.oldValue) return;
       try {
         const previousTid = this.tokens?.accessToken
           ? getTenantId(this.tokens.accessToken)

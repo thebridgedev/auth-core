@@ -60,12 +60,14 @@ function makeLogger(): Logger {
 }
 
 function makeManager(opts: {
+  appId?: string;
   initialStorageValue?: string | null;
   refreshResult?: TokenSet | null;
 } = {}) {
+  const appId = opts.appId ?? 'test-app';
   const storage = new MemoryAdapter();
   if (opts.initialStorageValue !== undefined && opts.initialStorageValue !== null) {
-    storage.set('bridge_tokens', opts.initialStorageValue);
+    storage.set(`bridge_tokens:${appId}`, opts.initialStorageValue);
   }
 
   const refreshFn = vi.fn<[string], Promise<TokenSet | null>>().mockResolvedValue(
@@ -74,7 +76,7 @@ function makeManager(opts: {
   const logger = makeLogger();
   const onTokensChanged = vi.fn();
 
-  const manager = new TokenManager(storage, refreshFn, logger, onTokensChanged);
+  const manager = new TokenManager(appId, storage, refreshFn, logger, onTokensChanged);
 
   return { manager, storage, refreshFn, logger, onTokensChanged };
 }
@@ -128,9 +130,9 @@ describe('TokenManager', () => {
 
     it('persists tokens to storage', () => {
       const storage = new MemoryAdapter();
-      const manager = new TokenManager(storage, vi.fn(), makeLogger(), vi.fn());
+      const manager = new TokenManager('test-app', storage, vi.fn(), makeLogger(), vi.fn());
       manager.setTokens(FRESH_TOKENS);
-      expect(storage.get('bridge_tokens')).toBe(JSON.stringify(FRESH_TOKENS));
+      expect(storage.get('bridge_tokens:test-app')).toBe(JSON.stringify(FRESH_TOKENS));
     });
 
     it('calls onTokensChanged with the new tokens', () => {
@@ -159,10 +161,10 @@ describe('TokenManager', () => {
 
     it('removes tokens from storage', () => {
       const storage = new MemoryAdapter();
-      storage.set('bridge_tokens', JSON.stringify(FRESH_TOKENS));
-      const manager = new TokenManager(storage, vi.fn(), makeLogger(), vi.fn());
+      storage.set('bridge_tokens:test-app', JSON.stringify(FRESH_TOKENS));
+      const manager = new TokenManager('test-app', storage, vi.fn(), makeLogger(), vi.fn());
       manager.clearTokens();
-      expect(storage.get('bridge_tokens')).toBeNull();
+      expect(storage.get('bridge_tokens:test-app')).toBeNull();
     });
 
     it('calls onTokensChanged with null', () => {
@@ -300,6 +302,40 @@ describe('TokenManager', () => {
       await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
 
       expect(refreshFn).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // appId namespacing
+  // -------------------------------------------------------------------------
+
+  describe('appId namespacing', () => {
+    it('two managers with different appIds do not share tokens', () => {
+      const storage = new MemoryAdapter();
+      const m1 = new TokenManager('app-1', storage, vi.fn(), makeLogger(), vi.fn());
+      const m2 = new TokenManager('app-2', storage, vi.fn(), makeLogger(), vi.fn());
+      m1.setTokens(FRESH_TOKENS);
+      expect(m2.getTokens()).toBeNull();
+      expect(storage.get('bridge_tokens:app-1')).not.toBeNull();
+      expect(storage.get('bridge_tokens:app-2')).toBeNull();
+    });
+
+    it('clearing tokens for one appId does not affect the other', () => {
+      const storage = new MemoryAdapter();
+      const m1 = new TokenManager('app-1', storage, vi.fn(), makeLogger(), vi.fn());
+      const m2 = new TokenManager('app-2', storage, vi.fn(), makeLogger(), vi.fn());
+      m1.setTokens(FRESH_TOKENS);
+      m2.setTokens(FRESH_TOKENS);
+      m1.clearTokens();
+      expect(m2.getTokens()).toEqual(FRESH_TOKENS);
+    });
+
+    it('uses bridge_tokens:<appId> as the storage key', () => {
+      const storage = new MemoryAdapter();
+      const manager = new TokenManager('my-app', storage, vi.fn(), makeLogger(), vi.fn());
+      manager.setTokens(FRESH_TOKENS);
+      expect(storage.get('bridge_tokens:my-app')).toBe(JSON.stringify(FRESH_TOKENS));
+      expect(storage.get('bridge_tokens')).toBeNull();
     });
   });
 });

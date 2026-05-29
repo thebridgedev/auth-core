@@ -57,7 +57,7 @@ describe('BridgeAuth', () => {
 
     it('restores tokens from storage', () => {
       const storage = new MemoryAdapter();
-      storage.set('bridge_tokens', JSON.stringify({
+      storage.set('bridge_tokens:test-app', JSON.stringify({
         accessToken: makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
         refreshToken: 'rt',
         idToken: 'idt',
@@ -603,6 +603,30 @@ describe('BridgeAuth', () => {
       expect(body.successUrl).toBe(malformed);
       // /plan is still resolved normally
       expect(body.cancelUrl).toBe('http://localhost:3023/plan');
+    });
+  });
+
+  describe('logout()', () => {
+    it('redirects to hosted portal when no redirectTo provided', async () => {
+      let href = '';
+      Object.defineProperty(globalThis, 'window', {
+        value: { location: { get href() { return href; }, set href(v: string) { href = v; } } },
+        writable: true,
+        configurable: true,
+      });
+      await auth.logout();
+      expect(href).toBe('https://hosted.test.com/auth/login/test-app');
+    });
+
+    it('redirects to redirectTo when provided', async () => {
+      let href = '';
+      Object.defineProperty(globalThis, 'window', {
+        value: { location: { get href() { return href; }, set href(v: string) { href = v; } } },
+        writable: true,
+        configurable: true,
+      });
+      await auth.logout({ redirectTo: '/auth/login' });
+      expect(href).toBe('/auth/login');
     });
   });
 });
