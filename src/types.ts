@@ -175,6 +175,12 @@ export interface RouteRule {
   public?: boolean;
   featureFlag?: FlagRequirement;
   redirectTo?: string;
+  /**
+   * Billing 2.0 soft gate. `soft` (or omitted) lets the route render and relies
+   * on the in-app notice; `hard` redirects a billing-locked workspace to its
+   * recovery URL. Reads always pass — server enforcement of writes is separate.
+   */
+  billing?: 'soft' | 'hard';
 }
 
 export interface RouteGuardConfig {
@@ -235,7 +241,8 @@ export interface SubscriptionStatus {
    *  Consumers should not render a blocking plan selector; they may still render a custom one. */
   paymentsAutoRedirect: boolean;
   trial: boolean;
-  plan?: string;
+  /** The tenant's current plan. The REST endpoint returns the full Plan object; the JWT claim is a string key. */
+  plan?: Plan | string;
 }
 
 /** A plan available for selection */
@@ -260,6 +267,7 @@ export interface PriceOfferSdk {
 export interface CheckoutSession {
   sessionId: string;
   publicKey: string;
+  checkoutUrl: string | null;
 }
 
 /** Workspace (tenantUser) for workspace selection in SDK auth */
@@ -275,7 +283,7 @@ export interface Workspace {
 }
 
 /** Payload for the cross-tab session-stale event.
- *  Fired when another tab on the same origin overwrites `bridge_tokens` with
+ *  Fired when another tab on the same origin overwrites `bridge_tokens:<appId>` with
  *  a token whose `tid` claim differs from the one this tab booted with.
  *  Consumers should freeze writes and prompt the user to either reload
  *  (continue in the new workspace) or call `switchWorkspace(previousTenantUserId)`

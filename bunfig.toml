@@ -1,0 +1,3 @@
+[install.scopes]
+"@nebulr-group" = "http://host.docker.internal:4873"
+"@thebridge" = "http://host.docker.internal:4873"

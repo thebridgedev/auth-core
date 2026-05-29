@@ -220,6 +220,17 @@ export interface UpdateRoleRequest {
 
 // ─── Feature Flag ───────────────────────────────────────────────────────────
 
+// Canonical FF 2.0 shapes live in ./flags/evaluator.ts (Rule, Branch, FlagState,
+// EvalContext) and ./flags/flag.ts (FlagValueType). Re-export them here so a
+// management consumer can `import { FlagResponse, Rule, FlagState } from
+// '@nebulr-group/bridge-auth-core'` from a single named module — no need to
+// reach into the SDK eval module to type a management payload.
+export type { Rule, Branch, FlagState } from './flags/evaluator.js';
+export type { FlagValueType } from './flags/flag.js';
+
+import type { Rule, FlagState } from './flags/evaluator.js';
+import type { FlagValueType } from './flags/flag.js';
+
 export interface TargetValue {
   operator: 'eq' | 'beginsWith' | 'endsWith' | 'contains' | 'lessThan' | 'greaterThan';
   value: string;
@@ -265,32 +276,81 @@ export interface SegmentInput {
   targets?: Target[];
 }
 
+/**
+ * A scheduled future state transition (TBP-189).
+ *
+ * `null` clears any existing schedule on a write. The runner that flips the
+ * state at the appointed time is implemented separately; the management types
+ * just describe the persisted shape.
+ */
+export interface FlagSchedule {
+  /** ISO-8601 timestamp at which the transition fires. */
+  at: string;
+  /** Target state the runner will set when the timer fires. */
+  state: FlagState;
+}
+
 export interface FlagResponse {
   id: string;
   key: string;
   description: string;
+
+  // ── 1.0 legacy fields (kept for back-compat with existing callers) ────────
   defaultValue: boolean;
   segments: SegmentResponse[];
   targetValue?: boolean;
   enabled: boolean;
+
+  // ── FF 2.0 fields ─────────────────────────────────────────────────────────
+  state?: FlagState;
+  valueType?: FlagValueType;
+  offValue?: unknown;
+  onValue?: unknown;
+  rule?: Rule | null;
+  schedule?: FlagSchedule | null;
+
+  // ── Observability summary (server-computed; optional on the wire) ─────────
+  evalCount?: number;
+  /** ISO-8601 timestamp of the most recent eval, or null when never evaluated. */
+  lastEvalAt?: string | null;
 }
 
 export interface CreateFlagInput {
   key: string;
   description?: string;
+
+  // ── 1.0 legacy write-side fields (kept for back-compat) ───────────────────
   defaultValue?: boolean;
   segments?: string[];
   targetValue?: boolean;
   enabled?: boolean;
+
+  // ── FF 2.0 write-side fields ──────────────────────────────────────────────
+  state?: FlagState;
+  valueType?: FlagValueType;
+  offValue?: unknown;
+  onValue?: unknown;
+  rule?: Rule | null;
+  schedule?: FlagSchedule | null;
 }
 
 export interface UpdateFlagInput {
   key?: string;
   description?: string;
+
+  // ── 1.0 legacy write-side fields (kept for back-compat) ───────────────────
   defaultValue?: boolean;
   segments?: string[];
   targetValue?: boolean;
   enabled?: boolean;
+
+  // ── FF 2.0 write-side fields ──────────────────────────────────────────────
+  state?: FlagState;
+  valueType?: FlagValueType;
+  offValue?: unknown;
+  onValue?: unknown;
+  rule?: Rule | null;
+  schedule?: FlagSchedule | null;
 }
 
 // ─── Branding ───────────────────────────────────────────────────────────────

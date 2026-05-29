@@ -1,7 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { httpFetch } from '../http.js';
-import { HttpError } from '../errors.js';
+import { HttpError, BillingLockedError } from '../errors.js';
+import { setBillingLockHandler } from '../billing/lock-signal.js';
 import type { Logger } from '../logger.js';
+import type { BillingLockedPayload } from '../billing/types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -241,6 +243,86 @@ describe('httpFetch', () => {
         status: 502,
         body: 'upstream timeout',
       });
+    });
+  });
+
+  // Billing 2.0 soft gate — a 402 carrying `reason: 'billing_locked'` is the
+  // wire signal that the workspace is billing-locked. The http chokepoint must
+  // detect it, emit the lock signal, and throw a typed BillingLockedError that
+  // carries the canonical payload — distinct from a generic HttpError.
+  describe('billing-locked 402 detection', () => {
+    const lockedPayload: BillingLockedPayload = {
+      reason: 'billing_locked',
+      billing: { status: 'past_due', gateEngaged: true, recoveryUrl: '/billing' },
+    };
+
+    afterEach(() => {
+      // Drop any lock handler registered during a test so it can't leak across
+      // tests (the handler is module-global on lock-signal).
+      setBillingLockHandler(null);
+    });
+
+    it('throws BillingLockedError on a 402 with reason: billing_locked', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        makeResponse({ ok: false, status: 402, statusText: 'Payment Required', jsonBody: lockedPayload }),
+      );
+
+      await expect(
+        httpFetch('https://api.example.com/billing/state', {}, noopLogger),
+      ).rejects.toBeInstanceOf(BillingLockedError);
+    });
+
+    it('thrown BillingLockedError carries the canonical payload', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        makeResponse({ ok: false, status: 402, statusText: 'Payment Required', jsonBody: lockedPayload }),
+      );
+
+      await expect(
+        httpFetch('https://api.example.com/billing/state', {}, noopLogger),
+      ).rejects.toMatchObject({ payload: lockedPayload });
+    });
+
+    it('thrown BillingLockedError reports status 402', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        makeResponse({ ok: false, status: 402, statusText: 'Payment Required', jsonBody: lockedPayload }),
+      );
+
+      await expect(
+        httpFetch('https://api.example.com/billing/state', {}, noopLogger),
+      ).rejects.toMatchObject({ status: 402 });
+    });
+
+    it('emits the lock signal to a registered handler with the payload', async () => {
+      const handler = vi.fn();
+      setBillingLockHandler(handler);
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        makeResponse({ ok: false, status: 402, statusText: 'Payment Required', jsonBody: lockedPayload }),
+      );
+
+      await expect(
+        httpFetch('https://api.example.com/billing/state', {}, noopLogger),
+      ).rejects.toBeInstanceOf(BillingLockedError);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledWith(lockedPayload);
+    });
+
+    it('a non-billing 402 (no billing_locked reason) still throws the generic HttpError', async () => {
+      const handler = vi.fn();
+      setBillingLockHandler(handler);
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        makeResponse({
+          ok: false,
+          status: 402,
+          statusText: 'Payment Required',
+          jsonBody: { message: 'quota exceeded' },
+        }),
+      );
+
+      const err = await httpFetch('https://api.example.com/data', {}, noopLogger).catch((e) => e);
+      expect(err).toBeInstanceOf(HttpError);
+      expect(err).not.toBeInstanceOf(BillingLockedError);
+      expect(handler).not.toHaveBeenCalled();
     });
   });
 
