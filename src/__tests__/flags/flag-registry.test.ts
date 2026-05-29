@@ -72,14 +72,14 @@ describe('BridgeFlags.flag() — provider attribute merge', () => {
     const b = new BridgeFlags();
     b.hydrate([ruleFlag('country', ['DE'], 'eu-pricing', 'us-pricing')]);
     b.registerAttributeProvider(provider('geo', { country: 'DE' }));
-    expect(b.flag('test_flag', 'us-pricing')).toBe('eu-pricing');
+    expect(b.flag('test_flag', 'us-pricing').value).toBe('eu-pricing');
   });
 
   it('does NOT merge providers when none are registered (zero overhead)', () => {
     const b = new BridgeFlags();
     b.hydrate([ruleFlag('country', ['DE'], 'eu-pricing', 'us-pricing')]);
     b.setContext({ identity: 'u-1', attributes: { country: 'DE' } });
-    expect(b.flag('test_flag', 'us-pricing')).toBe('eu-pricing');
+    expect(b.flag('test_flag', 'us-pricing').value).toBe('eu-pricing');
   });
 
   it('re-evaluates with fresh provider output each call (live state)', () => {
@@ -87,9 +87,9 @@ describe('BridgeFlags.flag() — provider attribute merge', () => {
     b.hydrate([ruleFlag('country', ['DE'], 'eu-pricing', 'us-pricing')]);
     let current = 'GB';
     b.registerAttributeProvider(provider('geo', () => ({ country: current })));
-    expect(b.flag('test_flag', 'us-pricing')).toBe('us-pricing');
+    expect(b.flag('test_flag', 'us-pricing').value).toBe('us-pricing');
     current = 'DE';
-    expect(b.flag('test_flag', 'us-pricing')).toBe('eu-pricing');
+    expect(b.flag('test_flag', 'us-pricing').value).toBe('eu-pricing');
   });
 
   it('setContext globals override provider attrs on collision', () => {
@@ -97,7 +97,7 @@ describe('BridgeFlags.flag() — provider attribute merge', () => {
     b.hydrate([ruleFlag('country', ['DE'], 'eu-pricing', 'us-pricing')]);
     b.registerAttributeProvider(provider('geo', { country: 'GB' }));
     b.setContext({ identity: 'u-1', attributes: { country: 'DE' } });
-    expect(b.flag('test_flag', 'us-pricing')).toBe('eu-pricing');
+    expect(b.flag('test_flag', 'us-pricing').value).toBe('eu-pricing');
   });
 
   it('per-call context.attributes overrides both providers AND globals', () => {
@@ -106,7 +106,7 @@ describe('BridgeFlags.flag() — provider attribute merge', () => {
     b.registerAttributeProvider(provider('geo', { country: 'GB' }));
     b.setContext({ identity: 'u-1', attributes: { country: 'GB' } });
     expect(
-      b.flag('test_flag', 'us-pricing', { attributes: { country: 'DE' } }),
+      b.flag('test_flag', 'us-pricing', { attributes: { country: 'DE' } }).value,
     ).toBe('eu-pricing');
   });
 
@@ -121,7 +121,7 @@ describe('BridgeFlags.flag() — provider attribute merge', () => {
     };
     b.registerAttributeProvider(noisy);
     b.registerAttributeProvider(provider('geo', { country: 'DE' }));
-    expect(b.flag('test_flag', 'us-pricing')).toBe('eu-pricing');
+    expect(b.flag('test_flag', 'us-pricing').value).toBe('eu-pricing');
   });
 
   it('an async provider is SKIPPED on the sync hot path (no eval breakage)', () => {
@@ -133,7 +133,7 @@ describe('BridgeFlags.flag() — provider attribute merge', () => {
     };
     b.registerAttributeProvider(asyncP);
     // No sync attrs reached the eval context → rule fails → off value.
-    expect(b.flag('test_flag', 'us-pricing')).toBe('us-pricing');
+    expect(b.flag('test_flag', 'us-pricing').value).toBe('us-pricing');
   });
 });
 
@@ -194,10 +194,10 @@ describe('AuthAttributeProvider', () => {
     b.registerAttributeProvider(
       new AuthAttributeProvider({ getClaims: () => claims }),
     );
-    expect(b.flag('test_flag', 'user-ui')).toBe('admin-ui');
+    expect(b.flag('test_flag', 'user-ui').value).toBe('admin-ui');
     claims = { sub: 'u-1', role: 'MEMBER' };
-    expect(b.flag('test_flag', 'user-ui')).toBe('user-ui');
+    expect(b.flag('test_flag', 'user-ui').value).toBe('user-ui');
     claims = undefined;
-    expect(b.flag('test_flag', 'user-ui')).toBe('user-ui');
+    expect(b.flag('test_flag', 'user-ui').value).toBe('user-ui');
   });
 });

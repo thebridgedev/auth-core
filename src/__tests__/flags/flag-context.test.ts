@@ -27,7 +27,7 @@ describe('BridgeFlags — per-call context override (TBP-167)', () => {
     const b = new BridgeFlags();
     b.hydrate([ruleFlag]);
     b.setContext({ identity: 'u-1', attributes: { country: 'DE' } });
-    expect(b.flag('eu_pricing', 'us-pricing')).toBe('eu-pricing');
+    expect(b.flag('eu_pricing', 'us-pricing').value).toBe('eu-pricing');
   });
 
   it('per-call attributes override global on overlap', () => {
@@ -35,7 +35,7 @@ describe('BridgeFlags — per-call context override (TBP-167)', () => {
     b.hydrate([ruleFlag]);
     b.setContext({ identity: 'u-1', attributes: { country: 'DE' } });
     // Override country = GB just for this call
-    expect(b.flag('eu_pricing', 'us-pricing', { attributes: { country: 'GB' } })).toBe('us-pricing');
+    expect(b.flag('eu_pricing', 'us-pricing', { attributes: { country: 'GB' } }).value).toBe('us-pricing');
     // Global context untouched
     expect(b.getContext().attributes.country).toBe('DE');
   });
@@ -63,7 +63,7 @@ describe('BridgeFlags — per-call context override (TBP-167)', () => {
     };
     b.hydrate([fl]);
     // Override only country → plan (global=pro) + country (override=FR) → matches
-    expect(b.flag('eu_pricing', 'us-pricing', { attributes: { country: 'FR' } })).toBe('eu-pricing');
+    expect(b.flag('eu_pricing', 'us-pricing', { attributes: { country: 'FR' } }).value).toBe('eu-pricing');
   });
 
   it('per-call identity overrides global identity', () => {
@@ -89,7 +89,7 @@ describe('BridgeFlags — per-call context override (TBP-167)', () => {
   it('anonymous eval (no identity globally or per-call) still works for rules without rollout', () => {
     const b = new BridgeFlags();
     b.hydrate([ruleFlag]); // rolloutPct: 100 — no identity needed
-    expect(b.flag('eu_pricing', 'us-pricing', { attributes: { country: 'DE' } })).toBe('eu-pricing');
+    expect(b.flag('eu_pricing', 'us-pricing', { attributes: { country: 'DE' } }).value).toBe('eu-pricing');
   });
 
   it('per-call attributes do not pollute global state', () => {
@@ -106,13 +106,13 @@ describe('BridgeFlags — per-call context override (TBP-167)', () => {
     b.setContext({ identity: 'global', attributes: { country: 'DE' } });
     // Override identity only — attributes come from global
     const result = b.flag('eu_pricing', 'us-pricing', { identity: 'per-call' });
-    expect(result).toBe('eu-pricing'); // country: DE from global still matches
+    expect(result.value).toBe('eu-pricing'); // country: DE from global still matches
   });
 
   it('empty per-call context behaves the same as no override', () => {
     const b = new BridgeFlags();
     b.hydrate([ruleFlag]);
     b.setContext({ identity: 'u-1', attributes: { country: 'DE' } });
-    expect(b.flag('eu_pricing', 'us-pricing', {})).toBe('eu-pricing');
+    expect(b.flag('eu_pricing', 'us-pricing', {}).value).toBe('eu-pricing');
   });
 });

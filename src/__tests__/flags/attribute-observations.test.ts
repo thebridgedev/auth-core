@@ -115,7 +115,7 @@ describe('BridgeFlags — onAttributeObserved (TBP-178)', () => {
     expect(() =>
       b.flag('feature', false, { attributes: { plan: 'enterprise' } }),
     ).not.toThrow();
-    expect(b.flag('feature', false, { attributes: { plan: 'enterprise' } })).toBe(true);
+    expect(b.flag('feature', false, { attributes: { plan: 'enterprise' } }).value).toBe(true);
   });
 
   it('ignores empty-string attribute keys', () => {

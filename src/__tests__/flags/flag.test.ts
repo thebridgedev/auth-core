@@ -13,34 +13,34 @@ const boolFlag = (over: Partial<CachedFlag> = {}): CachedFlag => ({
 describe('BridgeFlags — basic cache + read', () => {
   it('returns the default when the flag is not in cache', () => {
     const b = new BridgeFlags();
-    expect(b.flag('unknown', false)).toBe(false);
-    expect(b.flag('unknown', 'fallback')).toBe('fallback');
-    expect(b.flag('unknown', 42)).toBe(42);
+    expect(b.flag('unknown', false).value).toBe(false);
+    expect(b.flag('unknown', 'fallback').value).toBe('fallback');
+    expect(b.flag('unknown', 42).value).toBe(42);
   });
 
   it('returns onValue for state=on', () => {
     const b = new BridgeFlags();
     b.hydrate([boolFlag({ state: 'on', onValue: true, offValue: false })]);
-    expect(b.flag('dark_mode', false)).toBe(true);
+    expect(b.flag('dark_mode', false).value).toBe(true);
   });
 
   it('returns offValue for state=off', () => {
     const b = new BridgeFlags();
     b.hydrate([boolFlag({ state: 'off', onValue: true, offValue: false })]);
-    expect(b.flag('dark_mode', true)).toBe(false);
+    expect(b.flag('dark_mode', true).value).toBe(false);
   });
 
   it('infers TypeScript type from default (boolean default → boolean return)', () => {
     const b = new BridgeFlags();
     b.hydrate([boolFlag({ state: 'on' })]);
-    const v: boolean = b.flag('dark_mode', false); // would not compile without inference
+    const v: boolean = b.flag('dark_mode', false).value; // would not compile without inference
     expect(v).toBe(true);
   });
 
   it('falls back to default when cached value type mismatches inferred type', () => {
     const b = new BridgeFlags();
     b.hydrate([boolFlag({ state: 'on', onValue: 'a string' as any })]); // bad type in cache
-    expect(b.flag('dark_mode', false)).toBe(false); // default wins
+    expect(b.flag('dark_mode', false).value).toBe(false); // default wins
   });
 
   it('handles JSON-typed flags', () => {
@@ -49,7 +49,7 @@ describe('BridgeFlags — basic cache + read', () => {
     b.hydrate([
       { key: 'cfg', state: 'on', valueType: 'json', offValue: {}, onValue: cfg },
     ]);
-    expect(b.flag('cfg', {})).toEqual(cfg);
+    expect(b.flag('cfg', {}).value).toEqual(cfg);
   });
 });
 
@@ -76,9 +76,9 @@ describe('BridgeFlags — rule evaluation', () => {
     const b = new BridgeFlags();
     b.hydrate([ruleFlag]);
     b.setContext({ identity: 'u-1', attributes: { country: 'DE' } });
-    expect(b.flag('eu_pricing', 'us-pricing')).toBe('eu-pricing');
+    expect(b.flag('eu_pricing', 'us-pricing').value).toBe('eu-pricing');
     b.setContext({ identity: 'u-1', attributes: { country: 'GB' } });
-    expect(b.flag('eu_pricing', 'us-pricing')).toBe('us-pricing');
+    expect(b.flag('eu_pricing', 'us-pricing').value).toBe('us-pricing');
   });
 
   it('context.merge mode keeps existing attributes', () => {
@@ -189,7 +189,7 @@ describe('BridgeFlags — eval telemetry hook', () => {
       },
     });
     expect(() => b.flag('dark_mode', false)).not.toThrow();
-    expect(b.flag('dark_mode', false)).toBe(true);
+    expect(b.flag('dark_mode', false).value).toBe(true);
   });
 });
 
@@ -197,17 +197,17 @@ describe('BridgeFlags — cache mutations', () => {
   it('upsert replaces a flag', () => {
     const b = new BridgeFlags();
     b.upsert(boolFlag({ state: 'off' }));
-    expect(b.flag('dark_mode', true)).toBe(false);
+    expect(b.flag('dark_mode', true).value).toBe(false);
     b.upsert(boolFlag({ state: 'on' }));
-    expect(b.flag('dark_mode', false)).toBe(true);
+    expect(b.flag('dark_mode', false).value).toBe(true);
   });
 
   it('remove drops the flag', () => {
     const b = new BridgeFlags();
     b.upsert(boolFlag({ state: 'on' }));
-    expect(b.flag('dark_mode', false)).toBe(true);
+    expect(b.flag('dark_mode', false).value).toBe(true);
     b.remove('dark_mode');
-    expect(b.flag('dark_mode', false)).toBe(false);
+    expect(b.flag('dark_mode', false).value).toBe(false);
   });
 
   it('hydrate replaces the entire cache', () => {

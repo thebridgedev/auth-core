@@ -212,11 +212,12 @@ describe('useBridge().attachToRealtimeClient(rt)', () => {
 
     api.attachToRealtimeClient(rt as unknown as RealtimeClient);
 
-    expect(planSpy).toHaveBeenCalledTimes(1);
-    // setOnBillingLifecycle is called twice in production: once by
-    // `subscription.attach(rt)` (registers the snapshot patcher), once by
-    // `attachToRealtimeClient` itself (replaces it with the patch-then-fan-out
-    // wrapper). The last registration is what the RealtimeClient stores.
+    // Both setOnSubscriptionPlanChanged and setOnBillingLifecycle are called
+    // twice in production: once by `subscription.attach(rt)` (registers the
+    // snapshot patcher), once by `attachToRealtimeClient` itself (replaces
+    // them with the patch-then-fan-out wrapper). The last registration is
+    // what the RealtimeClient stores.
+    expect(planSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
     expect(lifecycleSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
     expect(typeof rt.planHook).toBe('function');
     expect(typeof rt.lifecycleHook).toBe('function');

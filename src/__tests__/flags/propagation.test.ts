@@ -122,7 +122,7 @@ describe('BridgeFlags backend mode + serverInstanceId integration', () => {
     (globalThis as any).console = { warn: () => undefined };
     const result = b.flag('system_flag', 'safe-default' as any);
     (globalThis as any).console = { warn };
-    expect(result).toBe('safe-default');
+    expect(result.value).toBe('safe-default');
   });
 
   it('backend mode allows on / off evals without identity (no rule)', () => {
@@ -134,7 +134,7 @@ describe('BridgeFlags backend mode + serverInstanceId integration', () => {
       offValue: false,
       onValue: true,
     });
-    expect(b.flag('sys', false)).toBe(true);
+    expect(b.flag('sys', false).value).toBe(true);
   });
 
   it('backend mode + per-call identity → evaluates the rule', () => {
@@ -152,7 +152,7 @@ describe('BridgeFlags backend mode + serverInstanceId integration', () => {
       },
     });
     expect(
-      b.flag('sys', 'default', { identity: 'system-actor', attributes: { plan: 'pro' } }),
+      b.flag('sys', 'default', { identity: 'system-actor', attributes: { plan: 'pro' } }).value,
     ).toBe('pro-feature');
   });
 

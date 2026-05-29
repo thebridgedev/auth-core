@@ -1,10 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { UsageReporter } from '../usage/usage-reporter.js';
+import { InMemoryStorage } from '../usage/storage/index.js';
 
 // ---------------------------------------------------------------------------
 // Billing 2.0 — Phase C / US-10 (TBP-262)
 // SDK usage-reporter unit tests. We inject a `fetchFn` mock so the reporter
 // never hits the network. Fake timers control the debounce window.
+//
+// US-19 (TBP-270) — the reporter now persists events through a `DurableStorage`
+// backend (NodeFsStorage in Node by default). We inject `InMemoryStorage` per
+// test so each test starts with a clean queue and the storage ops resolve
+// synchronously-enough to play nicely with vitest fake timers.
 // ---------------------------------------------------------------------------
 
 function makeReporter(opts: {
@@ -14,6 +20,7 @@ function makeReporter(opts: {
 } = {}) {
   const fetchFn = opts.fetchFn ?? vi.fn().mockResolvedValue({ ok: true, status: 201 });
   const logger = { warn: vi.fn() };
+  const storage = new InMemoryStorage();
   const reporter = new UsageReporter({
     apiBaseUrl: 'https://api.example.com',
     getAccessToken: () => 'access-tok',
@@ -21,8 +28,9 @@ function makeReporter(opts: {
     batchSize: opts.batchSize ?? 10,
     flushIntervalMs: opts.flushIntervalMs ?? 1000,
     fetchFn,
+    storage,
   });
-  return { reporter, fetchFn, logger };
+  return { reporter, fetchFn, logger, storage };
 }
 
 describe('UsageReporter', () => {
