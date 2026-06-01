@@ -186,14 +186,26 @@ export class BridgeAuth {
     return this.authService.getCodeFromToken(tokens.accessToken, redirectUri);
   }
 
+  // Dedup gate: if a refresh is already in flight, return the same promise
+  // rather than firing a second HTTP call with the same single-use rotating
+  // refresh token. Concurrent callers (WebSocket user.state_changed + a stale
+  // response arriving simultaneously) coalesce into one POST /auth/token call.
+  private _refreshInFlight: Promise<TokenSet | null> | null = null;
+
   async refreshTokens(): Promise<TokenSet | null> {
+    if (this._refreshInFlight) return this._refreshInFlight;
+    this._refreshInFlight = this._doRefresh().finally(() => {
+      this._refreshInFlight = null;
+    });
+    return this._refreshInFlight;
+  }
+
+  private async _doRefresh(): Promise<TokenSet | null> {
     const tokens = this.tokenManager.getTokens();
     if (!tokens?.refreshToken) return null;
     const newTokens = await this.authService.refreshToken(tokens.refreshToken);
-    if (newTokens) {
-      this.tokenManager.setTokens(newTokens);
-    }
-    return newTokens;
+    if (newTokens) this.tokenManager.setTokens(newTokens);
+    return newTokens ?? null;
   }
 
   // --- Direct auth (SDK mode) ---
@@ -497,6 +509,7 @@ export class BridgeAuth {
         await httpFetch(syncUrl, {
           method: 'GET',
           headers: { Authorization: `Bearer ${token}`, 'x-app-id': this.config.appId },
+          onTokenStale: this._onTokenStale(),
         }, this.logger).catch(() => {});
       }
     }
@@ -505,6 +518,7 @@ export class BridgeAuth {
     return httpFetch<SubscriptionStatus>(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${token}`, 'x-app-id': this.config.appId },
+      onTokenStale: this._onTokenStale(),
     }, this.logger);
   }
 
@@ -515,6 +529,7 @@ export class BridgeAuth {
     return httpFetch<Plan[]>(url, {
       method: 'GET',
       headers: { Authorization: `Bearer ${token}`, 'x-app-id': this.config.appId },
+      onTokenStale: this._onTokenStale(),
     }, this.logger);
   }
 
@@ -526,6 +541,7 @@ export class BridgeAuth {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'x-app-id': this.config.appId },
       body: { planKey },
+      onTokenStale: this._onTokenStale(),
     }, this.logger);
   }
 
@@ -546,6 +562,7 @@ export class BridgeAuth {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'x-app-id': this.config.appId },
       body: { planKey, priceOffer, successUrl, cancelUrl },
+      onTokenStale: this._onTokenStale(),
     }, this.logger);
   }
 
@@ -557,6 +574,7 @@ export class BridgeAuth {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'x-app-id': this.config.appId },
       body: { planKey, priceOffer },
+      onTokenStale: this._onTokenStale(),
     }, this.logger);
   }
 
@@ -564,6 +582,18 @@ export class BridgeAuth {
 
   get team(): TeamService {
     return this.teamService;
+  }
+
+  // Returns the onTokenStale callback for authenticated httpFetch calls.
+  // When a REST 401 TOKEN_VERSION_STALE is detected, httpFetch calls this to
+  // get a fresh token and retry. The dedup gate in refreshTokens() ensures
+  // only one POST /auth/token goes out even if the WebSocket path fires at
+  // the same time.
+  private _onTokenStale(): () => Promise<string | null> {
+    return async () => {
+      const t = await this.refreshTokens();
+      return t?.accessToken ?? null;
+    };
   }
 
   // --- API token management ---

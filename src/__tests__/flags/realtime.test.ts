@@ -17,7 +17,7 @@ class FakeWebSocket implements WebSocketLike {
   onclose: ((ev: any) => void) | null = null;
   onerror: ((ev: any) => void) | null = null;
   onmessage: ((ev: { data: any }) => void) | null = null;
-  constructor(public url: string) {
+  constructor(public url: string, public protocols?: string | string[]) {
     FakeWebSocket.instances.push(this);
   }
   send(data: string) {
@@ -36,7 +36,8 @@ class FakeWebSocket implements WebSocketLike {
   }
 }
 
-const fakeWsFactory = (url: string): WebSocketLike => new FakeWebSocket(url);
+const fakeWsFactory = (url: string, protocols?: string | string[]): WebSocketLike =>
+  new FakeWebSocket(url, protocols);
 
 // ── Mock fetch ──────────────────────────────────────────────────────────────
 
@@ -93,15 +94,16 @@ describe('RealtimeClient — disabled / noop server', () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
-  it('does not connect when server reports appsync (deferred TBP-148)', async () => {
+  it('closes cleanly when server reports an unknown protocol', async () => {
     const client = new RealtimeClient({
       ...CONFIG,
       fetchFn: mkFetch({
-        '/realtime/config': () => ({ kind: 'appsync', endpoint: 'wss://x' }),
+        '/realtime/config': () => ({ kind: 'mqtt' as any, endpoint: 'wss://x' }),
       }),
     });
     await client.start();
     expect(client.getState()).toBe('closed');
+    expect(FakeWebSocket.instances).toHaveLength(0);
   });
 });
 
@@ -486,5 +488,215 @@ describe('RealtimeClient — Centrifugo keepalive ping', () => {
     expect(bridge.flag('after_ping', false).value).toBe(true);
     // No further sends triggered by the data frame.
     expect(ws.sent).toEqual(['{}']);
+  });
+});
+
+describe('RealtimeClient — AppSync Events handshake (TBP-148)', () => {
+  const APPSYNC_HOST = 'svc.appsync-realtime-api.eu-west-1.amazonaws.com';
+  // The HTTP host is what AppSync expects in the auth header's `host` field,
+  // not the realtime host — see normalizeAppSyncEndpoint() comment.
+  const APPSYNC_HTTP_HOST = 'svc.appsync-api.eu-west-1.amazonaws.com';
+  const APPSYNC_FULL = `wss://${APPSYNC_HOST}/event/realtime`;
+
+  function decodeHeaderProtocol(protocols: string | string[] | undefined): {
+    Authorization: string;
+    host: string;
+  } | null {
+    if (!protocols) return null;
+    const list = Array.isArray(protocols) ? protocols : [protocols];
+    const header = list.find((p) => p.startsWith('header-'));
+    if (!header) return null;
+    const b64 = header.slice('header-'.length);
+    // base64url → base64 (pad)
+    const padded = b64.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((b64.length + 3) % 4);
+    const decoded = atob(padded);
+    // Reverse the UTF-8 encoding step in base64urlEncode
+    const utf8 = decodeURIComponent(escape(decoded));
+    return JSON.parse(utf8);
+  }
+
+  async function setupAppSyncOpen(
+    overrides: Partial<{
+      endpoint: string;
+      getAuthToken: () => string | undefined;
+      appId: string;
+      workspaceId?: string;
+      userId?: string;
+    }> = {},
+  ): Promise<{ ws: FakeWebSocket; client: RealtimeClient }> {
+    const endpoint = overrides.endpoint ?? APPSYNC_HOST; // bare host (stage CFN shape)
+    const client = new RealtimeClient({
+      ...CONFIG,
+      appId: overrides.appId ?? 'app-1',
+      workspaceId: overrides.workspaceId,
+      userId: overrides.userId,
+      fetchFn: mkFetch({
+        '/realtime/config': () => ({
+          kind: 'appsync',
+          endpoint,
+          protocol: 'appsync-events',
+          params: { region: 'eu-west-1', apiId: 'svc' },
+        }),
+      }),
+      getAuthToken: overrides.getAuthToken,
+    });
+    await client.start();
+    const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    return { ws, client };
+  }
+
+  it('normalizes a bare host into wss://…/event/realtime and negotiates the two subprotocols', async () => {
+    const { ws } = await setupAppSyncOpen();
+    expect(ws.url).toBe(APPSYNC_FULL);
+    expect(Array.isArray(ws.protocols)).toBe(true);
+    const protocols = ws.protocols as string[];
+    expect(protocols[0]).toBe('aws-appsync-event-ws');
+    expect(protocols[1].startsWith('header-')).toBe(true);
+  });
+
+  it('accepts an already-normalized wss URL and does not double-append the path', async () => {
+    const { ws } = await setupAppSyncOpen({ endpoint: APPSYNC_FULL });
+    expect(ws.url).toBe(APPSYNC_FULL);
+  });
+
+  it('builds an anonymous auth header when getAuthToken is undefined (Authorization: empty, host: HTTP endpoint)', async () => {
+    const { ws } = await setupAppSyncOpen({ getAuthToken: undefined });
+    const auth = decodeHeaderProtocol(ws.protocols);
+    // AWS spec — `host` is always the HTTP endpoint, even when wss:// targets
+    // the realtime endpoint. Server-side validation depends on this.
+    expect(auth).toEqual({ Authorization: '', host: APPSYNC_HTTP_HOST });
+  });
+
+  it('builds an authenticated auth header when getAuthToken returns a JWT', async () => {
+    const { ws } = await setupAppSyncOpen({ getAuthToken: () => 'jwt.value.abc' });
+    const auth = decodeHeaderProtocol(ws.protocols);
+    expect(auth).toEqual({ Authorization: 'Bearer jwt.value.abc', host: APPSYNC_HTTP_HOST });
+  });
+
+  it('sends connection_init on WS open, defers state=open until connection_ack', async () => {
+    const { ws, client } = await setupAppSyncOpen();
+    ws.triggerOpen();
+    expect(ws.sent[0]).toBe(JSON.stringify({ type: 'connection_init' }));
+    // Still 'connecting' — the ack hasn't landed.
+    expect(client.getState()).toBe('connecting');
+  });
+
+  it('sends one subscribe frame per channel after connection_ack, with `/` separator on the wire', async () => {
+    const { ws, client } = await setupAppSyncOpen({
+      appId: 'app-1',
+      workspaceId: 'ws-1',
+      userId: 'u-1',
+      getAuthToken: () => 'jwt-x',
+    });
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack', connectionTimeoutMs: 30_000 });
+
+    expect(client.getState()).toBe('open');
+    // 1 connection_init + 3 subscribes
+    expect(ws.sent.length).toBe(4);
+    const subs = ws.sent.slice(1).map((s) => JSON.parse(s));
+    expect(subs.map((m) => m.type)).toEqual(['subscribe', 'subscribe', 'subscribe']);
+    expect(subs.map((m) => m.channel)).toEqual(['app/app-1', 'workspace/ws-1', 'user/u-1']);
+    for (const sub of subs) {
+      expect(typeof sub.id).toBe('string');
+      expect(sub.authorization).toEqual({
+        Authorization: 'Bearer jwt-x',
+        host: APPSYNC_HTTP_HOST,
+      });
+    }
+  });
+
+  it('dispatches data frames where `event` is an array (per AWS spec)', async () => {
+    const { ws, client } = await setupAppSyncOpen({ appId: 'demo-app' });
+    const bridge = new BridgeFlags();
+    client.attach(bridge);
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack' });
+
+    // Per spec, `event` is an array of JSON-encoded strings.
+    ws.triggerMessage({
+      type: 'data',
+      id: 'sub-1',
+      event: [
+        JSON.stringify({
+          kind: 'flag.updated',
+          flag: {
+            key: 'theme',
+            state: 'on',
+            valueType: 'string',
+            offValue: 'light',
+            onValue: 'dark',
+          },
+        }),
+      ],
+    });
+    expect(bridge.flag('theme', 'light').value).toBe('dark');
+  });
+
+  it('also accepts a legacy single-string `event` for backward compat', async () => {
+    const { ws, client } = await setupAppSyncOpen({ appId: 'demo-app' });
+    const bridge = new BridgeFlags();
+    client.attach(bridge);
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack' });
+    ws.triggerMessage({
+      type: 'data',
+      id: 'sub-1',
+      event: JSON.stringify({
+        kind: 'flag.updated',
+        flag: {
+          key: 'legacy',
+          state: 'on',
+          valueType: 'boolean',
+          offValue: false,
+          onValue: true,
+        },
+      }),
+    });
+    expect(bridge.flag('legacy', false).value).toBe(true);
+  });
+
+  it('silently ignores ka keepalives (no client response, no state change)', async () => {
+    const { ws, client } = await setupAppSyncOpen();
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack' });
+    const sentBefore = ws.sent.length;
+    ws.triggerMessage({ type: 'ka' });
+    expect(ws.sent.length).toBe(sentBefore); // no response sent
+    expect(client.getState()).toBe('open');
+  });
+
+  it('closes the socket on a server `error` frame so onclose drives reconnect', async () => {
+    const { ws, client } = await setupAppSyncOpen();
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack' });
+    ws.triggerMessage({ type: 'error', errors: [{ message: 'auth failed' }] });
+    expect(ws.readyState).toBe(3); // CLOSED
+    expect(client.getState()).toBe('closed');
+  });
+
+  it('ignores unknown frame types without breaking the connection', async () => {
+    const { ws, client } = await setupAppSyncOpen();
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack' });
+    ws.triggerMessage({ type: 'pong' }); // hypothetical future frame
+    expect(client.getState()).toBe('open');
+  });
+
+  it('re-uses the current getAuthToken value when reauthorize() runs (post-rotation JWT)', async () => {
+    let token = 'jwt-old';
+    const { ws, client } = await setupAppSyncOpen({ getAuthToken: () => token });
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack' });
+    expect(decodeHeaderProtocol(ws.protocols)?.Authorization).toBe('Bearer jwt-old');
+
+    // Rotate the token and reauthorize → new context creates a fresh WS with
+    // the new value in the subprotocol header.
+    token = 'jwt-new';
+    await client.reauthorize();
+
+    const ws2 = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    expect(ws2).not.toBe(ws);
+    expect(decodeHeaderProtocol(ws2.protocols)?.Authorization).toBe('Bearer jwt-new');
   });
 });
