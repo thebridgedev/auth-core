@@ -17,13 +17,15 @@ function makeReporter(opts: {
   fetchFn?: ReturnType<typeof vi.fn>;
   batchSize?: number;
   flushIntervalMs?: number;
+  getAccessToken?: () => string | null;
+  storage?: InMemoryStorage;
 } = {}) {
   const fetchFn = opts.fetchFn ?? vi.fn().mockResolvedValue({ ok: true, status: 201 });
   const logger = { warn: vi.fn() };
-  const storage = new InMemoryStorage();
+  const storage = opts.storage ?? new InMemoryStorage();
   const reporter = new UsageReporter({
     apiBaseUrl: 'https://api.example.com',
-    getAccessToken: () => 'access-tok',
+    getAccessToken: opts.getAccessToken ?? (() => 'access-tok'),
     logger,
     batchSize: opts.batchSize ?? 10,
     flushIntervalMs: opts.flushIntervalMs ?? 1000,
@@ -191,6 +193,61 @@ describe('UsageReporter', () => {
       const { reporter } = makeReporter();
       reporter.shutdown();
       expect(() => reporter.shutdown()).not.toThrow();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Anonymous sessions (TBP-398) — usage is billed per workspace (JWT tenant
+  // claim); tokenless events can never ingest. They must be dropped at the
+  // door, and a stale queue must never be flushed without a token (a
+  // tokenless POST is a guaranteed 401 that the retry machinery would
+  // hot-loop forever).
+  // -------------------------------------------------------------------------
+  describe('anonymous sessions (TBP-398)', () => {
+    it('report() drops events when getAccessToken() returns null — nothing queued, nothing fetched', async () => {
+      const storage = new InMemoryStorage();
+      const { reporter, fetchFn, logger } = makeReporter({
+        getAccessToken: () => null,
+        storage,
+      });
+
+      reporter.report('bridge.flag_evaluations', 1);
+      reporter.report('bridge.flag_evaluations', 1);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(fetchFn).not.toHaveBeenCalled();
+      const status = await reporter.getQueueStatus();
+      expect(status.queueDepth).toBe(0);
+      // Warned once, not per event.
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('flush makes no network attempt while the token is null, keeps the queue, and drains after re-auth', async () => {
+      const storage = new InMemoryStorage();
+      let token: string | null = 'access-tok';
+      const { reporter, fetchFn } = makeReporter({
+        getAccessToken: () => token,
+        storage,
+      });
+
+      // Enqueued while authenticated…
+      reporter.report('bridge.flag_evaluations', 1, 'idem-anon-1');
+      // …but the token expires before the debounce window closes.
+      token = null;
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect((await reporter.getQueueStatus()).queueDepth).toBe(1);
+
+      // Token returns (refresh/login) — the next flush drains the queue.
+      token = 'access-tok-2';
+      await reporter.flushNow();
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      const [, init] = fetchFn.mock.calls[0];
+      expect((init as { headers: Record<string, string> }).headers.Authorization).toBe(
+        'Bearer access-tok-2',
+      );
+      expect((await reporter.getQueueStatus()).queueDepth).toBe(0);
     });
   });
 });
