@@ -72,6 +72,7 @@ export class UsageReporter {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
   private flushing: Promise<void> | undefined;
+  private anonDropWarned = false;
 
   // Observability state — surfaced via getQueueStatus().
   private _lastFlushTimestamp: number | null = null;
@@ -99,6 +100,19 @@ export class UsageReporter {
   public report(metric: string, value: number = 1, idempotencyKey?: string): void {
     if (this.stopped) return;
     if (typeof metric !== 'string' || metric.length === 0) return;
+    // Anonymous sessions are dropped at the door: /usage/ingest derives the
+    // billed workspace from the JWT, so a tokenless event can never ingest —
+    // and buffering it until a later login would mis-attribute it to whatever
+    // workspace that user lands in. (TBP-398)
+    if (this.getAccessToken() === null) {
+      if (!this.anonDropWarned) {
+        this.anonDropWarned = true;
+        this.logger.warn(
+          '[bridge.usage] dropping usage events from an unauthenticated session — usage is billed per workspace and requires a logged-in user',
+        );
+      }
+      return;
+    }
     const key = idempotencyKey ?? generateIdempotencyKey();
     const event: QueuedEvent = {
       metric,
@@ -207,6 +221,14 @@ export class UsageReporter {
     }
 
     const token = this.getAccessToken();
+    if (token === null) {
+      // No token, no attempt: a tokenless POST is a guaranteed 401 and the
+      // retry machinery would hot-loop it (~1 Hz) forever. The queue is left
+      // intact — these are events enqueued WHILE authenticated whose token
+      // expired before the flush; they drain after the next refresh/login.
+      // (Anonymous events never reach the queue — see report().) (TBP-398)
+      return;
+    }
     const url = `${this.apiBaseUrl}/usage/ingest`;
     const succeeded: string[] = [];
     const failures: Array<{ key: string; error: string }> = [];
@@ -214,8 +236,10 @@ export class UsageReporter {
     await Promise.all(
       batch.map(async (event) => {
         try {
-          const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-          if (token) headers.Authorization = `Bearer ${token}`;
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          };
           const res = await this.fetchFn(url, {
             method: 'POST',
             headers,
