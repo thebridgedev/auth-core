@@ -14,10 +14,13 @@
 //     serializes all writes. We do NOT attempt multi-process locking — bridge
 //     SDK consumers run a single process per app instance.
 //
-// Tree-shake isolation: this file uses `node:fs/promises` and `node:path` via
-// `await import()` so bundlers that target the browser can statically prove
-// the module never executes the imports. The IndexedDB sibling never reaches
-// into this file's graph.
+// Edge/browser-bundle isolation: this file loads the Node fs/path/os builtins
+// through `loadNodeBuiltin` (a runtime-computed specifier with per-bundler
+// ignore hints) so that even when an edge/browser bundler pulls this module
+// into its graph it never tries to bundle or parse the Node-builtin imports —
+// they stay native runtime imports that only ever resolve in a real Node
+// process. (A plain dynamic import of a literal node-scheme specifier is NOT
+// enough: webpack's edge target still parses the chunk and rejects it.)
 
 import {
   DEFAULT_MAX_SIZE,
@@ -30,6 +33,20 @@ import {
 type FsModule = typeof import('node:fs/promises');
 type PathModule = typeof import('node:path');
 type OsModule = typeof import('node:os');
+
+// Bundler-invisible Node-builtin loader. A literal dynamic import of a
+// node-scheme specifier trips edge/browser bundlers (Next.js middleware
+// webpack: UnhandledSchemeError; Turbopack: middleware panic; Vite/esbuild:
+// unresolved scheme) whenever this module is reachable in their graph — even
+// though NodeFsStorage only ever runs in a real Node process. Routing through a
+// runtime-computed specifier plus per-bundler ignore hints keeps these as
+// native runtime imports the bundler never bundles or parses, while Node
+// resolves them normally.
+function loadNodeBuiltin(specifier: string): Promise<unknown> {
+  return import(
+    /* webpackIgnore: true */ /* turbopackIgnore: true */ /* @vite-ignore */ specifier
+  );
+}
 
 export class NodeFsStorage implements DurableStorage {
   private maxSize: number;
@@ -172,17 +189,17 @@ export class NodeFsStorage implements DurableStorage {
   }
 
   private _fs(): Promise<FsModule> {
-    if (!this.fsP) this.fsP = import('node:fs/promises');
+    if (!this.fsP) this.fsP = loadNodeBuiltin('node:fs/promises') as Promise<FsModule>;
     return this.fsP;
   }
 
   private _path(): Promise<PathModule> {
-    if (!this.pathP) this.pathP = import('node:path');
+    if (!this.pathP) this.pathP = loadNodeBuiltin('node:path') as Promise<PathModule>;
     return this.pathP;
   }
 
   private _os(): Promise<OsModule> {
-    if (!this.osP) this.osP = import('node:os');
+    if (!this.osP) this.osP = loadNodeBuiltin('node:os') as Promise<OsModule>;
     return this.osP;
   }
 
