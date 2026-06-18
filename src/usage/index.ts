@@ -7,7 +7,6 @@ export {
   type DurableStorageOptions,
   type QueuedEvent,
   IndexedDBStorage,
-  NodeFsStorage,
   InMemoryStorage,
   DEFAULT_MAX_SIZE,
   isBrowserEnv,
