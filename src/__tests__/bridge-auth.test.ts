@@ -629,4 +629,103 @@ describe('BridgeAuth', () => {
       expect(href).toBe('/auth/login');
     });
   });
+
+  // TBP-369: framework-agnostic bootstrap logic extracted from bridge-svelte.
+  describe('confirmStripeCheckout()', () => {
+    it('POSTs sessionId + appId to /v1/account/stripe/confirm-checkout and refreshes tokens on success', async () => {
+      const refreshSpy = vi.spyOn(auth, 'refreshTokens').mockResolvedValue(null);
+      const customFetch = vi.fn().mockResolvedValue({ ok: true, status: 200 } as Response);
+
+      await auth.confirmStripeCheckout('cs_123', customFetch as unknown as typeof fetch);
+
+      expect(customFetch).toHaveBeenCalledWith(
+        'https://api.test.com/v1/account/stripe/confirm-checkout',
+        expect.objectContaining({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: 'cs_123', appId: 'test-app' }),
+        }),
+      );
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws and does NOT refresh tokens on a non-OK response', async () => {
+      const refreshSpy = vi.spyOn(auth, 'refreshTokens').mockResolvedValue(null);
+      const customFetch = vi.fn().mockResolvedValue({ ok: false, status: 500 } as Response);
+
+      await expect(
+        auth.confirmStripeCheckout('cs_err', customFetch as unknown as typeof fetch),
+      ).rejects.toThrow(/confirm-checkout failed: 500/);
+      expect(refreshSpy).not.toHaveBeenCalled();
+    });
+
+    it('propagates a network error and does NOT refresh tokens', async () => {
+      const refreshSpy = vi.spyOn(auth, 'refreshTokens').mockResolvedValue(null);
+      const customFetch = vi.fn().mockRejectedValue(new Error('network down'));
+
+      await expect(
+        auth.confirmStripeCheckout('cs_net', customFetch as unknown as typeof fetch),
+      ).rejects.toThrow(/network down/);
+      expect(refreshSpy).not.toHaveBeenCalled();
+    });
+
+    it('falls back to global fetch when no customFetch is provided', async () => {
+      const refreshSpy = vi.spyOn(auth, 'refreshTokens').mockResolvedValue(null);
+      const originalFetch = globalThis.fetch;
+      const globalFetch = vi.fn().mockResolvedValue({ ok: true, status: 200 } as Response);
+      globalThis.fetch = globalFetch as unknown as typeof fetch;
+      try {
+        await auth.confirmStripeCheckout('cs_global');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+      expect(globalFetch).toHaveBeenCalledWith(
+        'https://api.test.com/v1/account/stripe/confirm-checkout',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('shouldRedirectToPaywall()', () => {
+    it('returns true when authenticated, shouldSelectPlan is true, and not opted out', async () => {
+      vi.spyOn(auth, 'isAuthenticated').mockReturnValue(true);
+      vi.spyOn(auth, 'getSubscriptionStatus').mockResolvedValue({
+        shouldSelectPlan: true,
+        paymentsAutoRedirect: true,
+      } as any);
+      expect(await auth.shouldRedirectToPaywall()).toBe(true);
+    });
+
+    it('returns false when shouldSelectPlan is false', async () => {
+      vi.spyOn(auth, 'isAuthenticated').mockReturnValue(true);
+      vi.spyOn(auth, 'getSubscriptionStatus').mockResolvedValue({
+        shouldSelectPlan: false,
+        paymentsAutoRedirect: true,
+      } as any);
+      expect(await auth.shouldRedirectToPaywall()).toBe(false);
+    });
+
+    it('returns false when the app opted out via paymentsAutoRedirect: false', async () => {
+      vi.spyOn(auth, 'isAuthenticated').mockReturnValue(true);
+      vi.spyOn(auth, 'getSubscriptionStatus').mockResolvedValue({
+        shouldSelectPlan: true,
+        paymentsAutoRedirect: false,
+      } as any);
+      expect(await auth.shouldRedirectToPaywall()).toBe(false);
+    });
+
+    it('returns false (and does not fetch status) when not authenticated', async () => {
+      vi.spyOn(auth, 'isAuthenticated').mockReturnValue(false);
+      const statusSpy = vi.spyOn(auth, 'getSubscriptionStatus');
+      expect(await auth.shouldRedirectToPaywall()).toBe(false);
+      expect(statusSpy).not.toHaveBeenCalled();
+    });
+
+    it('returns false when status fields are missing', async () => {
+      vi.spyOn(auth, 'isAuthenticated').mockReturnValue(true);
+      vi.spyOn(auth, 'getSubscriptionStatus').mockResolvedValue({} as any);
+      expect(await auth.shouldRedirectToPaywall()).toBe(false);
+    });
+  });
 });

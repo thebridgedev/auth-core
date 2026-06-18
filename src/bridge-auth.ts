@@ -578,6 +578,52 @@ export class BridgeAuth {
     }, this.logger);
   }
 
+  /**
+   * TBP-369: Framework-agnostic Stripe Checkout confirmation. Verifies a completed
+   * Checkout session with bridge-api (the server calls Stripe directly), then refreshes
+   * tokens so the new JWT reflects the updated plan (e.g. `shouldSelectPlan: false`).
+   *
+   * Extracted from bridge-svelte's BridgeBootstrap so every plugin port can reuse it
+   * instead of re-implementing the same HTTP + token-refresh logic. Throws on a non-OK
+   * response or network error — the caller owns the redirect / error UX.
+   *
+   * Note: this endpoint takes no auth header (the session id is the proof) and lives
+   * under `/v1/account/...`, unlike the `/account/...` subscription endpoints — so it
+   * uses raw `fetch` rather than the authenticated `httpFetch` helper, which also lets
+   * callers forward an SSR-aware `customFetch` (e.g. SvelteKit's `fetch`).
+   *
+   * @param sessionId   Stripe Checkout session id (from the success_url's `?session_id=`).
+   * @param customFetch Optional fetch to forward (e.g. SvelteKit's load-function `fetch`).
+   */
+  async confirmStripeCheckout(sessionId: string, customFetch?: typeof fetch): Promise<void> {
+    const url = `${this.config.apiBaseUrl}/v1/account/stripe/confirm-checkout`;
+    const res = await (customFetch ?? fetch)(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, appId: this.config.appId }),
+    });
+    if (!res.ok) {
+      throw new Error(`confirm-checkout failed: ${res.status}`);
+    }
+    await this.refreshTokens();
+  }
+
+  /**
+   * TBP-369: Decide whether the current tenant should be redirected to the plan-selection
+   * paywall. Returns true only when authenticated AND the platform's subscription status
+   * requires plan selection (`shouldSelectPlan === true`) AND the app has not opted out of
+   * the native gate (`paymentsAutoRedirect !== false`).
+   *
+   * The caller owns the actual redirect and any route/config checks (paywallRoute, current
+   * path) — this method only encapsulates the framework-agnostic decision so every plugin
+   * port shares one source of truth for the paywall trigger.
+   */
+  async shouldRedirectToPaywall(): Promise<boolean> {
+    if (!this.isAuthenticated()) return false;
+    const status = await this.getSubscriptionStatus();
+    return status?.shouldSelectPlan === true && status?.paymentsAutoRedirect !== false;
+  }
+
   // --- Team management ---
 
   get team(): TeamService {
