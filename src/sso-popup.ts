@@ -31,7 +31,7 @@ export class SsoPopupManager {
   }
 
   private startRedirect(provider: string): Promise<SsoResult> {
-    const url = new URL(`${this.config.authBaseUrl}/auth/federation/${this.config.appId}`);
+    const url = new URL(`${this.config.authBaseUrl}/federation/${this.config.appId}`);
     url.searchParams.set('provider', provider);
 
     this.logger.debug('SSO redirect kickoff', url.toString());
@@ -48,7 +48,7 @@ export class SsoPopupManager {
       const left = Math.round((screen.width - width) / 2);
       const top = Math.round((screen.height - height) / 2);
 
-      const url = new URL(`${this.config.authBaseUrl}/auth/federation/${this.config.appId}`);
+      const url = new URL(`${this.config.authBaseUrl}/federation/${this.config.appId}`);
       url.searchParams.set('provider', provider);
       url.searchParams.set('mode', 'popup');
       url.searchParams.set('targetOrigin', window.location.origin);

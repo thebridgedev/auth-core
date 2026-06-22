@@ -138,7 +138,7 @@ describe('BridgeAuth', () => {
       const result = await auth.getAuthConfig('user@test.com');
       expect(result.hasPassword).toBe(true);
       expect(mockHttpFetch).toHaveBeenCalledWith(
-        'https://api.test.com/auth/auth/credentialsConfig',
+        'https://api.test.com/auth/credentialsConfig',
         expect.objectContaining({
           method: 'POST',
           body: { username: 'user@test.com', mode: 'sdk', appId: 'test-app' },

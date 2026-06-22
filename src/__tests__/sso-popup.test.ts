@@ -127,7 +127,7 @@ describe('SsoPopupManager', () => {
         const [urlStr] = locationAssignSpy.mock.calls[0];
         const url = new URL(urlStr as string);
 
-        expect(url.pathname).toBe('/auth/auth/federation/app1');
+        expect(url.pathname).toBe('/auth/federation/app1');
         expect(url.searchParams.get('provider')).toBe(provider);
         // Redirect mode MUST NOT include popup-only params
         expect(url.searchParams.get('mode')).toBeNull();
@@ -180,7 +180,7 @@ describe('SsoPopupManager', () => {
         const [urlStr] = windowOpenSpy.mock.calls[0];
         const url = new URL(urlStr as string);
 
-        expect(url.pathname).toBe('/auth/auth/federation/app1');
+        expect(url.pathname).toBe('/auth/federation/app1');
         expect(url.searchParams.get('provider')).toBe(provider);
         expect(url.searchParams.get('mode')).toBe('popup');
         expect(url.searchParams.get('targetOrigin')).toBe('https://myapp.com');

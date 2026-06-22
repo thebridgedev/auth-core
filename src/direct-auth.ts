@@ -30,7 +30,7 @@ export class DirectAuthService {
   ) {}
 
   async getCredentialsConfig(email: string): Promise<AuthConfigResponse> {
-    const url = `${this.config.authBaseUrl}/auth/credentialsConfig`;
+    const url = `${this.config.authBaseUrl}/credentialsConfig`;
     return httpFetch<AuthConfigResponse>(url, {
       method: 'POST',
       body: { username: email, mode: 'sdk', appId: this.config.appId },
@@ -38,7 +38,7 @@ export class DirectAuthService {
   }
 
   async authenticate(email: string, password: string): Promise<AuthResult> {
-    const url = `${this.config.authBaseUrl}/auth/authenticate`;
+    const url = `${this.config.authBaseUrl}/authenticate`;
     return httpFetch<AuthResult>(url, {
       method: 'POST',
       body: { username: email, password, mode: 'sdk', appId: this.config.appId },
@@ -46,7 +46,7 @@ export class DirectAuthService {
   }
 
   async commitMfaCode(mfaCode: string, session: string): Promise<MfaResult> {
-    const url = `${this.config.authBaseUrl}/auth/commitMfaCode`;
+    const url = `${this.config.authBaseUrl}/commitMfaCode`;
     return httpFetch<MfaResult>(url, {
       method: 'POST',
       body: { mfaCode, session, mode: 'sdk', appId: this.config.appId },
@@ -54,7 +54,7 @@ export class DirectAuthService {
   }
 
   async resendMfaCode(session: string): Promise<MfaResult> {
-    const url = `${this.config.authBaseUrl}/auth/resendMfaCode`;
+    const url = `${this.config.authBaseUrl}/resendMfaCode`;
     return httpFetch<MfaResult>(url, {
       method: 'POST',
       body: { session, mode: 'sdk', appId: this.config.appId },
@@ -62,7 +62,7 @@ export class DirectAuthService {
   }
 
   async startMfaUserSetup(phoneNumber: string, session: string): Promise<MfaResult> {
-    const url = `${this.config.authBaseUrl}/auth/startMfaUserSetup`;
+    const url = `${this.config.authBaseUrl}/startMfaUserSetup`;
     return httpFetch<MfaResult>(url, {
       method: 'POST',
       body: { phoneNumber, session, mode: 'sdk', appId: this.config.appId },
@@ -70,7 +70,7 @@ export class DirectAuthService {
   }
 
   async finishMfaUserSetup(mfaCode: string, session: string): Promise<MfaResult> {
-    const url = `${this.config.authBaseUrl}/auth/finishMfaUserSetup`;
+    const url = `${this.config.authBaseUrl}/finishMfaUserSetup`;
     return httpFetch<MfaResult>(url, {
       method: 'POST',
       body: { mfaCode, session, mode: 'sdk', appId: this.config.appId },
@@ -78,7 +78,7 @@ export class DirectAuthService {
   }
 
   async resetUserMfaSetup(backupCode: string, session: string): Promise<MfaResult> {
-    const url = `${this.config.authBaseUrl}/auth/resetUserMfaSetup`;
+    const url = `${this.config.authBaseUrl}/resetUserMfaSetup`;
     return httpFetch<MfaResult>(url, {
       method: 'POST',
       body: { backupCode, session, mode: 'sdk', appId: this.config.appId },
@@ -132,7 +132,7 @@ export class DirectAuthService {
   // --- Signup ---
 
   async signup(email: string, firstName: string, lastName: string): Promise<SignupResult> {
-    const url = `${this.config.authBaseUrl}/auth/signup`;
+    const url = `${this.config.authBaseUrl}/signup`;
     return httpFetch<SignupResult>(url, {
       method: 'POST',
       body: { email, firstName, lastName, appId: this.config.appId, mode: 'sdk' },
@@ -142,7 +142,7 @@ export class DirectAuthService {
   // --- Magic link ---
 
   async sendMagicLink(email: string): Promise<MagicLinkResult> {
-    const url = `${this.config.authBaseUrl}/auth/magic-link`;
+    const url = `${this.config.authBaseUrl}/magic-link`;
     return httpFetch<MagicLinkResult>(url, {
       method: 'POST',
       body: { username: email, mode: 'sdk', appId: this.config.appId },
@@ -150,7 +150,7 @@ export class DirectAuthService {
   }
 
   async authenticateWithMagicLinkToken(token: string): Promise<AuthResult> {
-    const url = `${this.config.authBaseUrl}/auth/magic-link/authenticate`;
+    const url = `${this.config.authBaseUrl}/magic-link/authenticate`;
     return httpFetch<AuthResult>(url, {
       method: 'POST',
       body: { token },
@@ -160,7 +160,7 @@ export class DirectAuthService {
   // --- Password reset ---
 
   async sendResetPasswordLink(email: string): Promise<void> {
-    const url = `${this.config.apiBaseUrl}/auth/auth/password`;
+    const url = `${this.config.apiBaseUrl}/auth/password`;
     await httpFetch<any>(url, {
       method: 'POST',
       body: { username: email },
@@ -169,7 +169,7 @@ export class DirectAuthService {
   }
 
   async updatePassword(token: string, password: string): Promise<void> {
-    const url = `${this.config.apiBaseUrl}/auth/auth/password`;
+    const url = `${this.config.apiBaseUrl}/auth/password`;
     await httpFetch<any>(url, {
       method: 'PUT',
       body: { token, password },
@@ -180,7 +180,7 @@ export class DirectAuthService {
   // --- Passkeys: authentication ---
 
   async passkeysAuthenticationOptions(): Promise<PasskeyAuthOptions> {
-    const url = `${this.config.authBaseUrl}/auth/passkeys/authentication-options`;
+    const url = `${this.config.authBaseUrl}/passkeys/authentication-options`;
     return httpFetch<PasskeyAuthOptions>(url, {
       method: 'GET',
       headers: { 'x-app-id': this.config.appId },
@@ -188,7 +188,7 @@ export class DirectAuthService {
   }
 
   async passkeysAuthenticate(response: any): Promise<AuthResult> {
-    const url = `${this.config.authBaseUrl}/auth/passkeys/verify-authentication`;
+    const url = `${this.config.authBaseUrl}/passkeys/verify-authentication`;
     return httpFetch<AuthResult>(url, {
       method: 'POST',
       body: { ...response, mode: 'sdk', appId: this.config.appId },
@@ -198,7 +198,7 @@ export class DirectAuthService {
   // --- Passkeys: registration ---
 
   async requestPasskeySetupLink(email: string): Promise<{ success: boolean }> {
-    const url = `${this.config.authBaseUrl}/auth/passkeys/request-setup-link`;
+    const url = `${this.config.authBaseUrl}/passkeys/request-setup-link`;
     return httpFetch<{ success: boolean }>(url, {
       method: 'POST',
       body: { username: email, appId: this.config.appId },
@@ -206,7 +206,7 @@ export class DirectAuthService {
   }
 
   async getPasskeyRegistrationOptions(token: string): Promise<PasskeyRegistrationOptions> {
-    const url = `${this.config.authBaseUrl}/auth/passkeys/registration-options?passkeySetupToken=${encodeURIComponent(token)}`;
+    const url = `${this.config.authBaseUrl}/passkeys/registration-options?passkeySetupToken=${encodeURIComponent(token)}`;
     return httpFetch<PasskeyRegistrationOptions>(url, {
       method: 'GET',
       headers: { 'x-app-id': this.config.appId },
@@ -214,7 +214,7 @@ export class DirectAuthService {
   }
 
   async verifyPasskeyRegistration(credential: any, token: string): Promise<PasskeyVerificationResult> {
-    const url = `${this.config.authBaseUrl}/auth/passkeys/verify-registration?passkeySetupToken=${encodeURIComponent(token)}`;
+    const url = `${this.config.authBaseUrl}/passkeys/verify-registration?passkeySetupToken=${encodeURIComponent(token)}`;
     return httpFetch<PasskeyVerificationResult>(url, {
       method: 'POST',
       body: { ...credential, appId: this.config.appId },

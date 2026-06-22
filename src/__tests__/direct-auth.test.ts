@@ -82,7 +82,7 @@ describe('DirectAuthService', () => {
       await service.getCredentialsConfig('user@example.com');
 
       const [url] = mockHttpFetch.mock.calls[0];
-      expect(url).toBe('https://api.example.com/auth/auth/credentialsConfig');
+      expect(url).toBe('https://api.example.com/auth/credentialsConfig');
     });
 
     it('sends the correct body with mode: "sdk"', async () => {
@@ -119,7 +119,7 @@ describe('DirectAuthService', () => {
       await service.authenticate('user@example.com', 'password123');
 
       const [url] = mockHttpFetch.mock.calls[0];
-      expect(url).toBe('https://api.example.com/auth/auth/authenticate');
+      expect(url).toBe('https://api.example.com/auth/authenticate');
     });
 
     it('sends the correct body including mode: "sdk"', async () => {
@@ -156,7 +156,7 @@ describe('DirectAuthService', () => {
       await service.commitMfaCode('123456', 'my-session');
 
       const [url] = mockHttpFetch.mock.calls[0];
-      expect(url).toBe('https://api.example.com/auth/auth/commitMfaCode');
+      expect(url).toBe('https://api.example.com/auth/commitMfaCode');
     });
 
     it('sends the session in the body', async () => {
@@ -189,7 +189,7 @@ describe('DirectAuthService', () => {
       await service.startMfaUserSetup('+1234567890', 'session');
 
       const [url] = mockHttpFetch.mock.calls[0];
-      expect(url).toBe('https://api.example.com/auth/auth/startMfaUserSetup');
+      expect(url).toBe('https://api.example.com/auth/startMfaUserSetup');
     });
 
     it('sends the session in the body', async () => {
@@ -222,7 +222,7 @@ describe('DirectAuthService', () => {
       await service.finishMfaUserSetup('112233', 'session');
 
       const [url] = mockHttpFetch.mock.calls[0];
-      expect(url).toBe('https://api.example.com/auth/auth/finishMfaUserSetup');
+      expect(url).toBe('https://api.example.com/auth/finishMfaUserSetup');
     });
 
     it('sends the session in the body', async () => {
@@ -255,7 +255,7 @@ describe('DirectAuthService', () => {
       await service.resetUserMfaSetup('BACKUP-CODE', 'session');
 
       const [url] = mockHttpFetch.mock.calls[0];
-      expect(url).toBe('https://api.example.com/auth/auth/resetUserMfaSetup');
+      expect(url).toBe('https://api.example.com/auth/resetUserMfaSetup');
     });
 
     it('sends the session in the body', async () => {
