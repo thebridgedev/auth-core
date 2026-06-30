@@ -204,4 +204,61 @@ describe('QuotaStore', () => {
       expect(store.get('ai_completions')!.percent_used).toBe(0);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // TBP-275 — metered overage fields
+  // -------------------------------------------------------------------------
+  describe('TBP-275 metered overage fields', () => {
+    it('passes unitAmount / currency / overageEstimate / overcap from a push', () => {
+      const store = new QuotaStore();
+      store.applyQuotaUpdated(
+        makeMsg({
+          used: 1200,
+          limit: 1000,
+          unitAmount: 0.002,
+          currency: 'USD',
+          overageEstimate: 0.4,
+          overcap: true,
+        }),
+      );
+      const snap = store.get('ai_completions')!;
+      expect(snap.unitAmount).toBe(0.002);
+      expect(snap.currency).toBe('USD');
+      expect(snap.overageEstimate).toBeCloseTo(0.4);
+      expect(snap.overcap).toBe(true);
+    });
+
+    it('derives overcap from used > limit when the server omits it', () => {
+      const store = new QuotaStore();
+      store.applyQuotaUpdated(makeMsg({ used: 1500, limit: 1000, overcap: undefined }));
+      expect(store.get('ai_completions')!.overcap).toBe(true);
+    });
+
+    it('derives overcap = true for pure per-unit (limit 0, used > 0) when omitted', () => {
+      const store = new QuotaStore();
+      store.applyQuotaUpdated(makeMsg({ used: 5, limit: 0, overcap: undefined }));
+      expect(store.get('ai_completions')!.overcap).toBe(true);
+    });
+
+    it('hydration (applyInitialSnapshot) carries the overage fields too', () => {
+      const store = new QuotaStore();
+      store.applyInitialSnapshot('ai_completions', {
+        metric: 'ai_completions',
+        used: 1100,
+        limit: 1000,
+        remaining: -100,
+        warningLevel: null,
+        policy: 'metered',
+        unitAmount: 0.01,
+        currency: 'EUR',
+        overageEstimate: 1,
+        overcap: true,
+      });
+      const snap = store.get('ai_completions')!;
+      expect(snap.unitAmount).toBe(0.01);
+      expect(snap.currency).toBe('EUR');
+      expect(snap.overageEstimate).toBe(1);
+      expect(snap.overcap).toBe(true);
+    });
+  });
 });

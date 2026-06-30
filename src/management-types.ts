@@ -414,12 +414,29 @@ export interface PlanResponse {
   trial: boolean;
   trialDays?: number;
   prices: PlanPrice[];
+  /** TBP-275 — per-metric usage quotas (hard caps + metered pricing). */
+  quotas?: PlanQuotaEntry[];
 }
 
 export interface PlanPrice {
   currency: string;
   recurrenceInterval: 'day' | 'month' | 'week' | 'year';
   amount: number;
+}
+
+/** TBP-275 — per-unit price for a metered quota. */
+export interface PlanQuotaPricing {
+  amount: number;
+  currency: string;
+}
+
+/** TBP-275 — one per-metric usage quota on a plan. */
+export interface PlanQuotaEntry {
+  metric: string;
+  limit: number;
+  policy: 'hard' | 'metered';
+  /** Required for `metered`, forbidden for `hard`. */
+  pricing?: PlanQuotaPricing;
 }
 
 export interface CreatePlanRequest {
@@ -429,6 +446,7 @@ export interface CreatePlanRequest {
   trial?: boolean;
   trialDays?: number;
   prices?: PlanPrice[];
+  quotas?: PlanQuotaEntry[];
 }
 
 export interface UpdatePlanRequest {
@@ -437,6 +455,7 @@ export interface UpdatePlanRequest {
   trial?: boolean;
   trialDays?: number;
   prices?: PlanPrice[];
+  quotas?: PlanQuotaEntry[];
 }
 
 // ─── API Token ──────────────────────────────────────────────────────────────
