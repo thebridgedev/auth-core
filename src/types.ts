@@ -273,6 +273,13 @@ export interface Plan {
   trial?: boolean;
   trialDays?: number;
   prices: PriceOfferSdk[];
+  /**
+   * TBP-275 — true when the plan requires payment: a paid base price OR metered
+   * pricing (per-unit billing). PlanSelector routes such plans through checkout
+   * (capturing a payment method) even when every base price is $0, so $0-base
+   * metered plans don't bypass payment-method capture (US-C).
+   */
+  hasCost?: boolean;
 }
 
 /** Price offer for a plan */
