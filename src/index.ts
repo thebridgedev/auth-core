@@ -11,6 +11,7 @@ export type {
   BridgeAuthEventName,
   BridgeAuthEvents,
   CheckoutSession,
+  CurrentUser,
   FederationConnection,
   FlagRequirement,
   IDToken,

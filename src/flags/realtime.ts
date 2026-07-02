@@ -175,6 +175,16 @@ export interface QuotaUpdatedMessage {
    * `'metered'` in that case.
    */
   policy?: 'hard' | 'metered';
+  /**
+   * TBP-275 — metered overage context. Optional (absent for hard quotas and
+   * older servers). `unitAmount` + `currency` describe the per-unit price;
+   * `overageEstimate` is the server-computed estimated cost this period;
+   * `overcap` is true once usage passed the included allotment.
+   */
+  unitAmount?: number;
+  currency?: string;
+  overageEstimate?: number;
+  overcap?: boolean;
 }
 
 /**

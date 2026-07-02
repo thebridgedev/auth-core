@@ -37,6 +37,26 @@ export interface QuotaSnapshot {
   warningLevel: null | 'approaching' | 'critical';
   /** Display label. US-11 uses the raw metric key; framework wrappers can override. */
   label: string;
+  /**
+   * TBP-275 — per-unit price for a metered quota (whole currency units, e.g.
+   * 0.002). Absent for `hard` quotas and for metered quotas with no price yet.
+   */
+  unitAmount?: number;
+  /** TBP-275 — currency of `unitAmount` / `overageEstimate` (ISO code). */
+  currency?: string;
+  /**
+   * TBP-275 — estimated overage cost accrued this period, in `currency` units.
+   * Server-computed: `max(0, used - limit) * unitAmount` (or `used * unitAmount`
+   * when `limit === 0`). Lets the UI show "~$1.00 estimated" without waiting for
+   * a Stripe invoice.
+   */
+  overageEstimate?: number;
+  /**
+   * TBP-275 — true once usage has passed the included allotment (metered billing
+   * engaged). Prefer this over a UI-derived `used > limit` so the server stays
+   * authoritative (handles `limit === 0` pure-per-unit correctly).
+   */
+  overcap?: boolean;
 }
 
 type Listener = (metric: string, snap: QuotaSnapshot | undefined) => void;
@@ -127,6 +147,12 @@ export class QuotaStore {
       policy: msg.policy === 'hard' ? 'hard' : 'metered',
       warningLevel: msg.warningLevel ?? null,
       label: msg.metric,
+      // TBP-275 — overage fields (server-authoritative; overcap falls back to a
+      // used>limit derivation, which also yields true for limit===0 + used>0).
+      unitAmount: msg.unitAmount,
+      currency: msg.currency,
+      overageEstimate: msg.overageEstimate,
+      overcap: msg.overcap ?? msg.used > msg.limit,
     };
     this._snapshots.set(msg.metric, snap);
     this._hydrating.delete(msg.metric);
@@ -164,6 +190,11 @@ export class QuotaStore {
       policy: snapshot.policy === 'hard' ? 'hard' : 'metered',
       warningLevel: snapshot.warningLevel ?? null,
       label: metric,
+      // TBP-275 — overage fields from the hydration response.
+      unitAmount: snapshot.unitAmount,
+      currency: snapshot.currency,
+      overageEstimate: snapshot.overageEstimate,
+      overcap: snapshot.overcap ?? snapshot.used > snapshot.limit,
     };
     this._snapshots.set(metric, snap);
     this._notify(metric, snap);
@@ -210,6 +241,11 @@ export class QuotaStore {
         warningLevel: null | 'approaching' | 'critical';
         /** US-12 — optional; server may omit on older builds. */
         policy?: 'hard' | 'metered';
+        /** TBP-275 — optional overage fields for metered quotas. */
+        unitAmount?: number;
+        currency?: string;
+        overageEstimate?: number;
+        overcap?: boolean;
       } | null>(
         url,
         {
@@ -231,6 +267,10 @@ export class QuotaStore {
               remaining: body.remaining,
               warningLevel: body.warningLevel,
               policy: body.policy,
+              unitAmount: body.unitAmount,
+              currency: body.currency,
+              overageEstimate: body.overageEstimate,
+              overcap: body.overcap,
             }
           : null,
       );

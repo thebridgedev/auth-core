@@ -83,6 +83,26 @@ export interface Profile {
   };
 }
 
+/**
+ * Identity fields read directly from the access-token claims (`sub`/`role`/
+ * `email`/`tid`/`plan`). Unlike {@link Profile} (derived from the idToken,
+ * which carries no role) the access token is the only client-side source of
+ * the user's RBAC `role` and tenant `plan`. Decoded, not signature-verified —
+ * safe for display/UI; authorization stays server-enforced.
+ */
+export interface CurrentUser {
+  /** User id (`sub` claim). */
+  id: string;
+  /** Email (`email` claim), when present. */
+  email?: string;
+  /** RBAC role (`role` claim), when present. */
+  role?: string;
+  /** Tenant id (`tid` claim), when present. */
+  tenantId?: string;
+  /** Tenant plan key (`plan` claim), when present. */
+  plan?: string;
+}
+
 /** Auth state machine states */
 export type AuthState =
   | 'unauthenticated'
@@ -253,6 +273,13 @@ export interface Plan {
   trial?: boolean;
   trialDays?: number;
   prices: PriceOfferSdk[];
+  /**
+   * TBP-275 — true when the plan requires payment: a paid base price OR metered
+   * pricing (per-unit billing). PlanSelector routes such plans through checkout
+   * (capturing a payment method) even when every base price is $0, so $0-base
+   * metered plans don't bypass payment-method capture (US-C).
+   */
+  hasCost?: boolean;
 }
 
 /** Price offer for a plan */

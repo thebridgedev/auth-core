@@ -13,6 +13,8 @@ import { createRouteGuard } from './route-guard.js';
 import { SsoPopupManager } from './sso-popup.js';
 import { TokenManager } from './token-manager.js';
 import { httpFetch } from './http.js';
+import { decodeJwtPayload } from './token-utils.js';
+import type { AuthJwtClaims } from './flags/attribute-providers.js';
 import { UsageReporter, type QueueStatus } from './usage/usage-reporter.js';
 import type {
   AppConfig,
@@ -23,6 +25,7 @@ import type {
   BridgeAuthEventName,
   BridgeAuthEvents,
   CheckoutSession,
+  CurrentUser,
   MagicLinkResult,
   MfaResult,
   PasskeyAuthOptions,
@@ -449,6 +452,31 @@ export class BridgeAuth {
     const profile = await this.profileService.verifyAndDecode(tokens.idToken);
     this.emitter.emit('auth:profile', profile);
     return profile;
+  }
+
+  /**
+   * Synchronously read identity (id/email/role/tenantId/plan) from the current
+   * access-token claims. Returns `null` when not authenticated. This is the
+   * only client-side source of the RBAC `role` and tenant `plan` — neither is
+   * carried by {@link Profile}/{@link getProfile} (which decode the idToken).
+   *
+   * Claims are decoded, not signature-verified — the token is server-signed and
+   * validated on every API call, so this is safe for display/UI gating, but
+   * authorization decisions stay server-enforced. Framework SDKs use this as
+   * the static fallback when the live `session.snapshot` channel is not active.
+   */
+  getCurrentUser(): CurrentUser | null {
+    const token = this.tokenManager.getTokens()?.accessToken;
+    if (!token) return null;
+    const claims = decodeJwtPayload(token) as AuthJwtClaims | null;
+    if (!claims || typeof claims.sub !== 'string') return null;
+    return {
+      id: claims.sub,
+      email: typeof claims.email === 'string' ? claims.email : undefined,
+      role: typeof claims.role === 'string' ? claims.role : undefined,
+      tenantId: typeof claims.tid === 'string' ? claims.tid : undefined,
+      plan: typeof claims.plan === 'string' ? claims.plan : undefined,
+    };
   }
 
   // --- Feature flags ---
