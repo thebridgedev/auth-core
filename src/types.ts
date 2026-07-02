@@ -171,6 +171,13 @@ export interface SsoOptions {
   mode?: 'redirect' | 'popup';
   width?: number;
   height?: number;
+  /**
+   * Callback URL the auth backend redirects to after the SSO round-trip
+   * (must be in the app's allowedRedirectUris). Defaults to the configured
+   * callbackUrl; if neither is set the backend falls back to the app's
+   * defaultCallbackUri.
+   */
+  redirectUri?: string;
 }
 
 /** SSO popup result */
