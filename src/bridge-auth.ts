@@ -26,6 +26,7 @@ import type {
   BridgeAuthEvents,
   CheckoutSession,
   CurrentUser,
+  PaymentClaims,
   MagicLinkResult,
   MfaResult,
   PasskeyAuthOptions,
@@ -479,6 +480,37 @@ export class BridgeAuth {
     };
   }
 
+  /**
+   * TBP-367 — synchronously read the payment/subscription claims (`plan`,
+   * `trial`, `shouldSelectPlan`, `shouldSetupPayments`, `paymentsAutoRedirect`)
+   * from the current access token. Returns `null` when not authenticated.
+   *
+   * Zero network: this is the instant sibling of {@link getSubscriptionStatus}
+   * for UI gating (paywall triggers, plan badges, trial banners). Claims are
+   * decoded, not signature-verified — billing enforcement stays server-side.
+   * Fields minted after the token was issued are `undefined`; call
+   * {@link getSubscriptionStatus} (or {@link refreshTokens} first) when a
+   * definitive answer is required.
+   */
+  getPaymentClaims(): PaymentClaims | null {
+    const token = this.tokenManager.getTokens()?.accessToken;
+    if (!token) return null;
+    const claims = decodeJwtPayload(token) as (AuthJwtClaims & {
+      trial?: unknown;
+      shouldSelectPlan?: unknown;
+      shouldSetupPayments?: unknown;
+      paymentsAutoRedirect?: unknown;
+    }) | null;
+    if (!claims) return null;
+    return {
+      plan: typeof claims.plan === 'string' ? claims.plan : undefined,
+      trial: typeof claims.trial === 'boolean' ? claims.trial : undefined,
+      shouldSelectPlan: typeof claims.shouldSelectPlan === 'boolean' ? claims.shouldSelectPlan : undefined,
+      shouldSetupPayments: typeof claims.shouldSetupPayments === 'boolean' ? claims.shouldSetupPayments : undefined,
+      paymentsAutoRedirect: typeof claims.paymentsAutoRedirect === 'boolean' ? claims.paymentsAutoRedirect : undefined,
+    };
+  }
+
   // --- Feature flags ---
 
   async isFeatureEnabled(flag: string, opts?: { forceLive?: boolean }): Promise<boolean> {
@@ -638,9 +670,14 @@ export class BridgeAuth {
 
   /**
    * TBP-369: Decide whether the current tenant should be redirected to the plan-selection
-   * paywall. Returns true only when authenticated AND the platform's subscription status
-   * requires plan selection (`shouldSelectPlan === true`) AND the app has not opted out of
-   * the native gate (`paymentsAutoRedirect !== false`).
+   * paywall. Returns true only when authenticated AND the tenant requires plan selection
+   * (`shouldSelectPlan === true`) AND the app has not opted out of the native gate
+   * (`paymentsAutoRedirect !== false`).
+   *
+   * TBP-368: the decision is JWT-claim-driven — `shouldSelectPlan` and
+   * `paymentsAutoRedirect` are read straight off the access token (zero network on the
+   * hot bootstrap path). Only tokens minted before those claims existed fall back to the
+   * `getSubscriptionStatus()` REST call.
    *
    * The caller owns the actual redirect and any route/config checks (paywallRoute, current
    * path) — this method only encapsulates the framework-agnostic decision so every plugin
@@ -648,6 +685,13 @@ export class BridgeAuth {
    */
   async shouldRedirectToPaywall(): Promise<boolean> {
     if (!this.isAuthenticated()) return false;
+
+    const claims = this.getPaymentClaims();
+    if (typeof claims?.shouldSelectPlan === 'boolean') {
+      return claims.shouldSelectPlan === true && claims.paymentsAutoRedirect !== false;
+    }
+
+    // Legacy token without the claim — fall back to the status endpoint.
     const status = await this.getSubscriptionStatus();
     return status?.shouldSelectPlan === true && status?.paymentsAutoRedirect !== false;
   }

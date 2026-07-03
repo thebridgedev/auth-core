@@ -727,5 +727,132 @@ describe('BridgeAuth', () => {
       vi.spyOn(auth, 'getSubscriptionStatus').mockResolvedValue({} as any);
       expect(await auth.shouldRedirectToPaywall()).toBe(false);
     });
+
+    // TBP-368 — claim-driven decision: when the access token carries the
+    // shouldSelectPlan claim, no status API call is made at all.
+    describe('claim-driven (TBP-368)', () => {
+      let originalWindow: unknown;
+      beforeEach(() => {
+        // Constructing BridgeAuth with a storage adapter installs a window
+        // 'storage' listener; give it a working stub regardless of what
+        // earlier tests left behind.
+        originalWindow = (globalThis as any).window;
+        (globalThis as any).window = {
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          location: { origin: 'https://app.test.com' },
+        };
+      });
+      afterEach(() => {
+        (globalThis as any).window = originalWindow;
+      });
+
+      function authWithClaims(claims: Record<string, unknown>): BridgeAuth {
+        const storage = new MemoryAdapter();
+        storage.set('bridge_tokens:test-app', JSON.stringify({
+          accessToken: makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, sub: 'u1', ...claims }),
+          refreshToken: 'rt',
+        }));
+        return new BridgeAuth({ ...makeConfig(), storage });
+      }
+
+      it('decides from JWT claims without calling getSubscriptionStatus (claim true)', async () => {
+        const a = authWithClaims({ shouldSelectPlan: true, paymentsAutoRedirect: true });
+        const statusSpy = vi.spyOn(a, 'getSubscriptionStatus');
+        expect(await a.shouldRedirectToPaywall()).toBe(true);
+        expect(statusSpy).not.toHaveBeenCalled();
+        a.destroy();
+      });
+
+      it('decides from JWT claims without calling getSubscriptionStatus (claim false)', async () => {
+        const a = authWithClaims({ shouldSelectPlan: false });
+        const statusSpy = vi.spyOn(a, 'getSubscriptionStatus');
+        expect(await a.shouldRedirectToPaywall()).toBe(false);
+        expect(statusSpy).not.toHaveBeenCalled();
+        a.destroy();
+      });
+
+      it('honors the paymentsAutoRedirect opt-out claim', async () => {
+        const a = authWithClaims({ shouldSelectPlan: true, paymentsAutoRedirect: false });
+        expect(await a.shouldRedirectToPaywall()).toBe(false);
+        a.destroy();
+      });
+
+      it('falls back to the status endpoint for legacy tokens without the claim', async () => {
+        const a = authWithClaims({});
+        const statusSpy = vi.spyOn(a, 'getSubscriptionStatus').mockResolvedValue({
+          shouldSelectPlan: true,
+          paymentsAutoRedirect: true,
+        } as any);
+        expect(await a.shouldRedirectToPaywall()).toBe(true);
+        expect(statusSpy).toHaveBeenCalledTimes(1);
+        a.destroy();
+      });
+    });
+  });
+
+  // TBP-367 — typed payment claims straight off the access token.
+  describe('getPaymentClaims()', () => {
+    let originalWindow: unknown;
+    beforeEach(() => {
+      originalWindow = (globalThis as any).window;
+      (globalThis as any).window = {
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        location: { origin: 'https://app.test.com' },
+      };
+    });
+    afterEach(() => {
+      (globalThis as any).window = originalWindow;
+    });
+
+    function authWithToken(claims: Record<string, unknown>): BridgeAuth {
+      const storage = new MemoryAdapter();
+      storage.set('bridge_tokens:test-app', JSON.stringify({
+        accessToken: makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, sub: 'u1', ...claims }),
+        refreshToken: 'rt',
+      }));
+      return new BridgeAuth({ ...makeConfig(), storage });
+    }
+
+    it('returns null when unauthenticated', () => {
+      expect(auth.getPaymentClaims()).toBeNull();
+    });
+
+    it('returns the typed payment claims without any network call', () => {
+      const a = authWithToken({
+        plan: 'starter',
+        trial: true,
+        shouldSelectPlan: false,
+        shouldSetupPayments: false,
+        paymentsAutoRedirect: true,
+      });
+      expect(a.getPaymentClaims()).toEqual({
+        plan: 'starter',
+        trial: true,
+        shouldSelectPlan: false,
+        shouldSetupPayments: false,
+        paymentsAutoRedirect: true,
+      });
+      a.destroy();
+    });
+
+    it('leaves claims minted before a field existed as undefined', () => {
+      const a = authWithToken({ plan: 'growth' });
+      const claims = a.getPaymentClaims();
+      expect(claims?.plan).toBe('growth');
+      expect(claims?.shouldSelectPlan).toBeUndefined();
+      expect(claims?.paymentsAutoRedirect).toBeUndefined();
+      a.destroy();
+    });
+
+    it('ignores wrongly-typed claim values', () => {
+      const a = authWithToken({ plan: 42, trial: 'yes', shouldSelectPlan: 'true' });
+      const claims = a.getPaymentClaims();
+      expect(claims?.plan).toBeUndefined();
+      expect(claims?.trial).toBeUndefined();
+      expect(claims?.shouldSelectPlan).toBeUndefined();
+      a.destroy();
+    });
   });
 });

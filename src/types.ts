@@ -103,6 +103,26 @@ export interface CurrentUser {
   plan?: string;
 }
 
+/**
+ * TBP-367 — payment/subscription claims read directly from the access token,
+ * without any API call. Decoded, not signature-verified — safe for UI gating
+ * (paywall redirects, plan badges); billing enforcement stays server-side.
+ * All fields are optional: tokens minted before a claim was introduced simply
+ * lack it, and callers should fall back to `getSubscriptionStatus()`.
+ */
+export interface PaymentClaims {
+  /** Tenant plan key (`plan` claim). */
+  plan?: string;
+  /** Tenant is trialing (`trial` claim). */
+  trial?: boolean;
+  /** Tenant must pick a plan now (`shouldSelectPlan` claim). */
+  shouldSelectPlan?: boolean;
+  /** Tenant must set up payments now (`shouldSetupPayments` claim). */
+  shouldSetupPayments?: boolean;
+  /** App-level opt-out of the SDK auto paywall redirect (`paymentsAutoRedirect` claim, TBP-368). */
+  paymentsAutoRedirect?: boolean;
+}
+
 /** Auth state machine states */
 export type AuthState =
   | 'unauthenticated'
