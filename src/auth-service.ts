@@ -22,6 +22,28 @@ export class AuthService {
       : base;
   }
 
+  /**
+   * TBP-36 — hosted signup URL, mirroring {@link createLoginUrl}. Optional
+   * plan preselection (`signupPlan` + currency/interval) is carried as URL
+   * params that the hosted signup page applies at tenant creation.
+   */
+  createSignupUrl(options: {
+    redirectUri?: string;
+    signupPlan?: string;
+    signupCurrency?: string;
+    signupRecurrenceInterval?: string;
+  } = {}): string {
+    const redirectUri = options.redirectUri ?? this.config.callbackUrl;
+    const base = `${this.config.hostedUrl}/auth/signup/${this.config.appId}`;
+    const params = new URLSearchParams();
+    if (redirectUri) params.set('redirectUri', redirectUri);
+    if (options.signupPlan) params.set('signupPlan', options.signupPlan);
+    if (options.signupCurrency) params.set('signupCurrency', options.signupCurrency);
+    if (options.signupRecurrenceInterval) params.set('signupRecurrenceInterval', options.signupRecurrenceInterval);
+    const qs = params.toString();
+    return qs ? `${base}?${qs}` : base;
+  }
+
   createLogoutUrl(): string {
     return `${this.config.hostedUrl}/auth/login/${this.config.appId}`;
   }

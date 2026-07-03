@@ -131,11 +131,26 @@ export class DirectAuthService {
 
   // --- Signup ---
 
-  async signup(email: string, firstName: string, lastName: string): Promise<SignupResult> {
+  async signup(
+    email: string,
+    firstName: string,
+    lastName: string,
+    options?: { plan?: string; currency?: string; recurrenceInterval?: string },
+  ): Promise<SignupResult> {
     const url = `${this.config.authBaseUrl}/signup`;
     return httpFetch<SignupResult>(url, {
       method: 'POST',
-      body: { email, firstName, lastName, appId: this.config.appId, mode: 'sdk' },
+      body: {
+        email,
+        firstName,
+        lastName,
+        appId: this.config.appId,
+        mode: 'sdk',
+        // TBP-36 — plan-specific signup links apply the plan at tenant creation.
+        ...(options?.plan ? { plan: options.plan } : {}),
+        ...(options?.currency ? { currency: options.currency } : {}),
+        ...(options?.recurrenceInterval ? { recurrenceInterval: options.recurrenceInterval } : {}),
+      },
     }, this.logger);
   }
 

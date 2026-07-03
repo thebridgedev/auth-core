@@ -358,8 +358,25 @@ export class BridgeAuth {
 
   // --- Signup ---
 
-  async signup(email: string, firstName: string, lastName: string): Promise<SignupResult> {
-    return this.directAuth.signup(email, firstName, lastName);
+  async signup(
+    email: string,
+    firstName: string,
+    lastName: string,
+    options?: { plan?: string; currency?: string; recurrenceInterval?: string },
+  ): Promise<SignupResult> {
+    return this.directAuth.signup(email, firstName, lastName, options);
+  }
+
+  /**
+   * TBP-36 — hosted signup URL, mirroring {@link createLoginUrl}.
+   */
+  createSignupUrl(options: {
+    redirectUri?: string;
+    signupPlan?: string;
+    signupCurrency?: string;
+    signupRecurrenceInterval?: string;
+  } = {}): string {
+    return this.authService.createSignupUrl(options);
   }
 
   // --- Magic link ---
