@@ -606,6 +606,36 @@ export class BridgeAuth {
     }, this.logger);
   }
 
+  /**
+   * Fetch a one-time Stripe billing-portal URL for the current workspace, where the
+   * user can update payment details, change plan, or cancel. Redirect the browser to
+   * the returned URL. The session is short-lived, so call this at click time rather
+   * than caching the result. (TBP-471)
+   */
+  async getBillingPortalUrl(): Promise<string> {
+    const token = this.tokenManager.getTokens()?.accessToken;
+    if (!token) throw new Error('Not authenticated');
+    const url = `${this.config.apiBaseUrl}/account/subscription/portal`;
+    const { portalUrl } = await httpFetch<{ portalUrl: string }>(url, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${token}`, 'x-app-id': this.config.appId },
+      onTokenStale: this._onTokenStale(),
+    }, this.logger);
+    return portalUrl;
+  }
+
+  /**
+   * Whether the current user may manage billing (change plan, update payment,
+   * open the portal). v1 policy: the workspace owner only. The `OWNER` role key
+   * is immutable server-side, so it is the one stable signal even though role
+   * display names are customizable. Follow-up (TBP-477): switch to a
+   * `BILLING_MANAGE` privilege the owner holds by default and can delegate.
+   * Centralized here so every SDK's billing components share one policy.
+   */
+  canManageBilling(): boolean {
+    return this.getCurrentUser()?.role === 'OWNER';
+  }
+
   // --- Team management ---
 
   get team(): TeamService {
