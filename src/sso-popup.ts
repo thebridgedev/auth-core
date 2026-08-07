@@ -25,14 +25,22 @@ export class SsoPopupManager {
   startSsoLogin(provider: string, opts?: SsoOptions): Promise<SsoResult> {
     const mode = opts?.mode ?? 'redirect';
     if (mode === 'redirect') {
-      return this.startRedirect(provider);
+      return this.startRedirect(provider, opts);
     }
     return this.startPopup(provider, opts);
   }
 
-  private startRedirect(provider: string): Promise<SsoResult> {
-    const url = new URL(`${this.config.authBaseUrl}/auth/federation/${this.config.appId}`);
+  private startRedirect(provider: string, opts?: SsoOptions): Promise<SsoResult> {
+    const url = new URL(`${this.config.authBaseUrl}/federation/${this.config.appId}`);
     url.searchParams.set('provider', provider);
+
+    // TBP-20: tell the backend where to land after the round-trip. Explicit
+    // option wins, then the configured callbackUrl; if neither is set the
+    // backend resolves the app's defaultCallbackUri.
+    const redirectUri = opts?.redirectUri ?? this.config.callbackUrl;
+    if (redirectUri) {
+      url.searchParams.set('redirect_uri', redirectUri);
+    }
 
     this.logger.debug('SSO redirect kickoff', url.toString());
     window.location.assign(url.toString());
@@ -48,7 +56,7 @@ export class SsoPopupManager {
       const left = Math.round((screen.width - width) / 2);
       const top = Math.round((screen.height - height) / 2);
 
-      const url = new URL(`${this.config.authBaseUrl}/auth/federation/${this.config.appId}`);
+      const url = new URL(`${this.config.authBaseUrl}/federation/${this.config.appId}`);
       url.searchParams.set('provider', provider);
       url.searchParams.set('mode', 'popup');
       url.searchParams.set('targetOrigin', window.location.origin);

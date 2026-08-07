@@ -138,7 +138,7 @@ describe('BridgeAuth', () => {
       const result = await auth.getAuthConfig('user@test.com');
       expect(result.hasPassword).toBe(true);
       expect(mockHttpFetch).toHaveBeenCalledWith(
-        'https://api.test.com/auth/auth/credentialsConfig',
+        'https://api.test.com/auth/credentialsConfig',
         expect.objectContaining({
           method: 'POST',
           body: { username: 'user@test.com', mode: 'sdk', appId: 'test-app' },
@@ -627,6 +627,232 @@ describe('BridgeAuth', () => {
       });
       await auth.logout({ redirectTo: '/auth/login' });
       expect(href).toBe('/auth/login');
+    });
+  });
+
+  // TBP-369: framework-agnostic bootstrap logic extracted from bridge-svelte.
+  describe('confirmStripeCheckout()', () => {
+    it('POSTs sessionId + appId to /v1/account/stripe/confirm-checkout and refreshes tokens on success', async () => {
+      const refreshSpy = vi.spyOn(auth, 'refreshTokens').mockResolvedValue(null);
+      const customFetch = vi.fn().mockResolvedValue({ ok: true, status: 200 } as Response);
+
+      await auth.confirmStripeCheckout('cs_123', customFetch as unknown as typeof fetch);
+
+      expect(customFetch).toHaveBeenCalledWith(
+        'https://api.test.com/v1/account/stripe/confirm-checkout',
+        expect.objectContaining({
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: 'cs_123', appId: 'test-app' }),
+        }),
+      );
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('throws and does NOT refresh tokens on a non-OK response', async () => {
+      const refreshSpy = vi.spyOn(auth, 'refreshTokens').mockResolvedValue(null);
+      const customFetch = vi.fn().mockResolvedValue({ ok: false, status: 500 } as Response);
+
+      await expect(
+        auth.confirmStripeCheckout('cs_err', customFetch as unknown as typeof fetch),
+      ).rejects.toThrow(/confirm-checkout failed: 500/);
+      expect(refreshSpy).not.toHaveBeenCalled();
+    });
+
+    it('propagates a network error and does NOT refresh tokens', async () => {
+      const refreshSpy = vi.spyOn(auth, 'refreshTokens').mockResolvedValue(null);
+      const customFetch = vi.fn().mockRejectedValue(new Error('network down'));
+
+      await expect(
+        auth.confirmStripeCheckout('cs_net', customFetch as unknown as typeof fetch),
+      ).rejects.toThrow(/network down/);
+      expect(refreshSpy).not.toHaveBeenCalled();
+    });
+
+    it('falls back to global fetch when no customFetch is provided', async () => {
+      const refreshSpy = vi.spyOn(auth, 'refreshTokens').mockResolvedValue(null);
+      const originalFetch = globalThis.fetch;
+      const globalFetch = vi.fn().mockResolvedValue({ ok: true, status: 200 } as Response);
+      globalThis.fetch = globalFetch as unknown as typeof fetch;
+      try {
+        await auth.confirmStripeCheckout('cs_global');
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+      expect(globalFetch).toHaveBeenCalledWith(
+        'https://api.test.com/v1/account/stripe/confirm-checkout',
+        expect.objectContaining({ method: 'POST' }),
+      );
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('shouldRedirectToPaywall()', () => {
+    it('returns true when authenticated, shouldSelectPlan is true, and not opted out', async () => {
+      vi.spyOn(auth, 'isAuthenticated').mockReturnValue(true);
+      vi.spyOn(auth, 'getSubscriptionStatus').mockResolvedValue({
+        shouldSelectPlan: true,
+        paymentsAutoRedirect: true,
+      } as any);
+      expect(await auth.shouldRedirectToPaywall()).toBe(true);
+    });
+
+    it('returns false when shouldSelectPlan is false', async () => {
+      vi.spyOn(auth, 'isAuthenticated').mockReturnValue(true);
+      vi.spyOn(auth, 'getSubscriptionStatus').mockResolvedValue({
+        shouldSelectPlan: false,
+        paymentsAutoRedirect: true,
+      } as any);
+      expect(await auth.shouldRedirectToPaywall()).toBe(false);
+    });
+
+    it('returns false when the app opted out via paymentsAutoRedirect: false', async () => {
+      vi.spyOn(auth, 'isAuthenticated').mockReturnValue(true);
+      vi.spyOn(auth, 'getSubscriptionStatus').mockResolvedValue({
+        shouldSelectPlan: true,
+        paymentsAutoRedirect: false,
+      } as any);
+      expect(await auth.shouldRedirectToPaywall()).toBe(false);
+    });
+
+    it('returns false (and does not fetch status) when not authenticated', async () => {
+      vi.spyOn(auth, 'isAuthenticated').mockReturnValue(false);
+      const statusSpy = vi.spyOn(auth, 'getSubscriptionStatus');
+      expect(await auth.shouldRedirectToPaywall()).toBe(false);
+      expect(statusSpy).not.toHaveBeenCalled();
+    });
+
+    it('returns false when status fields are missing', async () => {
+      vi.spyOn(auth, 'isAuthenticated').mockReturnValue(true);
+      vi.spyOn(auth, 'getSubscriptionStatus').mockResolvedValue({} as any);
+      expect(await auth.shouldRedirectToPaywall()).toBe(false);
+    });
+
+    // TBP-368 — claim-driven decision: when the access token carries the
+    // shouldSelectPlan claim, no status API call is made at all.
+    describe('claim-driven (TBP-368)', () => {
+      let originalWindow: unknown;
+      beforeEach(() => {
+        // Constructing BridgeAuth with a storage adapter installs a window
+        // 'storage' listener; give it a working stub regardless of what
+        // earlier tests left behind.
+        originalWindow = (globalThis as any).window;
+        (globalThis as any).window = {
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          location: { origin: 'https://app.test.com' },
+        };
+      });
+      afterEach(() => {
+        (globalThis as any).window = originalWindow;
+      });
+
+      function authWithClaims(claims: Record<string, unknown>): BridgeAuth {
+        const storage = new MemoryAdapter();
+        storage.set('bridge_tokens:test-app', JSON.stringify({
+          accessToken: makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, sub: 'u1', ...claims }),
+          refreshToken: 'rt',
+        }));
+        return new BridgeAuth({ ...makeConfig(), storage });
+      }
+
+      it('decides from JWT claims without calling getSubscriptionStatus (claim true)', async () => {
+        const a = authWithClaims({ shouldSelectPlan: true, paymentsAutoRedirect: true });
+        const statusSpy = vi.spyOn(a, 'getSubscriptionStatus');
+        expect(await a.shouldRedirectToPaywall()).toBe(true);
+        expect(statusSpy).not.toHaveBeenCalled();
+        a.destroy();
+      });
+
+      it('decides from JWT claims without calling getSubscriptionStatus (claim false)', async () => {
+        const a = authWithClaims({ shouldSelectPlan: false });
+        const statusSpy = vi.spyOn(a, 'getSubscriptionStatus');
+        expect(await a.shouldRedirectToPaywall()).toBe(false);
+        expect(statusSpy).not.toHaveBeenCalled();
+        a.destroy();
+      });
+
+      it('honors the paymentsAutoRedirect opt-out claim', async () => {
+        const a = authWithClaims({ shouldSelectPlan: true, paymentsAutoRedirect: false });
+        expect(await a.shouldRedirectToPaywall()).toBe(false);
+        a.destroy();
+      });
+
+      it('falls back to the status endpoint for legacy tokens without the claim', async () => {
+        const a = authWithClaims({});
+        const statusSpy = vi.spyOn(a, 'getSubscriptionStatus').mockResolvedValue({
+          shouldSelectPlan: true,
+          paymentsAutoRedirect: true,
+        } as any);
+        expect(await a.shouldRedirectToPaywall()).toBe(true);
+        expect(statusSpy).toHaveBeenCalledTimes(1);
+        a.destroy();
+      });
+    });
+  });
+
+  // TBP-367 — typed payment claims straight off the access token.
+  describe('getPaymentClaims()', () => {
+    let originalWindow: unknown;
+    beforeEach(() => {
+      originalWindow = (globalThis as any).window;
+      (globalThis as any).window = {
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        location: { origin: 'https://app.test.com' },
+      };
+    });
+    afterEach(() => {
+      (globalThis as any).window = originalWindow;
+    });
+
+    function authWithToken(claims: Record<string, unknown>): BridgeAuth {
+      const storage = new MemoryAdapter();
+      storage.set('bridge_tokens:test-app', JSON.stringify({
+        accessToken: makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600, sub: 'u1', ...claims }),
+        refreshToken: 'rt',
+      }));
+      return new BridgeAuth({ ...makeConfig(), storage });
+    }
+
+    it('returns null when unauthenticated', () => {
+      expect(auth.getPaymentClaims()).toBeNull();
+    });
+
+    it('returns the typed payment claims without any network call', () => {
+      const a = authWithToken({
+        plan: 'starter',
+        trial: true,
+        shouldSelectPlan: false,
+        shouldSetupPayments: false,
+        paymentsAutoRedirect: true,
+      });
+      expect(a.getPaymentClaims()).toEqual({
+        plan: 'starter',
+        trial: true,
+        shouldSelectPlan: false,
+        shouldSetupPayments: false,
+        paymentsAutoRedirect: true,
+      });
+      a.destroy();
+    });
+
+    it('leaves claims minted before a field existed as undefined', () => {
+      const a = authWithToken({ plan: 'growth' });
+      const claims = a.getPaymentClaims();
+      expect(claims?.plan).toBe('growth');
+      expect(claims?.shouldSelectPlan).toBeUndefined();
+      expect(claims?.paymentsAutoRedirect).toBeUndefined();
+      a.destroy();
+    });
+
+    it('ignores wrongly-typed claim values', () => {
+      const a = authWithToken({ plan: 42, trial: 'yes', shouldSelectPlan: 'true' });
+      const claims = a.getPaymentClaims();
+      expect(claims?.plan).toBeUndefined();
+      expect(claims?.trial).toBeUndefined();
+      expect(claims?.shouldSelectPlan).toBeUndefined();
+      a.destroy();
     });
   });
 });

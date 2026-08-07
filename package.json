@@ -1,6 +1,6 @@
 {
   "name": "@nebulr-group/bridge-auth-core",
-  "version": "0.4.0-beta.9",
+  "version": "0.4.0-beta.10",
   "description": "Framework-agnostic auth core for Bridge platform",
   "type": "module",
   "main": "./dist/index.js",
@@ -35,12 +35,12 @@
     "package": "bun run build && bun pm pack"
   },
   "dependencies": {
-    "jose": "^5.2.0"
+    "jose": "^6.2.3"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
-    "typescript": "^5.4.0",
-    "vitest": "^1.6.0"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
   },
   "peerDependencies": {},
   "repository": {

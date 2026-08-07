@@ -4,6 +4,10 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // TypeScript 6 no longer auto-discovers node_modules/@types/* when `types`
+    // is absent. node-fs-storage.ts needs the Node globals (node:fs/promises,
+    // node:path, node:os, NodeJS.ErrnoException), so declare it explicitly.
+    "types": ["node"],
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,

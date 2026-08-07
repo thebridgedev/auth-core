@@ -21,6 +21,7 @@ export type {
   PasskeyAuthOptions,
   PasskeyRegistrationOptions,
   PasskeyVerificationResult,
+  PaymentClaims,
   Plan,
   PriceOfferSdk,
   Profile,

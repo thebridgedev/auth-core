@@ -127,8 +127,11 @@ describe('SsoPopupManager', () => {
         const [urlStr] = locationAssignSpy.mock.calls[0];
         const url = new URL(urlStr as string);
 
-        expect(url.pathname).toBe('/auth/auth/federation/app1');
+        expect(url.pathname).toBe('/auth/federation/app1');
         expect(url.searchParams.get('provider')).toBe(provider);
+        // TBP-20: redirect mode forwards the configured callbackUrl so the
+        // backend can complete the round-trip back to the consumer app.
+        expect(url.searchParams.get('redirect_uri')).toBe('https://myapp.com/callback');
         // Redirect mode MUST NOT include popup-only params
         expect(url.searchParams.get('mode')).toBeNull();
         expect(url.searchParams.get('targetOrigin')).toBeNull();
@@ -138,6 +141,26 @@ describe('SsoPopupManager', () => {
         expect(addEventListenerSpy).not.toHaveBeenCalledWith('message', expect.any(Function));
       },
     );
+
+    it('prefers an explicit SsoOptions.redirectUri over the configured callbackUrl', () => {
+      const { locationAssignSpy } = setupWindowMocks();
+
+      const manager = new SsoPopupManager(CONFIG, logger);
+      manager.startSsoLogin('google', { mode: 'redirect', redirectUri: 'https://other.app/cb' });
+
+      const url = new URL(locationAssignSpy.mock.calls[0][0] as string);
+      expect(url.searchParams.get('redirect_uri')).toBe('https://other.app/cb');
+    });
+
+    it('omits redirect_uri when neither option nor callbackUrl is configured', () => {
+      const { locationAssignSpy } = setupWindowMocks();
+
+      const manager = new SsoPopupManager({ ...CONFIG, callbackUrl: undefined }, logger);
+      manager.startSsoLogin('google', { mode: 'redirect' });
+
+      const url = new URL(locationAssignSpy.mock.calls[0][0] as string);
+      expect(url.searchParams.get('redirect_uri')).toBeNull();
+    });
 
     it('uses redirect mode when no options are provided (default)', () => {
       const { locationAssignSpy, windowOpenSpy } = setupWindowMocks();
@@ -180,7 +203,7 @@ describe('SsoPopupManager', () => {
         const [urlStr] = windowOpenSpy.mock.calls[0];
         const url = new URL(urlStr as string);
 
-        expect(url.pathname).toBe('/auth/auth/federation/app1');
+        expect(url.pathname).toBe('/auth/federation/app1');
         expect(url.searchParams.get('provider')).toBe(provider);
         expect(url.searchParams.get('mode')).toBe('popup');
         expect(url.searchParams.get('targetOrigin')).toBe('https://myapp.com');
