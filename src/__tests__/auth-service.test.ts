@@ -98,6 +98,143 @@ describe('AuthService', () => {
   });
 
   // -------------------------------------------------------------------------
+  // createSignupUrl (TBP-36)
+  // -------------------------------------------------------------------------
+
+  describe('createSignupUrl', () => {
+    it('uses the config callbackUrl as redirectUri when no option is passed', () => {
+      const service = makeService();
+      const url = service.createSignupUrl();
+      expect(url).toBe(
+        `https://hosted.example.com/auth/signup/app1?redirectUri=${encodeURIComponent('https://myapp.com/callback')}`,
+      );
+    });
+
+    it('returns bare base URL when callbackUrl is empty and no options given', () => {
+      const service = makeService({ callbackUrl: '' });
+      const url = service.createSignupUrl();
+      expect(url).toBe('https://hosted.example.com/auth/signup/app1');
+    });
+
+    it('uses the provided redirectUri option instead of the config callbackUrl', () => {
+      const service = makeService();
+      const url = service.createSignupUrl({ redirectUri: 'https://myapp.com/custom' });
+      expect(url).toBe(
+        `https://hosted.example.com/auth/signup/app1?redirectUri=${encodeURIComponent('https://myapp.com/custom')}`,
+      );
+    });
+
+    it('uses the config callbackUrl when redirectUri option is undefined', () => {
+      const service = makeService();
+      const url = service.createSignupUrl({ redirectUri: undefined });
+      expect(url).toContain(encodeURIComponent('https://myapp.com/callback'));
+    });
+
+    it('returns bare base URL when redirectUri option is empty string', () => {
+      const service = makeService({ callbackUrl: '' });
+      const url = service.createSignupUrl({ redirectUri: '' });
+      expect(url).toBe('https://hosted.example.com/auth/signup/app1');
+    });
+
+    it('URL-encodes special characters in the redirect URI', () => {
+      const service = makeService({ callbackUrl: 'https://myapp.com/path?foo=bar&baz=qux' });
+      const url = service.createSignupUrl();
+      expect(url).toContain(encodeURIComponent('https://myapp.com/path?foo=bar&baz=qux'));
+    });
+
+    it('uses the appId from config', () => {
+      const service = makeService({ appId: 'other-app', callbackUrl: '' });
+      expect(service.createSignupUrl()).toBe('https://hosted.example.com/auth/signup/other-app');
+    });
+
+    it('includes signupPlan when provided', () => {
+      const service = makeService({ callbackUrl: '' });
+      const url = service.createSignupUrl({ signupPlan: 'pro' });
+      expect(url).toBe('https://hosted.example.com/auth/signup/app1?signupPlan=pro');
+    });
+
+    it('includes signupCurrency when provided', () => {
+      const service = makeService({ callbackUrl: '' });
+      const url = service.createSignupUrl({ signupCurrency: 'usd' });
+      expect(url).toBe('https://hosted.example.com/auth/signup/app1?signupCurrency=usd');
+    });
+
+    it('includes signupRecurrenceInterval when provided', () => {
+      const service = makeService({ callbackUrl: '' });
+      const url = service.createSignupUrl({ signupRecurrenceInterval: 'month' });
+      expect(url).toBe('https://hosted.example.com/auth/signup/app1?signupRecurrenceInterval=month');
+    });
+
+    it('includes all options together', () => {
+      const service = makeService();
+      const url = service.createSignupUrl({
+        redirectUri: 'https://myapp.com/welcome',
+        signupPlan: 'pro',
+        signupCurrency: 'usd',
+        signupRecurrenceInterval: 'month',
+      });
+      expect(url).toBe(
+        'https://hosted.example.com/auth/signup/app1' +
+          `?redirectUri=${encodeURIComponent('https://myapp.com/welcome')}` +
+          '&signupPlan=pro&signupCurrency=usd&signupRecurrenceInterval=month',
+      );
+    });
+
+    it('URL-encodes plan option values', () => {
+      const service = makeService({ callbackUrl: '' });
+      const url = service.createSignupUrl({ signupPlan: 'pro plan&extra' });
+      expect(url).toBe('https://hosted.example.com/auth/signup/app1?signupPlan=pro+plan%26extra');
+      expect(new URL(url).searchParams.get('signupPlan')).toBe('pro plan&extra');
+    });
+
+    it('omits plan params entirely when they are not passed', () => {
+      const service = makeService();
+      const url = service.createSignupUrl();
+      expect(url).not.toContain('signupPlan');
+      expect(url).not.toContain('signupCurrency');
+      expect(url).not.toContain('signupRecurrenceInterval');
+    });
+
+    it('omits plan params rather than emitting empty values when passed empty strings', () => {
+      const service = makeService();
+      const url = service.createSignupUrl({
+        signupPlan: '',
+        signupCurrency: '',
+        signupRecurrenceInterval: '',
+      });
+      expect(url).toBe(
+        `https://hosted.example.com/auth/signup/app1?redirectUri=${encodeURIComponent('https://myapp.com/callback')}`,
+      );
+      expect(url).not.toContain('signupPlan=');
+    });
+
+    it('returns bare base URL when every option is empty', () => {
+      const service = makeService({ callbackUrl: '' });
+      const url = service.createSignupUrl({
+        redirectUri: '',
+        signupPlan: '',
+        signupCurrency: '',
+        signupRecurrenceInterval: '',
+      });
+      expect(url).toBe('https://hosted.example.com/auth/signup/app1');
+    });
+
+    it('mirrors createLoginUrl apart from the login/signup path segment', () => {
+      const service = makeService();
+      expect(service.createSignupUrl()).toBe(
+        service.createLoginUrl().replace('/auth/login/', '/auth/signup/'),
+      );
+    });
+
+    it('mirrors createLoginUrl when no redirectUri is resolvable', () => {
+      const service = makeService({ callbackUrl: '' });
+      expect(service.createSignupUrl()).toBe(
+        service.createLoginUrl().replace('/auth/login/', '/auth/signup/'),
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // createLogoutUrl
   // -------------------------------------------------------------------------
 
