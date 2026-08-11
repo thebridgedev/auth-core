@@ -81,6 +81,58 @@ describe('BridgeAuth', () => {
       expect(url).toContain(encodeURIComponent('https://other.com/cb'));
     });
 
+    it('createSignupUrl builds correct URL', () => {
+      const url = auth.createSignupUrl();
+      expect(url).toContain('https://hosted.test.com/auth/signup/test-app');
+      expect(url).toContain('redirectUri=');
+    });
+
+    it('createSignupUrl with custom redirectUri', () => {
+      const url = auth.createSignupUrl({ redirectUri: 'https://other.com/cb' });
+      expect(url).toContain(encodeURIComponent('https://other.com/cb'));
+    });
+
+    it('createSignupUrl carries plan preselection params through to the URL', () => {
+      const url = auth.createSignupUrl({
+        signupPlan: 'pro',
+        signupCurrency: 'usd',
+        signupRecurrenceInterval: 'month',
+      });
+      const params = new URL(url).searchParams;
+      expect(params.get('signupPlan')).toBe('pro');
+      expect(params.get('signupCurrency')).toBe('usd');
+      expect(params.get('signupRecurrenceInterval')).toBe('month');
+    });
+
+    it('createSignupUrl forwards its options to AuthService', () => {
+      const { authService } = auth as unknown as {
+        authService: { createSignupUrl: (opts?: Record<string, string>) => string };
+      };
+      const spy = vi.spyOn(authService, 'createSignupUrl');
+      const options = {
+        redirectUri: 'https://other.com/cb',
+        signupPlan: 'pro',
+        signupCurrency: 'usd',
+        signupRecurrenceInterval: 'month',
+      };
+
+      auth.createSignupUrl(options);
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith(options);
+    });
+
+    it('createSignupUrl defaults to an empty options object when called with no arguments', () => {
+      const { authService } = auth as unknown as {
+        authService: { createSignupUrl: (opts?: Record<string, string>) => string };
+      };
+      const spy = vi.spyOn(authService, 'createSignupUrl');
+
+      auth.createSignupUrl();
+
+      expect(spy).toHaveBeenCalledWith({});
+    });
+
     it('handleCallback exchanges code and stores tokens', async () => {
       mockHttpFetch.mockResolvedValueOnce({
         access_token: 'at',
