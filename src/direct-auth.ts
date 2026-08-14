@@ -24,6 +24,13 @@ interface DirectTokenResponse {
 }
 
 export class DirectAuthService {
+  // Captured from the most recent options call and re-attached on the matching
+  // verify call — SDK mode has no cookie to carry the WebAuthn challenge, and
+  // @simplewebauthn/browser's start*() calls don't forward unrelated fields
+  // from the options object they're given, so this has to be threaded manually.
+  private _authChallengeToken: string | undefined;
+  private _registrationChallengeToken: string | undefined;
+
   constructor(
     private readonly config: ResolvedConfig,
     private readonly logger: Logger,
@@ -196,17 +203,21 @@ export class DirectAuthService {
 
   async passkeysAuthenticationOptions(): Promise<PasskeyAuthOptions> {
     const url = `${this.config.authBaseUrl}/passkeys/authentication-options`;
-    return httpFetch<PasskeyAuthOptions>(url, {
+    const options = await httpFetch<PasskeyAuthOptions>(url, {
       method: 'GET',
       headers: { 'x-app-id': this.config.appId },
     }, this.logger);
+    this._authChallengeToken = typeof options?.sdkChallengeToken === 'string' ? options.sdkChallengeToken : undefined;
+    return options;
   }
 
   async passkeysAuthenticate(response: any): Promise<AuthResult> {
     const url = `${this.config.authBaseUrl}/passkeys/verify-authentication`;
+    const sdkChallengeToken = this._authChallengeToken;
+    this._authChallengeToken = undefined;
     return httpFetch<AuthResult>(url, {
       method: 'POST',
-      body: { ...response, mode: 'sdk', appId: this.config.appId },
+      body: { ...response, ...(sdkChallengeToken ? { sdkChallengeToken } : {}), mode: 'sdk', appId: this.config.appId },
     }, this.logger);
   }
 
@@ -222,17 +233,21 @@ export class DirectAuthService {
 
   async getPasskeyRegistrationOptions(token: string): Promise<PasskeyRegistrationOptions> {
     const url = `${this.config.authBaseUrl}/passkeys/registration-options?passkeySetupToken=${encodeURIComponent(token)}`;
-    return httpFetch<PasskeyRegistrationOptions>(url, {
+    const options = await httpFetch<PasskeyRegistrationOptions>(url, {
       method: 'GET',
       headers: { 'x-app-id': this.config.appId },
     }, this.logger);
+    this._registrationChallengeToken = typeof options?.sdkChallengeToken === 'string' ? options.sdkChallengeToken : undefined;
+    return options;
   }
 
   async verifyPasskeyRegistration(credential: any, token: string): Promise<PasskeyVerificationResult> {
     const url = `${this.config.authBaseUrl}/passkeys/verify-registration?passkeySetupToken=${encodeURIComponent(token)}`;
+    const sdkChallengeToken = this._registrationChallengeToken;
+    this._registrationChallengeToken = undefined;
     return httpFetch<PasskeyVerificationResult>(url, {
       method: 'POST',
-      body: { ...credential, appId: this.config.appId },
+      body: { ...credential, ...(sdkChallengeToken ? { sdkChallengeToken } : {}), appId: this.config.appId },
     }, this.logger);
   }
 }
