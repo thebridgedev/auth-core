@@ -319,4 +319,93 @@ describe('DirectAuthService', () => {
       });
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Passkeys — SDK-mode challenge token relay
+  //
+  // SDK mode has no cookie to carry the WebAuthn challenge across the two
+  // calls (options -> verify), and @simplewebauthn/browser's start*() calls
+  // don't forward unrelated fields from the options object they're given —
+  // so the client has to capture sdkChallengeToken from the options response
+  // and re-attach it on verify itself. This was previously missing entirely,
+  // silently breaking every real SDK-mode passkey ceremony.
+  // -------------------------------------------------------------------------
+
+  describe('passkeys authentication (sdkChallengeToken relay)', () => {
+    it('captures sdkChallengeToken from the options response and re-attaches it on verify', async () => {
+      mockHttpFetch.mockResolvedValueOnce({ challenge: 'chal', rp: { id: 'example.com' }, sdkChallengeToken: 'tok-auth-1' });
+      mockHttpFetch.mockResolvedValueOnce(AUTH_RESULT);
+
+      await service.passkeysAuthenticationOptions();
+      await service.passkeysAuthenticate({ id: 'cred-1', response: {} });
+
+      const [, verifyOpts] = mockHttpFetch.mock.calls[1];
+      expect(verifyOpts.body).toEqual({
+        id: 'cred-1',
+        response: {},
+        sdkChallengeToken: 'tok-auth-1',
+        mode: 'sdk',
+        appId: 'app1',
+      });
+    });
+
+    it('omits sdkChallengeToken when the options response has none (hosted/cookie mode)', async () => {
+      mockHttpFetch.mockResolvedValueOnce({ challenge: 'chal', rp: { id: 'example.com' } });
+      mockHttpFetch.mockResolvedValueOnce(AUTH_RESULT);
+
+      await service.passkeysAuthenticationOptions();
+      await service.passkeysAuthenticate({ id: 'cred-1' });
+
+      const [, verifyOpts] = mockHttpFetch.mock.calls[1];
+      expect(verifyOpts.body).not.toHaveProperty('sdkChallengeToken');
+    });
+
+    it('consumes the captured token so a second verify call without a fresh options call sends none', async () => {
+      mockHttpFetch.mockResolvedValueOnce({ challenge: 'chal', sdkChallengeToken: 'tok-auth-1' });
+      mockHttpFetch.mockResolvedValueOnce(AUTH_RESULT);
+      mockHttpFetch.mockResolvedValueOnce(AUTH_RESULT);
+
+      await service.passkeysAuthenticationOptions();
+      await service.passkeysAuthenticate({ id: 'cred-1' });
+      await service.passkeysAuthenticate({ id: 'cred-1' });
+
+      const [, secondVerifyOpts] = mockHttpFetch.mock.calls[2];
+      expect(secondVerifyOpts.body).not.toHaveProperty('sdkChallengeToken');
+    });
+  });
+
+  describe('passkeys registration (sdkChallengeToken relay)', () => {
+    it('captures sdkChallengeToken from the registration options response and re-attaches it on verify', async () => {
+      mockHttpFetch.mockResolvedValueOnce({ challenge: 'chal', rp: { id: 'example.com' }, sdkChallengeToken: 'tok-reg-1' });
+      mockHttpFetch.mockResolvedValueOnce({ verified: true });
+
+      await service.getPasskeyRegistrationOptions('setup-token');
+      await service.verifyPasskeyRegistration({ id: 'cred-1', response: {} }, 'setup-token');
+
+      const [, verifyOpts] = mockHttpFetch.mock.calls[1];
+      expect(verifyOpts.body).toEqual({
+        id: 'cred-1',
+        response: {},
+        sdkChallengeToken: 'tok-reg-1',
+        appId: 'app1',
+      });
+    });
+
+    it('keeps the authentication and registration challenge tokens independent', async () => {
+      mockHttpFetch.mockResolvedValueOnce({ challenge: 'chal', sdkChallengeToken: 'tok-auth-1' }); // auth options
+      mockHttpFetch.mockResolvedValueOnce({ challenge: 'chal', sdkChallengeToken: 'tok-reg-1' }); // registration options
+      mockHttpFetch.mockResolvedValueOnce({ verified: true }); // verify-registration
+      mockHttpFetch.mockResolvedValueOnce(AUTH_RESULT); // verify-authentication
+
+      await service.passkeysAuthenticationOptions();
+      await service.getPasskeyRegistrationOptions('setup-token');
+      await service.verifyPasskeyRegistration({ id: 'reg-cred' }, 'setup-token');
+      await service.passkeysAuthenticate({ id: 'auth-cred' });
+
+      const [, verifyRegOpts] = mockHttpFetch.mock.calls[2];
+      const [, verifyAuthOpts] = mockHttpFetch.mock.calls[3];
+      expect(verifyRegOpts.body).toMatchObject({ sdkChallengeToken: 'tok-reg-1' });
+      expect(verifyAuthOpts.body).toMatchObject({ sdkChallengeToken: 'tok-auth-1' });
+    });
+  });
 });
