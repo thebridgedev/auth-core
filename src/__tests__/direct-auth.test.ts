@@ -321,6 +321,50 @@ describe('DirectAuthService', () => {
   });
 
   // -------------------------------------------------------------------------
+  // requestPasskeySetupLink
+  //
+  // Regression: this call was missing `mode: 'sdk'` in its POST body, unlike
+  // every sibling SDK method. bridge-api's /passkeys/request-setup-link
+  // endpoint branches on `body.mode === 'sdk'` — without it, the request
+  // always fell through to a cookie-based OAuth-context check that SDK mode
+  // can never satisfy, throwing a misleading ClientUnauthenticatedError
+  // ("App is unauthenticated...") even with valid credentials. Undetected
+  // until now because this method had zero test coverage. (TBP-535, 2026-08-15)
+  // -------------------------------------------------------------------------
+
+  describe('requestPasskeySetupLink', () => {
+    it('POSTs to the request-setup-link endpoint', async () => {
+      mockHttpFetch.mockResolvedValue({ success: true });
+
+      await service.requestPasskeySetupLink('user@example.com');
+
+      const [url] = mockHttpFetch.mock.calls[0];
+      expect(url).toBe('https://api.example.com/auth/passkeys/request-setup-link');
+    });
+
+    it('sends the correct body with username, mode: "sdk", and appId', async () => {
+      mockHttpFetch.mockResolvedValue({ success: true });
+
+      await service.requestPasskeySetupLink('user@example.com');
+
+      const [, opts] = mockHttpFetch.mock.calls[0];
+      expect(opts.method).toBe('POST');
+      expect(opts.body).toEqual({
+        username: 'user@example.com',
+        mode: 'sdk',
+        appId: 'app1',
+      });
+    });
+
+    it('returns the response from the endpoint', async () => {
+      mockHttpFetch.mockResolvedValue({ success: true });
+
+      const result = await service.requestPasskeySetupLink('user@example.com');
+      expect(result).toEqual({ success: true });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Passkeys — SDK-mode challenge token relay
   //
   // SDK mode has no cookie to carry the WebAuthn challenge across the two
