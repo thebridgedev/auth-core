@@ -227,7 +227,7 @@ export class DirectAuthService {
     const url = `${this.config.authBaseUrl}/passkeys/request-setup-link`;
     return httpFetch<{ success: boolean }>(url, {
       method: 'POST',
-      body: { username: email, appId: this.config.appId },
+      body: { username: email, mode: 'sdk', appId: this.config.appId },
     }, this.logger);
   }
 
