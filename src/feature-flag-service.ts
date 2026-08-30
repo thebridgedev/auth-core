@@ -53,6 +53,24 @@ export class FeatureFlagService {
     return { ...this.cachedFlags };
   }
 
+  /**
+   * Drop the cache so the next `isEnabled` re-evaluates against the server
+   * (TBP-575).
+   *
+   * This cache is what ROUTE GUARDS read, and it is a different cache from
+   * the FF 2.0 `BridgeFlags` store that `<FeatureFlag>` reads. Realtime flag
+   * pushes only ever updated the latter, so a flag flip took up to
+   * CACHE_TTL_MS to affect a route — not because the TTL was wrong, but
+   * because nothing ever told this cache the world had changed. The framework
+   * SDK now calls this from the realtime client's `onFlagChange` hook.
+   *
+   * Deliberately does NOT refetch: guards evaluate on navigation, so the
+   * refetch happens exactly when it is needed rather than on every push.
+   */
+  invalidate(): void {
+    this.lastFetchTime = 0;
+  }
+
   private async evaluateSingle(flag: string): Promise<boolean> {
     const tokens = this.getTokens();
     const accessToken = tokens?.accessToken;

@@ -197,6 +197,7 @@ export type {
   EntitlementsChangedMessage,
   SessionSnapshotMessage,
   ConnectionState,
+  FlagChange,
   WebSocketLike,
 } from './flags/index.js';
 
