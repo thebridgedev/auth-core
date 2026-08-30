@@ -20,6 +20,7 @@
 // the framework SDK supplies (token refresh, attribute changes — see TBP-90).
 
 import type { BridgeFlags, CachedFlag } from './flag.js';
+import { createLogger, type Logger } from '../logger.js';
 
 export interface RealtimeClientConfig {
   /** Bridge API base URL — same as the telemetry batcher. */
@@ -53,6 +54,12 @@ export interface RealtimeClientConfig {
    * Falls back to apiKey when this is undefined or returns undefined.
    */
   getAuthToken?: () => string | undefined;
+  /**
+   * Optional logger. Defaults to a non-debug logger, which still emits
+   * `error` — deliberate: a rejected subscription means realtime is silently
+   * dead, and that must not require debug mode to notice (TBP-575).
+   */
+  logger?: Logger;
 }
 
 /** Minimal WebSocket surface the client uses. */
@@ -256,7 +263,23 @@ export type RealtimeMessage =
   | EntitlementsChangedMessage
   | SessionSnapshotMessage;
 
-export type ConnectionState = 'idle' | 'connecting' | 'open' | 'closed';
+/** A flag mutation received on the wire — see `setOnFlagChange` (TBP-575). */
+export interface FlagChange {
+  /** The flag key that changed. */
+  key: string;
+  kind: 'updated' | 'removed';
+}
+
+/**
+ * `degraded` (TBP-575) means the socket is up and the handshake completed, but
+ * no channel subscription was accepted — the client is connected and deaf.
+ * Before this state existed such a connection reported `open`, which is how a
+ * dead realtime transport passed for healthy in production for months.
+ */
+export type ConnectionState = 'idle' | 'connecting' | 'open' | 'degraded' | 'closed';
+
+/** How long to wait for a subscribe ack before declaring the connection deaf. */
+const SUBSCRIBE_ACK_TIMEOUT_MS = 10_000;
 
 export class RealtimeClient {
   private readonly cfg: Required<
@@ -284,7 +307,23 @@ export class RealtimeClient {
   private onSnapshotHook?: (msg: SessionSnapshotMessage) => void;
   private onOpenHook?: () => void;
   private onCloseHook?: () => void;
+  /**
+   * TBP-575 — fires whenever a flag mutation arrives on the wire, regardless
+   * of which cache consumes it. Route guards read a *different* cache
+   * (`FeatureFlagService`) than `<FeatureFlag>` does (`BridgeFlags`), and
+   * nothing used to tell that second cache the world had changed. This hook is
+   * how the framework SDK invalidates it and re-evaluates the current route.
+   */
+  private onFlagChangeHook?: (change: FlagChange) => void;
+  /** Fires when the connection is up but no channel subscription was accepted. */
+  private onDegradedHook?: () => void;
   private stopped = false;
+  // ── AppSync subscribe bookkeeping (TBP-575) ──────────────────────────────
+  /** Subscription id → internal channel name, for correlating server acks. */
+  private pendingSubscribes = new Map<string, string>();
+  private ackedChannels = new Set<string>();
+  private failedChannels = new Map<string, string>();
+  private subscribeAckTimer?: ReturnType<typeof setTimeout>;
 
   constructor(cfg: RealtimeClientConfig) {
     const defaultWs = ((url: string, protocols?: string | string[]) =>
@@ -305,6 +344,7 @@ export class RealtimeClient {
       websocketFactory: cfg.websocketFactory ?? defaultWs,
       fetchFn: cfg.fetchFn ?? ((typeof fetch !== 'undefined' ? fetch : undefined) as typeof fetch),
       getAuthToken: cfg.getAuthToken,
+      logger: cfg.logger ?? createLogger(false),
     };
     this.reconnectDelayMs = this.cfg.reconnectBaseMs;
   }
@@ -379,10 +419,35 @@ export class RealtimeClient {
   }
 
   /**
+   * Register a hook fired on every flag mutation received on the wire
+   * (TBP-575). Distinct from `attach()`, which only feeds the `BridgeFlags`
+   * cache: this hook exists so a framework SDK can also invalidate the
+   * legacy `FeatureFlagService` cache that route guards read, and re-run the
+   * guard for the route the user is currently sitting on.
+   */
+  setOnFlagChange(hook: (change: FlagChange) => void): void {
+    this.onFlagChangeHook = hook;
+  }
+
+  /**
+   * Register a hook fired when the connection reaches `'degraded'` — socket
+   * up, handshake done, no channel subscription accepted (TBP-575). The
+   * client stays connected; nothing will arrive on it. Use this to surface an
+   * indicator or fall back to polling.
+   */
+  setOnDegraded(hook: () => void): void {
+    this.onDegradedHook = hook;
+  }
+
+  /**
    * Register a hook fired when the WebSocket transitions to `'open'` —
    * fires on initial connect AND on every successful reconnect. Framework
    * SDKs use this to re-fire startup tasks (e.g. cache hydration) that
    * may have been missed during an outage.
+   *
+   * On the AppSync transport this fires when the first channel subscription
+   * is **accepted**, not merely when the handshake completes — a connection
+   * with no accepted subscription is `degraded`, not open (TBP-575).
    */
   setOnOpen(hook: () => void): void {
     this.onOpenHook = hook;
@@ -417,13 +482,21 @@ export class RealtimeClient {
    */
   async reauthorize(): Promise<void> {
     if (!this.cfg.enabled || this.stopped) return;
-    if (this.state === 'connecting') return;
+    // A connect attempt that has not yet produced a socket will read the
+    // current token when it gets there — nothing to redo. Once a socket
+    // exists we must replace it, whatever the state is called: TBP-575 added
+    // 'degraded' (live socket, no accepted subscription) and widened
+    // 'connecting' to cover the await-subscribe-ack window, and keying this
+    // on `state === 'open'` silently skipped both.
+    if (!this.ws) {
+      if (this.state === 'connecting') return;
+    }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
     this.reconnectDelayMs = this.cfg.reconnectBaseMs;
-    if (this.state === 'open' && this.ws) {
+    if (this.ws) {
       const oldWs = this.ws;
       this.ws = undefined;
       this.state = 'closed';
@@ -445,7 +518,7 @@ export class RealtimeClient {
   setAppId(appId: string | undefined): void {
     if (this.cfg.appId === appId) return;
     this.cfg.appId = appId;
-    if (this.state === 'open' && this.ws) {
+    if (this.ws) {
       this.ws.close(1000, 'sdk.setAppId');
       // onclose → scheduleReconnect → start() picks up updated channelsToSubscribe()
     }
@@ -459,7 +532,7 @@ export class RealtimeClient {
   setWorkspaceId(workspaceId: string | undefined): void {
     if (this.cfg.workspaceId === workspaceId) return;
     this.cfg.workspaceId = workspaceId;
-    if (this.state === 'open' && this.ws) {
+    if (this.ws) {
       this.ws.close(1000, 'sdk.setWorkspaceId');
     }
   }
@@ -472,7 +545,7 @@ export class RealtimeClient {
   setUserId(userId: string | undefined): void {
     if (this.cfg.userId === userId) return;
     this.cfg.userId = userId;
-    if (this.state === 'open' && this.ws) {
+    if (this.ws) {
       this.ws.close(1000, 'sdk.setUserId');
       // onclose fires → scheduleReconnect → start() picks up updated channelsToSubscribe()
     }
@@ -515,6 +588,7 @@ export class RealtimeClient {
   /** Close the connection. Idempotent. */
   async stop(): Promise<void> {
     this.stopped = true;
+    this.clearSubscribeAckTimer();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
@@ -693,7 +767,13 @@ export class RealtimeClient {
 
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return;
-      let frame: { type?: unknown; id?: unknown; event?: unknown };
+      let frame: {
+        type?: unknown;
+        id?: unknown;
+        event?: unknown;
+        errors?: unknown;
+        message?: unknown;
+      };
       try {
         frame = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
       } catch {
@@ -703,15 +783,20 @@ export class RealtimeClient {
       const type = typeof frame.type === 'string' ? frame.type : '';
       switch (type) {
         case 'connection_ack': {
-          // Handshake complete — open the gate for app traffic.
-          this.state = 'open';
+          // Handshake complete — but NOT usable yet. The connection only
+          // becomes 'open' once a channel subscription is accepted; see the
+          // note on ConnectionState. Reporting 'open' here is what let a
+          // fully deaf client look healthy in production (TBP-575).
           this.reconnectDelayMs = this.cfg.reconnectBaseMs;
+          this.resetSubscribeTracking();
           for (const channel of channels) {
+            const id = appSyncSubscriptionId();
+            this.pendingSubscribes.set(id, channel);
             try {
               ws.send(
                 JSON.stringify({
                   type: 'subscribe',
-                  id: appSyncSubscriptionId(),
+                  id,
                   channel: appSyncChannelToWire(channel),
                   authorization: authHeader,
                 }),
@@ -720,11 +805,15 @@ export class RealtimeClient {
               // ignore — onclose will pick up a broken socket.
             }
           }
-          try {
-            this.onOpenHook?.();
-          } catch {
-            // hook errors must not break the connection.
-          }
+          // A server that accepts the socket and then silently ignores every
+          // subscribe would otherwise sit in 'connecting' forever.
+          this.subscribeAckTimer = setTimeout(() => {
+            if (this.ws !== ws || this.ackedChannels.size > 0) return;
+            this.cfg.logger.error(
+              `realtime: connected to AppSync but no channel subscription was acknowledged within ${SUBSCRIBE_ACK_TIMEOUT_MS}ms — live updates are NOT arriving. Channels: ${channels.join(', ')}`,
+            );
+            this.markDegraded();
+          }, SUBSCRIBE_ACK_TIMEOUT_MS);
           break;
         }
         case 'ka':
@@ -763,15 +852,49 @@ export class RealtimeClient {
           }
           break;
         }
-        case 'subscribe_success':
-          // Per-channel ack — no action required, server now streams data.
+        case 'subscribe_success': {
+          // Per-channel ack — the connection is only genuinely usable now.
+          const id = typeof frame.id === 'string' ? frame.id : '';
+          const channel = this.pendingSubscribes.get(id);
+          if (channel) {
+            this.pendingSubscribes.delete(id);
+            this.ackedChannels.add(channel);
+          }
+          if (this.state !== 'open') {
+            this.state = 'open';
+            this.clearSubscribeAckTimer();
+            try {
+              this.onOpenHook?.();
+            } catch {
+              // hook errors must not break the connection.
+            }
+          }
           break;
+        }
+        case 'subscribe_error': {
+          // A rejected channel is NOT a reason to drop the socket. Tearing the
+          // connection down here turned a permanent per-channel fault into an
+          // endless reconnect loop that never surfaced anything (TBP-575).
+          const id = typeof frame.id === 'string' ? frame.id : '';
+          const channel = this.pendingSubscribes.get(id) ?? '(unknown channel)';
+          this.pendingSubscribes.delete(id);
+          this.failedChannels.set(channel, describeAppSyncError(frame));
+          this.cfg.logger.error(
+            `realtime: AppSync rejected subscription to '${channel}' — ${describeAppSyncError(frame)}. Live updates will not arrive on this channel.`,
+          );
+          // Every channel rejected → connected but deaf.
+          if (this.pendingSubscribes.size === 0 && this.ackedChannels.size === 0) {
+            this.clearSubscribeAckTimer();
+            this.markDegraded();
+          }
+          break;
+        }
         case 'connection_error':
-        case 'subscribe_error':
         case 'error':
-          // Server-side reject — close cleanly so onclose triggers reconnect.
-          // We intentionally don't surface the error message: the next
-          // connect's authorize will succeed or fail with the same signal.
+          // Connection-level fault — close cleanly so onclose triggers reconnect.
+          this.cfg.logger.error(
+            `realtime: AppSync ${type} — ${describeAppSyncError(frame)}. Reconnecting.`,
+          );
           try {
             ws.close(1011, `appsync:${type}`);
           } catch {
@@ -788,6 +911,7 @@ export class RealtimeClient {
     ws.onclose = () => {
       if (this.ws !== ws) return;
       this.state = 'closed';
+      this.resetSubscribeTracking();
       try {
         this.onCloseHook?.();
       } catch {
@@ -800,13 +924,63 @@ export class RealtimeClient {
     };
   }
 
+  // ── AppSync subscribe bookkeeping (TBP-575) ──────────────────────────────
+
+  private resetSubscribeTracking(): void {
+    this.clearSubscribeAckTimer();
+    this.pendingSubscribes.clear();
+    this.ackedChannels.clear();
+    this.failedChannels.clear();
+  }
+
+  private clearSubscribeAckTimer(): void {
+    if (this.subscribeAckTimer) {
+      clearTimeout(this.subscribeAckTimer);
+      this.subscribeAckTimer = undefined;
+    }
+  }
+
+  /**
+   * Connected, handshaken, and subscribed to nothing. Deliberately does NOT
+   * close the socket: the fault is per-channel and reconnecting would just
+   * reproduce it in a loop. Consumers are told so they can fall back to
+   * polling or warn the user.
+   */
+  private markDegraded(): void {
+    this.state = 'degraded';
+    try {
+      this.onDegradedHook?.();
+    } catch {
+      // hook errors must not break the connection.
+    }
+  }
+
+  /** Channels rejected by the server on the current connection, if any. */
+  getFailedChannels(): Record<string, string> {
+    return Object.fromEntries(this.failedChannels);
+  }
+
+  private emitFlagChange(change: FlagChange): void {
+    if (!this.onFlagChangeHook) return;
+    try {
+      this.onFlagChangeHook(change);
+    } catch (err) {
+      // A consumer's guard re-check must never take down the connection.
+      this.cfg.logger.warn('onFlagChange hook threw', err);
+    }
+  }
+
   private handleMessage(msg: RealtimeMessage): void {
     switch (msg.kind) {
       case 'flag.updated':
         if (this.bridge && msg.flag) this.bridge.upsert(msg.flag);
+        // Fire even when no BridgeFlags is attached — the route-guard cache is
+        // a separate consumer and must be invalidated either way (TBP-575).
+        if (msg.flag?.key) this.emitFlagChange({ key: msg.flag.key, kind: 'updated' });
         break;
       case 'flag.removed':
         if (this.bridge && msg.key) this.bridge.remove(msg.key);
+        if (msg.key) this.emitFlagChange({ key: msg.key, kind: 'removed' });
         break;
       case 'user.state_changed':
         if (this.onUserStateHook) {
@@ -917,6 +1091,34 @@ function parseMessage(raw: unknown): RealtimeMessage | null {
 
 // ── AppSync Events helpers (TBP-148) ─────────────────────────────────────────
 
+/**
+ * Best-effort human-readable reason out of an AppSync error frame (TBP-575).
+ *
+ * AppSync is inconsistent about where it puts the reason — sometimes
+ * `errors: [{ message }]`, sometimes a bare `message`. Previously the client
+ * discarded all of it, which is why a channel-format bug went undiagnosed for
+ * months. Anything is better than nothing here, so fall back to the raw frame.
+ */
+function describeAppSyncError(frame: { errors?: unknown; message?: unknown }): string {
+  const { errors, message } = frame;
+  if (Array.isArray(errors) && errors.length > 0) {
+    const parts = errors
+      .map((e) => {
+        if (typeof e === 'string') return e;
+        const m = (e as { message?: unknown })?.message;
+        return typeof m === 'string' ? m : undefined;
+      })
+      .filter((m): m is string => !!m);
+    if (parts.length > 0) return parts.join('; ');
+  }
+  if (typeof message === 'string' && message) return message;
+  try {
+    return JSON.stringify(frame);
+  } catch {
+    return 'no error detail supplied by the server';
+  }
+}
+
 /** Subprotocol identifier for AppSync Events realtime channels. */
 const APPSYNC_WS_PROTOCOL = 'aws-appsync-event-ws';
 
@@ -1000,13 +1202,23 @@ function base64urlEncode(input: string): string {
 
 /**
  * Translate internal channel name (`<ns>:<id>`) to the AppSync wire form
- * (`<ns>/<id>`). Mirrors the publish side at
+ * (`/<ns>/<id>`). Mirrors the publish side at
  * `microservices/shared/realtime/adapters/appsync-events.adapter.ts:87`
  * and the Lambda authorizer's normalizer at
- * `microservices/shared/realtime/appsync-authorizer.handler.ts:59`.
+ * `microservices/shared/realtime/appsync-authorizer.ts:63`.
+ *
+ * TBP-575 — the LEADING SLASH is load-bearing and was missing here for the
+ * whole life of the AppSync transport. AppSync Events addresses channels as
+ * `/<namespace>/<path>`; without the slash the namespace never resolves, so
+ * every `subscribe` was rejected and no client on prod ever received a flag
+ * push. The publish side always sent `/app/<id>`, so the two ends were
+ * addressing different channels even where AppSync tolerated the form.
+ *
+ * Both ends are pinned to the shared vectors in `appsync-channel-vectors.ts`
+ * — change one and the other repo's test fails. Do not "simplify" this.
  */
-function appSyncChannelToWire(internal: string): string {
-  return internal.replace(':', '/');
+export function appSyncChannelToWire(internal: string): string {
+  return `/${internal.replace(':', '/')}`;
 }
 
 /**

@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BridgeFlags } from '../../flags/flag.js';
 import {
   RealtimeClient,
+  appSyncChannelToWire,
   type WebSocketLike,
   type UserStateMessage,
   type SessionSnapshotMessage,
 } from '../../flags/realtime.js';
+import { APPSYNC_CHANNEL_VECTORS } from '../../flags/appsync-channel-vectors.js';
 
 // ── Fake WebSocket factory ──────────────────────────────────────────────────
 
@@ -545,6 +547,20 @@ describe('RealtimeClient — AppSync Events handshake (TBP-148)', () => {
     return { ws, client };
   }
 
+  /**
+   * Ack the client's subscribe frames the way AppSync does. TBP-575 — the
+   * connection is not 'open' until at least one subscription is accepted, so
+   * any test that wants a usable connection has to go through here.
+   */
+  function ackSubscriptions(ws: FakeWebSocket): void {
+    for (const raw of ws.sent) {
+      const frame = JSON.parse(raw);
+      if (frame.type === 'subscribe') {
+        ws.triggerMessage({ type: 'subscribe_success', id: frame.id });
+      }
+    }
+  }
+
   it('normalizes a bare host into wss://…/event/realtime and negotiates the two subprotocols', async () => {
     const { ws } = await setupAppSyncOpen();
     expect(ws.url).toBe(APPSYNC_FULL);
@@ -591,12 +607,16 @@ describe('RealtimeClient — AppSync Events handshake (TBP-148)', () => {
     ws.triggerOpen();
     ws.triggerMessage({ type: 'connection_ack', connectionTimeoutMs: 30_000 });
 
-    expect(client.getState()).toBe('open');
+    // TBP-575 — the handshake alone does NOT make the connection usable. State
+    // stays 'connecting' until a subscription is actually accepted.
+    expect(client.getState()).toBe('connecting');
     // 1 connection_init + 3 subscribes
     expect(ws.sent.length).toBe(4);
     const subs = ws.sent.slice(1).map((s) => JSON.parse(s));
     expect(subs.map((m) => m.type)).toEqual(['subscribe', 'subscribe', 'subscribe']);
-    expect(subs.map((m) => m.channel)).toEqual(['app/app-1', 'workspace/ws-1', 'user/u-1']);
+    // LEADING SLASH — AppSync addresses channels as `/<namespace>/<path>`, and
+    // this is byte-identical to what appsync-events.adapter.ts publishes to.
+    expect(subs.map((m) => m.channel)).toEqual(['/app/app-1', '/workspace/ws-1', '/user/u-1']);
     for (const sub of subs) {
       expect(typeof sub.id).toBe('string');
       expect(sub.authorization).toEqual({
@@ -661,6 +681,7 @@ describe('RealtimeClient — AppSync Events handshake (TBP-148)', () => {
     ws.triggerOpen();
     ws.triggerMessage({ type: 'connection_ack' });
     const sentBefore = ws.sent.length;
+    ackSubscriptions(ws);
     ws.triggerMessage({ type: 'ka' });
     expect(ws.sent.length).toBe(sentBefore); // no response sent
     expect(client.getState()).toBe('open');
@@ -679,6 +700,7 @@ describe('RealtimeClient — AppSync Events handshake (TBP-148)', () => {
     const { ws, client } = await setupAppSyncOpen();
     ws.triggerOpen();
     ws.triggerMessage({ type: 'connection_ack' });
+    ackSubscriptions(ws);
     ws.triggerMessage({ type: 'pong' }); // hypothetical future frame
     expect(client.getState()).toBe('open');
   });
@@ -698,5 +720,204 @@ describe('RealtimeClient — AppSync Events handshake (TBP-148)', () => {
     const ws2 = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
     expect(ws2).not.toBe(ws);
     expect(decodeHeaderProtocol(ws2.protocols)?.Authorization).toBe('Bearer jwt-new');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TBP-575 — the AppSync transport was dead on production for the whole life of
+// the adapter. Publish addressed `/app/<id>`; subscribe addressed `app/<id>`.
+// Both halves had passing unit tests against mocks, and nothing compared the
+// two strings. These tests exist so that specific failure cannot recur silently.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('AppSync channel wire format — contract with bridge-api (TBP-575)', () => {
+  it('matches the shared golden vectors byte-for-byte', () => {
+    for (const { internal, wire } of APPSYNC_CHANNEL_VECTORS) {
+      expect(appSyncChannelToWire(internal)).toBe(wire);
+    }
+  });
+
+  it('always emits a leading slash — the bug that killed realtime on prod', () => {
+    for (const { internal } of APPSYNC_CHANNEL_VECTORS) {
+      expect(appSyncChannelToWire(internal).startsWith('/')).toBe(true);
+    }
+  });
+
+  it('covers every namespace declared in the appsync-events CFN template', () => {
+    const namespaces = APPSYNC_CHANNEL_VECTORS.map((v) => v.wire.split('/')[1]).sort();
+    expect(namespaces).toEqual(['app', 'integration', 'user', 'workspace']);
+  });
+});
+
+describe('RealtimeClient — subscribe failures are loud and non-fatal (TBP-575)', () => {
+  const APPSYNC_HOST = 'svc.appsync-realtime-api.eu-west-1.amazonaws.com';
+
+  function mkLogger() {
+    return { debug: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  }
+
+  async function setup(logger: ReturnType<typeof mkLogger>) {
+    const client = new RealtimeClient({
+      ...CONFIG,
+      appId: 'app-1',
+      logger,
+      fetchFn: mkFetch({
+        '/realtime/config': () => ({
+          kind: 'appsync',
+          endpoint: APPSYNC_HOST,
+          protocol: 'appsync-events',
+          params: { region: 'eu-west-1', apiId: 'svc' },
+        }),
+      }),
+    });
+    await client.start();
+    const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack' });
+    return { ws, client };
+  }
+
+  function subscribeIds(ws: FakeWebSocket): string[] {
+    return ws.sent
+      .map((raw) => JSON.parse(raw))
+      .filter((f) => f.type === 'subscribe')
+      .map((f) => f.id);
+  }
+
+  it('does NOT close the connection when a channel is rejected', async () => {
+    const logger = mkLogger();
+    const { ws } = await setup(logger);
+    ws.triggerMessage({
+      type: 'subscribe_error',
+      id: subscribeIds(ws)[0],
+      errors: [{ message: 'NamespaceNotFound' }],
+    });
+    // Previously this closed the socket, so a permanent per-channel fault
+    // became an infinite reconnect loop.
+    expect(ws.readyState).not.toBe(3);
+  });
+
+  it('logs the server reason at error level instead of discarding it', async () => {
+    const logger = mkLogger();
+    const { ws } = await setup(logger);
+    ws.triggerMessage({
+      type: 'subscribe_error',
+      id: subscribeIds(ws)[0],
+      errors: [{ message: 'NamespaceNotFound' }],
+    });
+    expect(logger.error).toHaveBeenCalled();
+    const msg = logger.error.mock.calls.map((c) => String(c[0])).join(' ');
+    expect(msg).toContain('NamespaceNotFound');
+    expect(msg).toContain('app:app-1');
+  });
+
+  it('reports `degraded`, not `open`, when every channel is rejected', async () => {
+    const logger = mkLogger();
+    const { ws, client } = await setup(logger);
+    for (const id of subscribeIds(ws)) {
+      ws.triggerMessage({ type: 'subscribe_error', id, errors: [{ message: 'denied' }] });
+    }
+    expect(client.getState()).toBe('degraded');
+    expect(client.getFailedChannels()).toHaveProperty('app:app-1');
+  });
+
+  it('reports `open` once any channel is accepted, even if another failed', async () => {
+    const logger = mkLogger();
+    const { ws, client } = await setup(logger);
+    const ids = subscribeIds(ws);
+    ws.triggerMessage({ type: 'subscribe_success', id: ids[0] });
+    expect(client.getState()).toBe('open');
+  });
+
+  it('fires setOnOpen on subscribe_success, not on connection_ack', async () => {
+    const logger = mkLogger();
+    const onOpen = vi.fn();
+    const client = new RealtimeClient({
+      ...CONFIG,
+      appId: 'app-1',
+      logger,
+      fetchFn: mkFetch({
+        '/realtime/config': () => ({
+          kind: 'appsync',
+          endpoint: APPSYNC_HOST,
+          protocol: 'appsync-events',
+          params: { region: 'eu-west-1', apiId: 'svc' },
+        }),
+      }),
+    });
+    client.setOnOpen(onOpen);
+    await client.start();
+    const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack' });
+    expect(onOpen).not.toHaveBeenCalled();
+    ws.triggerMessage({ type: 'subscribe_success', id: subscribeIds(ws)[0] });
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('RealtimeClient — flag-change hook feeds the route-guard cache (TBP-575)', () => {
+  const APPSYNC_HOST = 'svc.appsync-realtime-api.eu-west-1.amazonaws.com';
+
+  async function setup() {
+    const client = new RealtimeClient({
+      ...CONFIG,
+      appId: 'app-1',
+      fetchFn: mkFetch({
+        '/realtime/config': () => ({
+          kind: 'appsync',
+          endpoint: APPSYNC_HOST,
+          protocol: 'appsync-events',
+          params: { region: 'eu-west-1', apiId: 'svc' },
+        }),
+      }),
+    });
+    const changes: Array<{ key: string; kind: string }> = [];
+    client.setOnFlagChange((c) => changes.push(c));
+    await client.start();
+    const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack' });
+    return { ws, client, changes };
+  }
+
+  it('fires on flag.updated even with no BridgeFlags attached', async () => {
+    const { ws, changes } = await setup();
+    ws.triggerMessage({
+      type: 'data',
+      id: 'sub-1',
+      event: [
+        JSON.stringify({
+          kind: 'flag.updated',
+          flag: { key: 'holo-experimental', state: 'on', valueType: 'boolean' },
+        }),
+      ],
+    });
+    // The route-guard cache is a separate consumer from BridgeFlags — it must
+    // be told regardless of whether a flag cache happens to be attached.
+    expect(changes).toEqual([{ key: 'holo-experimental', kind: 'updated' }]);
+  });
+
+  it('fires on flag.removed', async () => {
+    const { ws, changes } = await setup();
+    ws.triggerMessage({
+      type: 'data',
+      id: 'sub-1',
+      event: [JSON.stringify({ kind: 'flag.removed', key: 'holo-experimental' })],
+    });
+    expect(changes).toEqual([{ key: 'holo-experimental', kind: 'removed' }]);
+  });
+
+  it('a throwing hook does not take down the connection', async () => {
+    const { ws, client } = await setup();
+    client.setOnFlagChange(() => {
+      throw new Error('consumer blew up');
+    });
+    ws.triggerMessage({
+      type: 'data',
+      id: 'sub-1',
+      event: [JSON.stringify({ kind: 'flag.removed', key: 'x' })],
+    });
+    expect(ws.readyState).not.toBe(3);
   });
 });

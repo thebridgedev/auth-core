@@ -108,6 +108,7 @@ export type {
   EntitlementsChangedMessage,
   SessionSnapshotMessage,
   ConnectionState,
+  FlagChange,
   WebSocketLike,
 } from './realtime.js';
 

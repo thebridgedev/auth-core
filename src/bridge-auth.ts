@@ -538,6 +538,15 @@ export class BridgeAuth {
     return this.featureFlags.loadAll();
   }
 
+  /**
+   * Invalidate the route-guard flag cache (TBP-575). Framework SDKs call this
+   * when a realtime flag change arrives so the next route evaluation reflects
+   * it instead of serving a verdict up to 5 minutes stale.
+   */
+  invalidateFeatureFlagCache(): void {
+    this.featureFlags.invalidate();
+  }
+
   // --- App config ---
 
   async getAppConfig(): Promise<AppConfig> {
