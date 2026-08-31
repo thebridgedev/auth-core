@@ -218,6 +218,19 @@ export interface UpdateRoleRequest {
   isDefault?: boolean;
 }
 
+// TBP-592 / TBP-589 — privileges had no management surface at all, so an app
+// needing custom privileges (most non-trivial ones) could not be provisioned
+// through the SDK or the CLI. Ten had to be created with raw HTTP calls.
+export interface CreatePrivilegeRequest {
+  key: string;
+  description?: string;
+}
+
+export interface UpdatePrivilegeRequest {
+  key?: string;
+  description?: string;
+}
+
 // ─── Feature Flag ───────────────────────────────────────────────────────────
 
 // Canonical FF 2.0 shapes live in ./flags/evaluator.ts (Rule, Branch, FlagState,

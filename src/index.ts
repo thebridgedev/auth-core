@@ -83,6 +83,7 @@ export type {
   UserResponse, InviteUserRequest, UpdateUserRequest,
   // Role
   RoleResponse, CreateRoleRequest, UpdateRoleRequest, PrivilegeResponse,
+  CreatePrivilegeRequest, UpdatePrivilegeRequest,
   // Feature Flag
   FlagResponse, CreateFlagInput, UpdateFlagInput,
   SegmentResponse, SegmentInput, Target, TargetValue,
