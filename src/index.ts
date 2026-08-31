@@ -1,3 +1,17 @@
+// Duplicate-instance detection (TBP-598).
+//
+// Runs at import time. This package keeps state at module scope (the billing
+// singleton, the realtime client, the flag cache), so a second copy silently
+// splits it — most sharply the billing lock, which is registered on one copy
+// and emitted on the other and therefore never fires. Warns; never throws.
+import { registerInstance } from './instance-guard.js';
+registerInstance();
+
+export {
+  loadedInstanceCount,
+  __resetInstanceRegistryForTests,
+} from './instance-guard.js';
+
 // Main facade
 export { BridgeAuth } from './bridge-auth.js';
 
