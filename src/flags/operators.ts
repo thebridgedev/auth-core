@@ -87,6 +87,38 @@ export interface Condition {
 // ── Evaluation ──────────────────────────────────────────────────────────────
 
 /**
+ * Attributes compared case-INSENSITIVELY (TBP-610).
+ *
+ * Plan keys are free-form per app and their case is arbitrary: the Plan schema
+ * defaults `key` to lower-case `"free"`, while a real app in production
+ * carries `FREE` / `PREMIUM` / `ENTERPRISE` because those were typed in by
+ * hand. `key` is immutable, so an app is stuck with whatever case it was
+ * created with, and a rule author has no way to know which they are facing.
+ *
+ * A mis-cased rule is not an error anywhere. `eq` is a strict `===`, so the
+ * rule simply never matches and the flag returns its off value — which looks
+ * exactly like a customer who has not bought the feature. Our own seeded
+ * `premium-features` flag was authored as `tenant.plan eq "premium"` against
+ * plan key `PREMIUM` and had therefore never returned true for anyone.
+ *
+ * Scoped deliberately to `tenant.plan`. `user.role` has the same shape of
+ * trap, but roles are consistently upper-case in the seeded data, and making a
+ * previously-dead role rule start matching would GRANT access — a heavier
+ * consequence than enabling a feature, and not something to change as a
+ * side-effect of this fix.
+ *
+ * Note this does change live behaviour: a lower-case `tenant.plan` rule that
+ * has never fired will start firing. That is the intent — such a rule was
+ * always meant to match — but it is a real change for any app carrying one.
+ */
+const CASE_INSENSITIVE_ATTRIBUTES: ReadonlySet<string> = new Set(['tenant.plan']);
+
+/** Case-fold only strings; leave every other type untouched. */
+function fold(value: unknown): unknown {
+  return typeof value === 'string' ? value.toLowerCase() : value;
+}
+
+/**
  * Evaluate a single condition against an attribute value.
  *
  * @param condition       The condition (attribute, operator, values) from the rule.
@@ -116,7 +148,15 @@ export interface Condition {
  * the consuming app.
  */
 export function evaluateCondition(condition: Condition, attributeValue: unknown): boolean {
-  const { operator, values } = condition;
+  const { operator } = condition;
+
+  // Fold both sides together, so the comparison stays symmetric no matter
+  // which side was authored in which case.
+  const caseInsensitive = CASE_INSENSITIVE_ATTRIBUTES.has(condition.attribute);
+  const values = caseInsensitive ? condition.values.map(fold) as typeof condition.values : condition.values;
+  if (caseInsensitive) {
+    attributeValue = fold(attributeValue);
+  }
 
   // exists / not_exists handle missing values specially — short-circuit first
   if (operator === 'exists') {
