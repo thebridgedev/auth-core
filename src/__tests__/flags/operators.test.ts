@@ -368,3 +368,86 @@ describe('PARITY_FIXTURE — cross-impl behavior table', () => {
     });
   }
 });
+
+describe('evaluateCondition — tenant.plan is case-insensitive (TBP-610)', () => {
+  // Reported by a consuming app that only found it by evaluating both casings
+  // by hand while wiring flags up. A mis-cased rule is not an error anywhere:
+  // `eq` was a strict `===`, so the rule never matched and the flag returned
+  // its off value — indistinguishable from a customer who has not paid.
+  //
+  // Plan-key case is arbitrary per app. The Plan schema defaults `key` to
+  // lower-case `"free"`, while a live app carries `FREE`/`PREMIUM`/
+  // `ENTERPRISE`, and `key` is immutable. A rule author cannot know which they
+  // are facing, which is why this is fixed by folding rather than by picking a
+  // canonical case.
+
+  const plan = (operator: Condition['operator'], values: Condition['values']): Condition => ({
+    attribute: 'tenant.plan',
+    operator,
+    values,
+  });
+
+  it('matches a lower-case rule against an upper-case plan key', () => {
+    // Exactly the reported case: seeded `premium-features` is
+    // `tenant.plan eq "premium"` and the plan key is `PREMIUM`.
+    expect(evaluateCondition(plan('eq', ['premium']), 'PREMIUM')).toBe(true);
+  });
+
+  it('matches an upper-case rule against a lower-case plan key', () => {
+    // The reverse must hold too, or the fix just moves which apps are broken.
+    expect(evaluateCondition(plan('eq', ['PREMIUM']), 'premium')).toBe(true);
+  });
+
+  it('matches mixed case in either position', () => {
+    expect(evaluateCondition(plan('eq', ['Enterprise']), 'ENTERPRISE')).toBe(true);
+    expect(evaluateCondition(plan('eq', ['ENTERPRISE']), 'Enterprise')).toBe(true);
+  });
+
+  it('still distinguishes genuinely different plans', () => {
+    // The negative control. Folding case must not fold meaning — without
+    // this, an implementation that always returned true would pass everything
+    // above.
+    expect(evaluateCondition(plan('eq', ['premium']), 'ENTERPRISE')).toBe(false);
+    expect(evaluateCondition(plan('neq', ['premium']), 'PREMIUM')).toBe(false);
+    expect(evaluateCondition(plan('neq', ['premium']), 'ENTERPRISE')).toBe(true);
+  });
+
+  it('applies to in / not_in, which is what people reach for as a workaround', () => {
+    // NorthWhistle worked around this with
+    // `in: ["ENTERPRISE", "enterprise", "Enterprise"]`. That must keep working,
+    // and the single-value form must now work too.
+    expect(evaluateCondition(plan('in', ['enterprise']), 'ENTERPRISE')).toBe(true);
+    expect(evaluateCondition(plan('in', ['ENTERPRISE', 'enterprise']), 'Enterprise')).toBe(true);
+    expect(evaluateCondition(plan('not_in', ['enterprise']), 'ENTERPRISE')).toBe(false);
+    expect(evaluateCondition(plan('not_in', ['free']), 'ENTERPRISE')).toBe(true);
+  });
+
+  it('applies to contains / not_contains', () => {
+    expect(evaluateCondition(plan('contains', ['ENTER']), 'enterprise')).toBe(true);
+    expect(evaluateCondition(plan('not_contains', ['ENTER']), 'enterprise')).toBe(false);
+  });
+
+  it('does NOT case-fold other string attributes', () => {
+    // Scoped on purpose. `user.role` has the same shape of trap, but roles are
+    // consistently upper-case in seeded data and making a dead role rule start
+    // matching would GRANT access — a heavier consequence than enabling a
+    // feature, and not something to change as a side-effect of this fix.
+    expect(evaluateCondition(
+      { attribute: 'user.role', operator: 'eq', values: ['owner'] },
+      'OWNER',
+    )).toBe(false);
+
+    expect(evaluateCondition(
+      { attribute: 'user.email', operator: 'eq', values: ['A@B.CO'] },
+      'a@b.co',
+    )).toBe(false);
+  });
+
+  it('leaves non-string plan values alone rather than throwing', () => {
+    // Fail-safe: the evaluator must never throw on odd input.
+    expect(() => evaluateCondition(plan('eq', [42]), 42)).not.toThrow();
+    expect(evaluateCondition(plan('eq', [42]), 42)).toBe(true);
+    expect(evaluateCondition(plan('exists', []), 'FREE')).toBe(true);
+    expect(evaluateCondition(plan('not_exists', []), undefined)).toBe(true);
+  });
+});
