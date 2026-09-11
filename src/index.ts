@@ -259,3 +259,17 @@ export {
   takeReturnTo,
   withReturnTo,
 } from './return-to.js';
+
+// TBP-630 — SDK auth message catalogue. Lives in core so bridge-svelte,
+// -react, -angular and -nextjs resolve identical copy rather than drifting
+// into four slightly different logins.
+export {
+  createTranslator,
+  hasLocale,
+  interpolate,
+  normalizeLocale,
+} from './i18n/resolver.js';
+export type { MessageOverrides, Translator } from './i18n/resolver.js';
+export { LOCALES, en, sv } from './i18n/messages.js';
+export type { MessageKey, Messages } from './i18n/messages.js';
+
