@@ -1,4 +1,5 @@
 import type { FeatureFlagService } from './feature-flag-service.js';
+import { sanitizeReturnTo } from './return-to.js';
 import { useBridge } from './billing/use-bridge.js';
 import type { Logger } from './logger.js';
 import type {
@@ -90,9 +91,56 @@ export function createRouteGuard(
     return createLoginUrl();
   }
 
-  async function getNavigationDecision(pathname: string): Promise<NavigationDecision> {
+  /**
+   * TBP-629 — decide what the visitor should be sent back to after logging in.
+   *
+   * Returns null rather than a best guess whenever the answer is not clearly
+   * safe and useful. A null here just means the consumer falls back to its
+   * `defaultRedirectRoute`, i.e. exactly the old behaviour, so failing closed
+   * costs nothing.
+   *
+   * The login route excludes itself. Without that, a visitor bounced through
+   * `/auth/login` comes back carrying `?redirectUri=/auth/login`, which either
+   * loops or strands them on a login form they have already completed — a
+   * worse outcome than the bug this is fixing.
+   */
+  function resolveReturnTo(attempted: string | null | undefined): string | null {
+    const returnToConfig = guardConfig.returnTo;
+    if (returnToConfig?.enabled === false) return null;
+
+    const safe = sanitizeReturnTo(attempted);
+    if (!safe) return null;
+
+    // Compare paths only — a query string must not let `/auth/login?x=1` slip
+    // past an exclusion written as `/auth/login`.
+    const path = safe.split('?')[0];
+
+    const loginRoute = returnToConfig?.loginRoute;
+    if (loginRoute && path === loginRoute.split('?')[0]) return null;
+
+    const excluded = returnToConfig?.exclude ?? [];
+    if (excluded.some((pattern) => toRegExp(pattern).test(path))) return null;
+
+    // A public route is never what the guard turned somebody away from, and
+    // sending them "back" to one after login is noise.
+    if (isPublicRoute(path)) return null;
+
+    return safe;
+  }
+
+  async function getNavigationDecision(
+    pathname: string,
+    attempted?: string,
+  ): Promise<NavigationDecision> {
     if (shouldRedirectToLogin(pathname)) {
-      return { type: 'login', loginUrl: getLoginRedirect() };
+      // Fall back to the bare pathname when the caller did not supply the full
+      // attempted URL, so older adapters still preserve something useful.
+      const returnTo = resolveReturnTo(attempted ?? pathname);
+      return {
+        type: 'login',
+        loginUrl: getLoginRedirect(),
+        ...(returnTo ? { returnTo } : {}),
+      };
     }
     const redirectTo = await checkRouteRestrictions(pathname);
     if (redirectTo) {
@@ -108,5 +156,6 @@ export function createRouteGuard(
     checkRouteRestrictions,
     getLoginRedirect,
     getNavigationDecision,
+    resolveReturnTo,
   };
 }

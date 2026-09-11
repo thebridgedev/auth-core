@@ -40,6 +40,7 @@ export type {
   PriceOfferSdk,
   Profile,
   ResolvedConfig,
+  ReturnToConfig,
   RouteGuard,
   RouteGuardConfig,
   RouteRule,
@@ -245,3 +246,16 @@ export type {
   BillingLockedPayload,
   MountOptions,
 } from './billing/types.js';
+
+// TBP-629 — deep-link preservation for SDK-mode route guards. Exported so a
+// consumer's login page can read the return target back with the validation
+// already applied, rather than each app reinventing the open-redirect check.
+export {
+  DEFAULT_RETURN_TO_PARAM,
+  RETURN_TO_STORAGE_KEY,
+  readReturnTo,
+  sanitizeReturnTo,
+  stashReturnTo,
+  takeReturnTo,
+  withReturnTo,
+} from './return-to.js';

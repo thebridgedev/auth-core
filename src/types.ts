@@ -233,11 +233,56 @@ export interface RouteRule {
 export interface RouteGuardConfig {
   rules: RouteRule[];
   defaultAccess?: 'public' | 'protected';
+  /**
+   * Deep-link preservation for SDK mode (TBP-629).
+   *
+   * Without this the guard sends an unauthenticated visitor to the login route
+   * and forgets what they asked for, so every protected deep link collapses to
+   * `defaultRedirectRoute` after sign-in — silently, with no error.
+   */
+  returnTo?: ReturnToConfig;
+}
+
+export interface ReturnToConfig {
+  /**
+   * Default true. Set false to keep the pre-TBP-629 behaviour, where every
+   * login lands on the app's default route regardless of what was asked for.
+   */
+  enabled?: boolean;
+  /**
+   * Query parameter carrying the attempted path. Defaults to `redirectUri`,
+   * matching hosted mode rather than inventing a second vocabulary.
+   */
+  param?: string;
+  /**
+   * Paths that must never become a return target, in addition to the login
+   * route itself (which the guard always excludes). Accepts the same
+   * string-with-`*` or RegExp forms as `RouteRule.match`.
+   *
+   * The point is to stop a bounce through an auth screen coming back as
+   * `?redirectUri=/auth/login`, which either loops or strands the visitor.
+   */
+  exclude?: (string | RegExp)[];
+  /**
+   * The app's login route, so the guard can exclude it from being its own
+   * destination. Framework adapters pass this from their own config; consumers
+   * of `createRouteGuard` directly can set it here.
+   */
+  loginRoute?: string;
 }
 
 export type NavigationDecision =
   | { type: 'allow' }
-  | { type: 'login'; loginUrl: string }
+  | {
+      type: 'login';
+      loginUrl: string;
+      /**
+       * The path+query the visitor was turned away from, sanitized and safe to
+       * navigate to, or undefined when there is nothing worth carrying (opted
+       * out, excluded, or the attempt was not supplied). TBP-629.
+       */
+      returnTo?: string;
+    }
   | { type: 'redirect'; to: string };
 
 export interface RouteGuard {
@@ -246,7 +291,14 @@ export interface RouteGuard {
   shouldRedirectToLogin(pathname: string): boolean;
   checkRouteRestrictions(pathname: string): Promise<string | null>;
   getLoginRedirect(): string;
-  getNavigationDecision(pathname: string): Promise<NavigationDecision>;
+  /**
+   * `attempted` is the full path+query the visitor asked for. Optional so the
+   * existing single-argument callers keep working unchanged; supplying it is
+   * what turns deep-link preservation on.
+   */
+  getNavigationDecision(pathname: string, attempted?: string): Promise<NavigationDecision>;
+  /** Sanitized return target for a path, or null. Exposed for adapters. */
+  resolveReturnTo(attempted: string | null | undefined): string | null;
 }
 
 /** Token storage interface — pluggable */

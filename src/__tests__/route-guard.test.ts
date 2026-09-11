@@ -35,18 +35,22 @@ function makeFeatureFlags(flags: Record<string, boolean> = {}): FeatureFlagServi
   } as unknown as FeatureFlagService;
 }
 
+const LOGIN_URL = 'https://api.example.com/auth/url/login/app1';
+
 function makeGuard(opts: {
   rules?: RouteGuardConfig['rules'];
   defaultAccess?: RouteGuardConfig['defaultAccess'];
   isAuthenticated?: boolean;
   flags?: Record<string, boolean>;
+  returnTo?: RouteGuardConfig['returnTo'];
 }) {
   const guardConfig: RouteGuardConfig = {
     rules: opts.rules ?? [],
     defaultAccess: opts.defaultAccess,
+    ...(opts.returnTo ? { returnTo: opts.returnTo } : {}),
   };
   const isAuthenticated = vi.fn(() => opts.isAuthenticated ?? false);
-  const createLoginUrl = vi.fn((_opts?: { redirectUri?: string }) => 'https://api.example.com/auth/url/login/app1');
+  const createLoginUrl = vi.fn((_opts?: { redirectUri?: string }) => LOGIN_URL);
   const featureFlags = makeFeatureFlags(opts.flags ?? {});
 
   const guard = createRouteGuard(
@@ -352,6 +356,220 @@ describe('createRouteGuard', () => {
       const url = guard.getLoginRedirect();
       expect(createLoginUrl).toHaveBeenCalled();
       expect(typeof url).toBe('string');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // resolveReturnTo — deep-link preservation
+  // -------------------------------------------------------------------------
+
+  // Regression: the guard dropped the attempted URL, so an emailed deep link to
+  // a protected page "just logged you into the system" (TBP-629).
+  describe('resolveReturnTo (TBP-629)', () => {
+    const DEEP_LINK = '/incident-exported-file/KEY/IV/incident/123';
+
+    it('returns the attempted path with its query intact', () => {
+      const { guard } = makeGuard({ rules: [], defaultAccess: 'protected' });
+      expect(guard.resolveReturnTo(`${DEEP_LINK}?tab=files`)).toBe(`${DEEP_LINK}?tab=files`);
+    });
+
+    it('returns null when returnTo is disabled, and the path when it is not', () => {
+      const disabled = makeGuard({
+        rules: [],
+        defaultAccess: 'protected',
+        returnTo: { enabled: false },
+      });
+      expect(disabled.guard.resolveReturnTo(DEEP_LINK)).toBeNull();
+
+      // Same input, same guard shape, opt-out removed — proves the null above
+      // came from `enabled: false` and not from something else rejecting it.
+      const enabled = makeGuard({ rules: [], defaultAccess: 'protected' });
+      expect(enabled.guard.resolveReturnTo(DEEP_LINK)).toBe(DEEP_LINK);
+    });
+
+    it('excludes the configured loginRoute, including when it carries a query', () => {
+      const { guard } = makeGuard({
+        rules: [],
+        defaultAccess: 'protected',
+        returnTo: { loginRoute: '/auth/login' },
+      });
+      expect(guard.resolveReturnTo('/auth/login')).toBeNull();
+      // Compared on path only — a query must not sneak the login route past.
+      expect(guard.resolveReturnTo('/auth/login?next=x')).toBeNull();
+      // A sibling auth path is NOT the login route and must survive.
+      expect(guard.resolveReturnTo('/auth/logout')).toBe('/auth/logout');
+    });
+
+    it('excludes paths matching a string-with-* exclude pattern', () => {
+      const { guard } = makeGuard({
+        rules: [],
+        defaultAccess: 'protected',
+        returnTo: { exclude: ['/auth/*'] },
+      });
+      expect(guard.resolveReturnTo('/auth/callback')).toBeNull();
+      expect(guard.resolveReturnTo('/auth/callback?code=1')).toBeNull();
+      expect(guard.resolveReturnTo('/app/callback')).toBe('/app/callback');
+    });
+
+    it('excludes paths matching a RegExp exclude pattern', () => {
+      const { guard } = makeGuard({
+        rules: [],
+        defaultAccess: 'protected',
+        returnTo: { exclude: [/^\/internal\//] },
+      });
+      expect(guard.resolveReturnTo('/internal/tools')).toBeNull();
+      expect(guard.resolveReturnTo('/external/tools')).toBe('/external/tools');
+    });
+
+    it('returns null for a public route but keeps a protected one', () => {
+      const { guard } = makeGuard({
+        rules: [{ match: '/marketing/*', public: true }],
+        defaultAccess: 'protected',
+      });
+      expect(guard.resolveReturnTo('/marketing/pricing')).toBeNull();
+      expect(guard.resolveReturnTo('/dashboard')).toBe('/dashboard');
+    });
+
+    it('rejects hostile attempted values but keeps same-origin paths', () => {
+      const { guard } = makeGuard({ rules: [], defaultAccess: 'protected' });
+      for (const hostile of [
+        'https://evil.test/x',
+        '//evil.test/x',
+        '/\\evil.test',
+        '/path\\back',
+        'javascript:alert(1)',
+        'relative/path',
+        '',
+        '   ',
+        null,
+        undefined,
+      ]) {
+        expect(guard.resolveReturnTo(hostile)).toBeNull();
+      }
+      expect(guard.resolveReturnTo(DEEP_LINK)).toBe(DEEP_LINK);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // getNavigationDecision — returnTo on the login decision
+  // -------------------------------------------------------------------------
+
+  describe('getNavigationDecision returnTo (TBP-629)', () => {
+    const DEEP_LINK = '/incident-exported-file/KEY/IV/incident/123';
+
+    it('carries the full attempted path+query on a protected deep link', async () => {
+      const { guard } = makeGuard({
+        rules: [],
+        defaultAccess: 'protected',
+        isAuthenticated: false,
+      });
+      const decision = await guard.getNavigationDecision(DEEP_LINK, `${DEEP_LINK}?tab=files`);
+      expect(decision).toEqual({
+        type: 'login',
+        loginUrl: LOGIN_URL,
+        returnTo: `${DEEP_LINK}?tab=files`,
+      });
+    });
+
+    it('falls back to the pathname when attempted is omitted', async () => {
+      const { guard } = makeGuard({
+        rules: [],
+        defaultAccess: 'protected',
+        isAuthenticated: false,
+      });
+      const decision = await guard.getNavigationDecision('/reports/42');
+      expect(decision).toEqual({ type: 'login', loginUrl: LOGIN_URL, returnTo: '/reports/42' });
+    });
+
+    it('omits returnTo entirely when disabled — the documented opt-out shape', async () => {
+      const disabled = makeGuard({
+        rules: [],
+        defaultAccess: 'protected',
+        isAuthenticated: false,
+        returnTo: { enabled: false },
+      });
+      const decision = await disabled.guard.getNavigationDecision(DEEP_LINK, DEEP_LINK);
+      expect(decision).toEqual({ type: 'login', loginUrl: LOGIN_URL });
+      // Byte-identical to the pre-TBP-629 shape: no extra key at all.
+      expect(Object.keys(decision).sort()).toEqual(['loginUrl', 'type']);
+
+      // The same call WITHOUT the opt-out carries the deep link.
+      const enabled = makeGuard({
+        rules: [],
+        defaultAccess: 'protected',
+        isAuthenticated: false,
+      });
+      const withReturn = await enabled.guard.getNavigationDecision(DEEP_LINK, DEEP_LINK);
+      expect(withReturn).toEqual({ type: 'login', loginUrl: LOGIN_URL, returnTo: DEEP_LINK });
+    });
+
+    it('omits returnTo when the attempt is the login route itself', async () => {
+      const { guard } = makeGuard({
+        rules: [],
+        defaultAccess: 'protected',
+        isAuthenticated: false,
+        returnTo: { loginRoute: '/auth/login' },
+      });
+      const bounced = await guard.getNavigationDecision('/auth/login', '/auth/login?next=x');
+      expect(bounced).toEqual({ type: 'login', loginUrl: LOGIN_URL });
+
+      // …while a real protected page still comes back with its return target.
+      const real = await guard.getNavigationDecision(DEEP_LINK, DEEP_LINK);
+      expect(real).toEqual({ type: 'login', loginUrl: LOGIN_URL, returnTo: DEEP_LINK });
+    });
+
+    it('never lets a hostile attempted value reach the decision', async () => {
+      const { guard } = makeGuard({
+        rules: [],
+        defaultAccess: 'protected',
+        isAuthenticated: false,
+      });
+      const hijacked = await guard.getNavigationDecision('/dashboard', 'https://evil.test/x');
+      expect(hijacked).toEqual({ type: 'login', loginUrl: LOGIN_URL });
+      expect(JSON.stringify(hijacked)).not.toContain('evil.test');
+
+      // Same pathname, safe attempt — the mechanism is alive, it just refused.
+      const honest = await guard.getNavigationDecision('/dashboard', '/dashboard?tab=1');
+      expect(honest).toEqual({
+        type: 'login',
+        loginUrl: LOGIN_URL,
+        returnTo: '/dashboard?tab=1',
+      });
+    });
+
+    it('leaves allow and redirect decisions unchanged (no returnTo key)', async () => {
+      const { guard } = makeGuard({
+        rules: [{ match: '/beta', featureFlag: 'beta-flag', redirectTo: '/home' }],
+        flags: { 'beta-flag': false },
+        isAuthenticated: true,
+        defaultAccess: 'protected',
+      });
+      expect(await guard.getNavigationDecision('/beta', '/beta?x=1')).toEqual({
+        type: 'redirect',
+        to: '/home',
+      });
+
+      const allowing = makeGuard({
+        rules: [{ match: '/dashboard', public: false }],
+        isAuthenticated: true,
+        defaultAccess: 'protected',
+      });
+      expect(await allowing.guard.getNavigationDecision('/dashboard', '/dashboard?x=1')).toEqual({
+        type: 'allow',
+      });
+    });
+
+    it('keeps the legacy single-argument caller working with a usable loginUrl', async () => {
+      const { guard, createLoginUrl } = makeGuard({
+        rules: [],
+        defaultAccess: 'protected',
+        isAuthenticated: false,
+      });
+      const decision = await guard.getNavigationDecision('/dashboard');
+      expect(decision.type).toBe('login');
+      if (decision.type !== 'login') throw new Error('expected a login decision');
+      expect(decision.loginUrl).toBe(LOGIN_URL);
+      expect(createLoginUrl).toHaveBeenCalled();
     });
   });
 });
