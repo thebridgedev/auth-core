@@ -355,6 +355,23 @@ describe('catalogue parity', () => {
     });
   }
 
+  it('keeps the click-to-start passkey copy distinct from the in-flight copy', () => {
+    // TBP-633 — react/angular/nextjs raise the browser ceremony on a click, so
+    // their setup screen sits idle until the user acts; svelte starts it on
+    // mount. `setupDescription` narrates a ceremony already running ("follow the
+    // prompt from your browser"), which is wrong on a screen where no prompt has
+    // been raised. The keys exist to say different things, so a locale that
+    // collapses them back to one sentence has undone the fix.
+    for (const name of localeNames) {
+      expect(LOCALES[name]['passkey.setupClickPrompt']).not.toBe(
+        LOCALES[name]['passkey.setupDescription'],
+      );
+      expect(LOCALES[name]['passkey.setupSubmit']).not.toBe(
+        LOCALES[name]['passkey.setupDescription'],
+      );
+    }
+  });
+
   it('keeps placeholder.phoneNumber empty in every locale', () => {
     // Regression: the US format `+1 (555) 000-0000` was shown to every European
     // workspace (TBP-630). No hint beats a wrong hint; the field has a label.
