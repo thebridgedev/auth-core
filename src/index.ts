@@ -40,6 +40,7 @@ export type {
   PriceOfferSdk,
   Profile,
   ResolvedConfig,
+  ReturnToConfig,
   RouteGuard,
   RouteGuardConfig,
   RouteRule,
@@ -245,3 +246,30 @@ export type {
   BillingLockedPayload,
   MountOptions,
 } from './billing/types.js';
+
+// TBP-629 — deep-link preservation for SDK-mode route guards. Exported so a
+// consumer's login page can read the return target back with the validation
+// already applied, rather than each app reinventing the open-redirect check.
+export {
+  DEFAULT_RETURN_TO_PARAM,
+  RETURN_TO_STORAGE_KEY,
+  readReturnTo,
+  sanitizeReturnTo,
+  stashReturnTo,
+  takeReturnTo,
+  withReturnTo,
+} from './return-to.js';
+
+// TBP-630 — SDK auth message catalogue. Lives in core so bridge-svelte,
+// -react, -angular and -nextjs resolve identical copy rather than drifting
+// into four slightly different logins.
+export {
+  createTranslator,
+  hasLocale,
+  interpolate,
+  normalizeLocale,
+} from './i18n/resolver.js';
+export type { MessageOverrides, Translator } from './i18n/resolver.js';
+export { LOCALES, en, sv } from './i18n/messages.js';
+export type { MessageKey, Messages } from './i18n/messages.js';
+
