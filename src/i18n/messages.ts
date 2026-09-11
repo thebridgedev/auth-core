@@ -126,6 +126,16 @@ export interface Messages {
   'passkey.signInNow': string;
   'passkey.requestNewLink': string;
   'passkey.setupDescription': string;
+  /**
+   * Description for a setup screen that waits for the user to click before it
+   * starts the browser ceremony (TBP-633). Distinct from
+   * `passkey.setupDescription`, which describes a ceremony ALREADY in flight —
+   * telling somebody to "follow the prompt from your browser" when no prompt
+   * has been raised yet is instructions for a thing that is not happening.
+   */
+  'passkey.setupClickPrompt': string;
+  /** Button that starts the ceremony on a click-to-start setup screen. */
+  'passkey.setupSubmit': string;
   'passkey.setupSuccessHeading': string;
   'passkey.setupSuccessDescription': string;
   'passkey.error.cancelled': string;
@@ -263,6 +273,9 @@ export const en: Messages = {
   'passkey.requestNewLink': 'Request new setup link',
   'passkey.setupDescription':
     'Follow the prompt from your browser or device to complete passkey setup.',
+  'passkey.setupClickPrompt':
+    'Create a passkey on this device and sign in without a password from now on.',
+  'passkey.setupSubmit': 'Create passkey',
   'passkey.setupSuccessHeading': 'Passkey created',
   'passkey.setupSuccessDescription': 'Your passkey has been created.',
   'passkey.error.cancelled': 'Passkey setup was cancelled.',
@@ -397,6 +410,9 @@ export const sv: Messages = {
   'passkey.requestNewLink': 'Begär en ny länk',
   'passkey.setupDescription':
     'Följ anvisningarna från din webbläsare eller enhet för att slutföra skapandet av din passkey.',
+  'passkey.setupClickPrompt':
+    'Skapa en passkey på den här enheten och logga in utan lösenord i fortsättningen.',
+  'passkey.setupSubmit': 'Skapa passkey',
   'passkey.setupSuccessHeading': 'Passkey skapad',
   'passkey.setupSuccessDescription': 'Din passkey har skapats.',
   'passkey.error.cancelled': 'Skapandet av passkey avbröts.',
