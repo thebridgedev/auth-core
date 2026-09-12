@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import {
   en,
   sv,
@@ -10,6 +10,7 @@ import {
   createTranslator,
   hasLocale,
   interpolate,
+  resetMissingLocaleWarnings,
   normalizeLocale,
 } from '../i18n/resolver.js';
 
@@ -433,6 +434,123 @@ describe('interpolated copy', () => {
       expect(catalogue['magicLink.expiryMinutes']).toContain('{count}');
       expect(catalogue['magicLink.expirySeconds']).toContain('{count}');
       expect(catalogue['mfa.resendCountdown']).toContain('{seconds}');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe('missing-locale warning (TBP-633)', () => {
+  let warnings: string[];
+  let originalWarn: typeof console.warn;
+
+  beforeEach(() => {
+    resetMissingLocaleWarnings();
+    warnings = [];
+    originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.join(' '));
+    };
+  });
+
+  afterEach(() => {
+    console.warn = originalWarn;
+    resetMissingLocaleWarnings();
+  });
+
+  it('warns that an unknown locale fell back, naming what IS available', () => {
+    createTranslator({ locale: 'de' });
+
+    expect(warnings).toHaveLength(1);
+    // The three facts a reader needs: which locale, what happened, what to do.
+    expect(warnings[0]).toContain('"de"');
+    expect(warnings[0]).toContain('falling back to English');
+    expect(warnings[0]).toContain('en, sv');
+  });
+
+  it('still renders English — the warning does not change what the user sees', () => {
+    // The whole point of warning instead of throwing or rendering keys: the
+    // person signing in is unaffected.
+    const t = createTranslator({ locale: 'de' });
+    expect(t('login.submit')).toBe(en['login.submit']);
+  });
+
+  it('warns ONCE per locale, however many translators are built', () => {
+    // React rebuilds a translator every render and the Angular binding builds
+    // one per key per change-detection pass. Undeduplicated this is thousands of
+    // identical lines behind one login form.
+    for (let i = 0; i < 500; i++) createTranslator({ locale: 'de' });
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('warns separately for each distinct unknown locale', () => {
+    createTranslator({ locale: 'de' });
+    createTranslator({ locale: 'fr' });
+    createTranslator({ locale: 'de' });
+
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toContain('"de"');
+    expect(warnings[1]).toContain('"fr"');
+  });
+
+  it('says nothing for a locale that exists', () => {
+    createTranslator({ locale: 'sv' });
+    createTranslator({ locale: 'en' });
+    expect(warnings).toEqual([]);
+  });
+
+  it('says nothing for a region variant that resolves', () => {
+    // sv-SE → sv is a hit, not a fallback. Warning here would train people to
+    // ignore the warning.
+    const t = createTranslator({ locale: 'sv-SE' });
+    expect(t('login.submit')).toBe(sv['login.submit']);
+    expect(warnings).toEqual([]);
+  });
+
+  it('says nothing when no locale is requested at all', () => {
+    // Omitting `locale` is not a mistake — it is the documented default.
+    createTranslator();
+    createTranslator({ messages: { 'login.submit': 'x' } });
+    expect(warnings).toEqual([]);
+  });
+
+  it('warns once per missing key in a runtime-built catalogue, and renders English', () => {
+    // Not reachable through the shipped catalogues — `Messages` requires every
+    // key — but it is the case where the fallback is genuinely partial.
+    const partial = { 'login.submit': 'Logga in' } as unknown as Messages;
+    (LOCALES as Record<string, Messages>).partialtest = partial;
+    try {
+      const t = createTranslator({ locale: 'partialtest' });
+      expect(t('login.submit')).toBe('Logga in');
+      expect(warnings).toEqual([]);
+
+      expect(t('login.heading')).toBe(en['login.heading']);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('"login.heading"');
+
+      t('login.heading');
+      expect(warnings).toHaveLength(1);
+    } finally {
+      delete (LOCALES as Record<string, Messages>).partialtest;
+    }
+  });
+
+  it('does not warn for a per-key override — that is the documented escape hatch', () => {
+    const t = createTranslator({ messages: { 'login.submit': 'Anything' } });
+    expect(t('login.submit')).toBe('Anything');
+    expect(warnings).toEqual([]);
+  });
+
+  it('stays silent in a production build', () => {
+    // A warning nobody is reading is noise in a real user's console. Matches
+    // react-intl / vue-i18n / i18next, which all go quiet in prod.
+    const previous = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      createTranslator({ locale: 'de' });
+      expect(warnings).toEqual([]);
+    } finally {
+      process.env.NODE_ENV = previous;
     }
   });
 });
