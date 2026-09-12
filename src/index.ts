@@ -268,6 +268,7 @@ export {
   hasLocale,
   interpolate,
   normalizeLocale,
+  resetMissingLocaleWarnings,
 } from './i18n/resolver.js';
 export type { MessageOverrides, Translator } from './i18n/resolver.js';
 export { LOCALES, en, sv } from './i18n/messages.js';
