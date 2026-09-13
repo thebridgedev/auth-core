@@ -271,6 +271,6 @@ export {
   resetMissingLocaleWarnings,
 } from './i18n/resolver.js';
 export type { MessageOverrides, Translator } from './i18n/resolver.js';
-export { LOCALES, en, sv } from './i18n/messages.js';
+export { LOCALES, da, de, en, es, fi, fr, it, nb, nl, pl, pt, sv } from './i18n/messages.js';
 export type { MessageKey, Messages } from './i18n/messages.js';
 

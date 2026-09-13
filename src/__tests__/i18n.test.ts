@@ -1,6 +1,16 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import {
+  da,
+  de,
   en,
+  es,
+  fi,
+  fr,
+  it as itLocale,
+  nb,
+  nl,
+  pl,
+  pt,
   sv,
   LOCALES,
   type MessageKey,
@@ -55,6 +65,43 @@ const EMAIL_INTERPOLATED: MessageKey[] = [
 ];
 
 const ALL_KEYS = Object.keys(en) as MessageKey[];
+
+/**
+ * Every catalogue the package claims to ship, named individually.
+ *
+ * Deliberately NOT `Object.entries(LOCALES)`: the point of these tests is to
+ * catch a locale that was exported but never registered, or registered under
+ * the wrong key. Derived from LOCALES they would agree with themselves.
+ *
+ * `it` collides with vitest's `it`, hence the alias on the import.
+ */
+const SHIPPED: Record<string, Messages> = {
+  da,
+  de,
+  en,
+  es,
+  fi,
+  fr,
+  it: itLocale,
+  nb,
+  nl,
+  pl,
+  pt,
+  sv,
+};
+
+/**
+ * Two codes that are NOT in `LOCALES`, used everywhere a test needs "a locale
+ * the package does not have".
+ *
+ * They are invented rather than real-but-unshipped (`de`, `fr`) on purpose:
+ * TBP-632 shipped ten more languages and every test that had borrowed a real
+ * code as its stand-in for "unknown" started failing, because the stand-in had
+ * become known. An invented code cannot be overtaken by the next locale.
+ * `assertUnshipped` below fails loudly if one ever is.
+ */
+const UNSHIPPED_A = 'klingon';
+const UNSHIPPED_B = 'dothraki';
 
 /** Locale name registered by tests that need a deliberately incomplete catalogue. */
 const SYNTHETIC = 'zz';
@@ -178,12 +225,12 @@ describe('createTranslator — missing key in a known locale', () => {
 
 describe('createTranslator — unknown locale', () => {
   const UNKNOWN: Array<{ label: string; locale: string | null | undefined }> = [
-    { label: 'klingon', locale: 'klingon' },
+    { label: 'an invented language', locale: UNSHIPPED_A },
     { label: 'empty string', locale: '' },
     { label: 'null', locale: null },
     { label: 'undefined', locale: undefined },
     { label: 'whitespace', locale: '   ' },
-    { label: 'region of an unknown language', locale: 'de-AT' },
+    { label: 'region of an unknown language', locale: `${UNSHIPPED_A}-KX` },
   ];
 
   for (const { label, locale } of UNKNOWN) {
@@ -198,7 +245,7 @@ describe('createTranslator — unknown locale', () => {
   }
 
   it('renders a full, key-free login screen for an unknown locale', () => {
-    const t = createTranslator({ locale: 'klingon' });
+    const t = createTranslator({ locale: UNSHIPPED_A });
     for (const key of ALL_KEYS) {
       expect(t(key)).toBe(en[key]);
     }
@@ -240,9 +287,9 @@ describe('normalizeLocale', () => {
 describe('hasLocale', () => {
   const KNOWN = ['en', 'sv', 'sv-SE', 'SV', 'en-GB', 'sv_FI'];
   const UNKNOWN: Array<string | null | undefined> = [
-    'klingon',
-    'de',
-    'de-AT',
+    UNSHIPPED_A,
+    UNSHIPPED_B,
+    `${UNSHIPPED_A}-KX`,
     '',
     '   ',
     null,
@@ -330,12 +377,18 @@ describe('catalogue parity', () => {
   const localeNames = Object.keys(LOCALES);
 
   it('ships the locales it claims to ship', () => {
-    expect(localeNames.sort()).toEqual(['en', 'sv']);
-    expect(LOCALES.en).toBe(en);
-    expect(LOCALES.sv).toBe(sv);
+    // TBP-632 took this from two to twelve. The list is spelled out rather than
+    // derived from LOCALES so that dropping a locale is a test failure and not
+    // a silently shorter loop.
+    expect(localeNames.slice().sort()).toEqual([
+      'da', 'de', 'en', 'es', 'fi', 'fr', 'it', 'nb', 'nl', 'pl', 'pt', 'sv',
+    ]);
+    for (const [name, catalogue] of Object.entries(SHIPPED)) {
+      expect(LOCALES[name]).toBe(catalogue);
+    }
   });
 
-  for (const name of ['en', 'sv']) {
+  for (const name of Object.keys(SHIPPED)) {
     it(`${name} has exactly the same key set as en`, () => {
       const keys = Object.keys(LOCALES[name]).sort();
       const enKeys = ALL_KEYS.slice().sort();
@@ -381,12 +434,40 @@ describe('catalogue parity', () => {
     }
   });
 
-  it('translates rather than copies: sv differs from en on most keys', () => {
-    // Parity alone would pass for `sv = { ...en }`. A real translation differs
-    // almost everywhere; the handful that legitimately match are proper nouns
-    // and formats, so demand a large majority.
-    const differing = ALL_KEYS.filter((key) => sv[key] !== en[key]);
-    expect(differing.length).toBeGreaterThan(ALL_KEYS.length * 0.8);
+  for (const name of Object.keys(SHIPPED)) {
+    if (name === 'en') continue;
+    it(`translates rather than copies: ${name} differs from en on most keys`, () => {
+      // Parity alone would pass for `de = { ...en }` — a locale that is
+      // registered, complete, type-correct and entirely untranslated. That is
+      // the exact shape a hurried tenth locale would take, so demand that the
+      // strings actually differ. The handful that legitimately match are the
+      // empty phone placeholder and, in a few languages, a unit word that is
+      // spelled the same ("{count} minute" in French).
+      const differing = ALL_KEYS.filter((key) => LOCALES[name][key] !== en[key]);
+      expect(differing.length).toBeGreaterThan(ALL_KEYS.length * 0.8);
+    });
+  }
+
+  it('the "unknown locale" fixtures really are unknown', () => {
+    // Load-bearing for every test that uses them. When locale thirteen arrives,
+    // this is the assertion that says "your new code collided with the fixture"
+    // instead of six unrelated tests failing for a reason nobody can read.
+    for (const code of [UNSHIPPED_A, UNSHIPPED_B]) {
+      expect(localeNames).not.toContain(code);
+      expect(hasLocale(code)).toBe(false);
+    }
+  });
+
+  it('does not ship the same catalogue twice under two names', () => {
+    // Two locales that are string-for-string identical means one of them was
+    // pasted and never translated.
+    const seen = new Map<string, string>();
+    for (const name of localeNames) {
+      const fingerprint = ALL_KEYS.map((key) => LOCALES[name][key]).join('\u0000');
+      const previous = seen.get(fingerprint);
+      expect(previous, `${name} is identical to ${previous}`).toBeUndefined();
+      seen.set(fingerprint, name);
+    }
   });
 
   it('never renders a raw key, in any locale, known or unknown', () => {
@@ -409,7 +490,7 @@ describe('catalogue parity', () => {
 
 describe('interpolated copy', () => {
   for (const key of EMAIL_INTERPOLATED) {
-    for (const name of ['en', 'sv']) {
+    for (const name of Object.keys(SHIPPED)) {
       it(`${name} keeps {email} in ${key}`, () => {
         expect(LOCALES[name][key]).toContain('{email}');
       });
@@ -459,19 +540,24 @@ describe('missing-locale warning (TBP-633)', () => {
   });
 
   it('warns that an unknown locale fell back, naming what IS available', () => {
-    createTranslator({ locale: 'de' });
+    createTranslator({ locale: UNSHIPPED_A });
 
     expect(warnings).toHaveLength(1);
     // The three facts a reader needs: which locale, what happened, what to do.
-    expect(warnings[0]).toContain('"de"');
+    expect(warnings[0]).toContain(`"${UNSHIPPED_A}"`);
     expect(warnings[0]).toContain('falling back to English');
-    expect(warnings[0]).toContain('en, sv');
+    // The "what to do" half is the list of real locales — and it has to be the
+    // CURRENT list, not a snapshot, or it stops being actionable the moment a
+    // locale is added.
+    for (const name of Object.keys(SHIPPED)) {
+      expect(warnings[0]).toContain(name);
+    }
   });
 
   it('still renders English — the warning does not change what the user sees', () => {
     // The whole point of warning instead of throwing or rendering keys: the
     // person signing in is unaffected.
-    const t = createTranslator({ locale: 'de' });
+    const t = createTranslator({ locale: UNSHIPPED_A });
     expect(t('login.submit')).toBe(en['login.submit']);
   });
 
@@ -479,18 +565,18 @@ describe('missing-locale warning (TBP-633)', () => {
     // React rebuilds a translator every render and the Angular binding builds
     // one per key per change-detection pass. Undeduplicated this is thousands of
     // identical lines behind one login form.
-    for (let i = 0; i < 500; i++) createTranslator({ locale: 'de' });
+    for (let i = 0; i < 500; i++) createTranslator({ locale: UNSHIPPED_A });
     expect(warnings).toHaveLength(1);
   });
 
   it('warns separately for each distinct unknown locale', () => {
-    createTranslator({ locale: 'de' });
-    createTranslator({ locale: 'fr' });
-    createTranslator({ locale: 'de' });
+    createTranslator({ locale: UNSHIPPED_A });
+    createTranslator({ locale: UNSHIPPED_B });
+    createTranslator({ locale: UNSHIPPED_A });
 
     expect(warnings).toHaveLength(2);
-    expect(warnings[0]).toContain('"de"');
-    expect(warnings[1]).toContain('"fr"');
+    expect(warnings[0]).toContain(`"${UNSHIPPED_A}"`);
+    expect(warnings[1]).toContain(`"${UNSHIPPED_B}"`);
   });
 
   it('says nothing for a locale that exists', () => {
@@ -547,7 +633,7 @@ describe('missing-locale warning (TBP-633)', () => {
     const previous = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
     try {
-      createTranslator({ locale: 'de' });
+      createTranslator({ locale: UNSHIPPED_A });
       expect(warnings).toEqual([]);
     } finally {
       process.env.NODE_ENV = previous;
