@@ -75,6 +75,15 @@ export interface RealtimeClientConfig {
    */
   docsBaseUrl?: string;
   /**
+   * Tell Bridge how this app's realtime connection is doing, so the admin UI
+   * can show per-app live-update health (TBP-645). Fire-and-forget
+   * `POST <apiBaseUrl>/account/auth/realtime-status` with `x-app-id`, sent
+   * when the connection opens (at most once per 10 minutes) and once per
+   * refused/degraded episode. Never awaited, never throws, carries no token.
+   * Default true; set false to opt out.
+   */
+  reportStatus?: boolean;
+  /**
    * Optional logger. Defaults to a non-debug logger, which still emits
    * `error` — deliberate: a rejected subscription means realtime is silently
    * dead, and that must not require debug mode to notice (TBP-575).
@@ -348,6 +357,20 @@ const DIAGNOSE_TIMEOUT_MS = 5_000;
 /** While parked in 'unauthorized', how often to look for a new token. */
 const PARKED_TOKEN_CHECK_MS = 5_000;
 
+/** Healthy connections are reported at most this often (TBP-645). */
+const STATUS_REPORT_OPEN_INTERVAL_MS = 10 * 60_000;
+
+/** Cap on a status report — it is telemetry, it must not linger. */
+const STATUS_REPORT_TIMEOUT_MS = 3_000;
+
+/** What a status report carries — `RealtimeStatus` minus the client-local fields. */
+interface StatusReport {
+  state: ConnectionState;
+  reason?: string;
+  side?: RealtimeStatus['side'];
+  ref?: string;
+}
+
 /** Who owns a refusal — see RealtimeStatus.side. */
 type RefusalSide = 'app' | 'bridge' | 'config';
 
@@ -464,6 +487,8 @@ export class RealtimeClient {
   private resumeListenersInstalled = false;
   /** Runs only while parked — see startParkedTokenCheck. */
   private parkedTokenTimer?: ReturnType<typeof setInterval>;
+  /** `Date.now()` of the last 'open' report — see STATUS_REPORT_OPEN_INTERVAL_MS. */
+  private lastOpenReportAt?: number;
 
   constructor(cfg: RealtimeClientConfig) {
     const defaultWs = ((url: string, protocols?: string | string[]) =>
@@ -487,6 +512,7 @@ export class RealtimeClient {
       refreshAuthToken: cfg.refreshAuthToken,
       diagnose: cfg.diagnose !== false,
       docsBaseUrl: cfg.docsBaseUrl ?? REALTIME_DOCS_BASE_URL,
+      reportStatus: cfg.reportStatus !== false,
       logger: cfg.logger ?? createLogger(false),
     };
     this.reconnectDelayMs = this.cfg.reconnectBaseMs;
@@ -1168,7 +1194,9 @@ export class RealtimeClient {
     // The transport did come back; degraded has its own error log above, so a
     // pending "restored" line would be misleading — drop the episode quietly.
     this.episode = undefined;
+    const alreadyDegraded = this.state === 'degraded';
     this.setState('degraded');
+    if (!alreadyDegraded) this.sendStatusReport({ state: 'degraded', reason: 'no_channel_accepted' });
     try {
       this.onDegradedHook?.();
     } catch {
@@ -1356,6 +1384,10 @@ export class RealtimeClient {
     this.episode = undefined;
     this.lastRefusalKey = undefined;
     this.setState('open');
+    const now = Date.now();
+    if (this.lastOpenReportAt === undefined || now - this.lastOpenReportAt >= STATUS_REPORT_OPEN_INTERVAL_MS) {
+      if (this.sendStatusReport({ state: 'open' })) this.lastOpenReportAt = now;
+    }
     if (ep?.kind === 'transient' && ep.logLevel) {
       const n = Math.max(ep.attempts, 1);
       this.cfg.logger[ep.logLevel](
@@ -1570,6 +1602,65 @@ export class RealtimeClient {
     }
     this.lastRefusalKey = key;
     this.cfg.logger.error(message);
+    // Reported under the same dedupe as the log: a resume (tab refocus,
+    // `online`) that ends in the identical refusal is not new health news.
+    this.sendStatusReport({ state: 'unauthorized', reason: verdict.reason, side: verdict.side, ref: ep.ref });
+  }
+
+  /**
+   * TBP-645 — fire-and-forget health report. Returns whether a report was
+   * dispatched (false when opted out, or there is no appId to attribute it
+   * to). Never awaited by the caller and never throws: this runs on the
+   * connect path, and telemetry must not be able to hurt the connection. The
+   * endpoint may not exist yet — every response, 404 included, is ignored.
+   */
+  private sendStatusReport(report: StatusReport): boolean {
+    const appId = this.cfg.appId;
+    if (!this.cfg.reportStatus || !appId || typeof this.cfg.fetchFn !== 'function') return false;
+    try {
+      void this.postStatusReport(appId, report);
+    } catch {
+      // never
+    }
+    return true;
+  }
+
+  private async postStatusReport(appId: string, report: StatusReport): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const AC = (globalThis as any).AbortController as typeof AbortController | undefined;
+      const controller = typeof AC === 'function' ? new AC() : undefined;
+      const timeout = new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          try {
+            controller?.abort();
+          } catch {
+            // ignore
+          }
+          resolve();
+        }, STATUS_REPORT_TIMEOUT_MS);
+        if ((timer as any)?.unref) (timer as any).unref();
+      });
+      const body: StatusReport = { state: report.state };
+      if (report.reason) body.reason = report.reason;
+      if (report.side) body.side = report.side;
+      if (report.ref) body.ref = report.ref;
+      // Deferred so a synchronously-throwing fetch lands in the handler too.
+      const request = Promise.resolve().then(() =>
+        this.cfg.fetchFn(`${this.cfg.apiBaseUrl}/account/auth/realtime-status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-app-id': appId },
+          body: JSON.stringify(body),
+          signal: controller?.signal,
+        }),
+      );
+      await Promise.race([request.then(noop, noop), timeout]);
+    } catch {
+      // swallowed — see sendStatusReport
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   private clearRefusal(): void {
@@ -1831,6 +1922,10 @@ function hostOf(url: string): string {
   } catch {
     return url;
   }
+}
+
+function noop(): void {
+  // intentionally empty
 }
 
 function errorText(err: unknown): string {
