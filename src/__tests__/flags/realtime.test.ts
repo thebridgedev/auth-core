@@ -222,11 +222,28 @@ describe('RealtimeClient — Centrifugo handshake', () => {
       ...CONFIG,
       fetchFn: mkFetch({
         '/realtime/config': () => ({ kind: 'centrifugo', endpoint: 'wss://x' }),
-        '/realtime/authorize': () => new Response('nope', { status: 401 }),
+        '/realtime/authorize': () => new Response('nope', { status: 500 }),
       }),
     });
     await client.start();
     expect(client.getState()).toBe('closed');
+  });
+
+  // TBP-643 — a 401/403 is a refusal, not a blip: it used to land in 'closed'
+  // and retry on backoff forever with the same token. Now it parks.
+  it('parks in unauthorized when authorize refuses (401)', async () => {
+    const client = new RealtimeClient({
+      ...CONFIG,
+      diagnose: false,
+      logger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      fetchFn: mkFetch({
+        '/realtime/config': () => ({ kind: 'centrifugo', endpoint: 'wss://x' }),
+        '/realtime/authorize': () => new Response('nope', { status: 401 }),
+      }),
+    });
+    await client.start();
+    expect(client.getState()).toBe('unauthorized');
+    expect(FakeWebSocket.instances).toHaveLength(0);
   });
 });
 
@@ -575,12 +592,14 @@ describe('RealtimeClient — AppSync Events handshake (TBP-148)', () => {
     expect(ws.url).toBe(APPSYNC_FULL);
   });
 
-  it('builds an anonymous auth header when getAuthToken is undefined (Authorization: empty, host: HTTP endpoint)', async () => {
+  it('builds an anonymous auth header when getAuthToken is undefined (Authorization: anonymous marker, host: HTTP endpoint)', async () => {
     const { ws } = await setupAppSyncOpen({ getAuthToken: undefined });
     const auth = decodeHeaderProtocol(ws.protocols);
     // AWS spec — `host` is always the HTTP endpoint, even when wss:// targets
     // the realtime endpoint. Server-side validation depends on this.
-    expect(auth).toEqual({ Authorization: '', host: APPSYNC_HTTP_HOST });
+    // TBP-643 — never '': AppSync rejects an empty Authorization before the
+    // Lambda authorizer runs, so anonymous sessions could never connect.
+    expect(auth).toEqual({ Authorization: 'anonymous', host: APPSYNC_HTTP_HOST });
   });
 
   it('builds an authenticated auth header when getAuthToken returns a JWT', async () => {
