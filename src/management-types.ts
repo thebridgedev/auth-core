@@ -158,7 +158,26 @@ export interface UserResponse {
   enabled: boolean;
   teams: string[];
   createdAt: string;
+  /**
+   * Any account activity — sign-in, token refresh, email verification or a
+   * credentials change. NOT a sign-in timestamp despite the name; use
+   * `lastSignIn` or `lastWorkspaceSignIn` for that.
+   */
   lastSeen?: string;
+  /**
+   * When the user last signed in, account-wide (TBP-612). A user who belongs to
+   * several workspaces has ONE value here, shared across all of them.
+   */
+  lastSignIn?: string;
+  /**
+   * When the user last signed in to THIS workspace (TBP-612).
+   *
+   * Separate value per workspace, so this is the field to use for a
+   * per-workspace audit trail. Token refresh does not move it. Undefined for
+   * anyone who has not signed in to this workspace since the field shipped —
+   * it is not backfilled, because the historical data does not exist.
+   */
+  lastWorkspaceSignIn?: string;
   customParams: CustomParam[];
   tenant: TenantResponse;
 }
