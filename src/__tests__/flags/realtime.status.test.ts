@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  REALTIME_ANONYMOUS_TOKEN,
   REALTIME_DOCS_BASE_URL,
   RealtimeClient,
   type RealtimeStatus,
@@ -112,6 +113,9 @@ function setup(
     refreshAuthToken?: () => Promise<string | undefined>;
     diagnose?: boolean;
     routes?: Record<string, Responder>;
+    /** Pass undefined for both to get an app-only (anonymous-capable) session. */
+    workspaceId?: string;
+    userId?: string;
   } = {},
 ) {
   const calls: Call[] = [];
@@ -122,8 +126,8 @@ function setup(
     apiBaseUrl: API,
     apiKey: 'test-api-key',
     appId: 'app-1',
-    workspaceId: 'ws-1',
-    userId: 'u-1',
+    workspaceId: 'workspaceId' in opts ? opts.workspaceId : 'ws-1',
+    userId: 'userId' in opts ? opts.userId : 'u-1',
     websocketFactory: fakeWsFactory,
     fetchFn: mkFetch(calls, { '/realtime/config': APPSYNC_CONFIG, ...opts.routes }),
     logger,
@@ -461,6 +465,122 @@ describe('resuming a parked client', () => {
     expect(client.getState()).toBe('unauthorized');
     expect(logger.error).toHaveBeenCalledTimes(1);
     expect(logger.debug).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Anonymous sessions (TBP-643 amendment, stage probe) ─────────────────────
+//
+// Stage probe: AppSync rejects an EMPTY Authorization itself, before the Lambda
+// authorizer runs — so the old `Authorization: ''` anonymous flow could never
+// connect, and the refusal it produced looked like "Bridge is broken".
+
+const ANON = { getAuthToken: () => undefined, workspaceId: undefined, userId: undefined } as const;
+
+describe('anonymous sessions', () => {
+  it("sends the 'anonymous' marker — never '' — in the connect header and every subscribe", async () => {
+    const { client } = setup({ ...ANON });
+    await client.start();
+    const ws = lastWs();
+    expect(REALTIME_ANONYMOUS_TOKEN).toBe('anonymous');
+    expect(bearer(ws)).toBe('anonymous');
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack' });
+    const subs = ws.sent.map((raw) => JSON.parse(raw)).filter((f) => f.type === 'subscribe');
+    expect(subs.map((s) => s.channel)).toEqual(['/app/app-1']);
+    for (const s of subs) expect(s.authorization.Authorization).toBe('anonymous');
+  });
+
+  it('an app-only anonymous session connects and is never parked or logged', async () => {
+    const { client, logger } = setup({ ...ANON });
+    await client.start();
+    connectOk(lastWs());
+    expect(client.getStatus()).toMatchObject({ state: 'open', retrying: false });
+    expect(client.getStatus().reason).toBeUndefined();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it("an app-only anonymous refusal is 'anonymous_refused' with before-sign-in wording, not no_token or an outage", async () => {
+    const { client, logger, calls } = setup({ ...ANON }); // diagnose → 404
+    await client.start();
+    refuse(lastWs());
+    await flush();
+
+    expect(diagnoseCalls(calls)).toHaveLength(1);
+    expect(client.getStatus()).toMatchObject({
+      state: 'unauthorized',
+      reason: 'anonymous_refused',
+      side: 'bridge',
+      docsUrl: `${REALTIME_DOCS_BASE_URL}#anonymous_refused`,
+    });
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    const msg = errorText(logger);
+    expect(msg).toContain('Live updates are unavailable before sign-in');
+    expect(msg).toContain('They start automatically once a user signs in');
+    expect(msg).not.toContain("problem on Bridge's side");
+  });
+
+  it('a diagnose verdict still wins over the anonymous fallback', async () => {
+    const { client } = setup({
+      ...ANON,
+      routes: {
+        '/realtime/diagnose': () => ({
+          status: 200,
+          body: { ok: false, reason: 'origin_not_allowed', side: 'config' },
+        }),
+      },
+    });
+    await client.start();
+    refuse(lastWs());
+    await flush();
+    expect(client.getStatus()).toMatchObject({ reason: 'origin_not_allowed', side: 'config' });
+  });
+
+  it('a parked anonymous client resumes on its own when a token first appears', async () => {
+    let current: string | undefined;
+    const { client } = setup({ ...ANON, getAuthToken: () => current, diagnose: false });
+    await client.start();
+    refuse(lastWs());
+    await flush();
+    expect(client.getState()).toBe('unauthorized');
+
+    // Nothing changes → nothing happens, however long we wait.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    // Sign-in: no reauthorize(), no online/visibility event — just a token.
+    const signedIn = bridgeToken();
+    current = signedIn;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flush();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(bearer(lastWs())).toBe(`Bearer ${signedIn}`);
+    connectOk(lastWs());
+    expect(client.getState()).toBe('open');
+  });
+
+  it('a no_token-parked client (user channels, signed out) resumes when a token first appears', async () => {
+    let current: string | undefined;
+    const { client } = setup({ getAuthToken: () => current, diagnose: false });
+    await client.start();
+    refuse(lastWs());
+    await flush();
+    expect(client.getStatus()).toMatchObject({ state: 'unauthorized', reason: 'no_token' });
+
+    current = bridgeToken();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await flush();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it('reauthorize() resumes a parked client even with the same token', async () => {
+    const { client } = setup({ diagnose: false });
+    await client.start();
+    refuse(lastWs());
+    await flush();
+    expect(client.getState()).toBe('unauthorized');
+    await client.reauthorize();
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(client.getState()).toBe('connecting');
   });
 });
 

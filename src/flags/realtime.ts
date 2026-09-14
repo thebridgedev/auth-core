@@ -88,6 +88,13 @@ export interface RealtimeClientConfig {
 export const REALTIME_DOCS_BASE_URL = 'https://thebridge.dev/docs/live-updates/troubleshooting/';
 
 /**
+ * The AppSync `Authorization` value a signed-out session presents. Must be
+ * non-empty (AppSync rejects '' before the authorizer runs) and must match
+ * what the bridge-api authorizer recognises as "no token" byte for byte.
+ */
+export const REALTIME_ANONYMOUS_TOKEN = 'anonymous';
+
+/**
  * What the realtime connection is doing right now, and — when it is not
  * working — why, whose move it is (`side`), and whether it is still trying.
  *
@@ -338,6 +345,9 @@ const SUBSCRIBE_ACK_TIMEOUT_MS = 10_000;
 /** Cap on the diagnose round-trip — a hung call must not leave us 'connecting' forever. */
 const DIAGNOSE_TIMEOUT_MS = 5_000;
 
+/** While parked in 'unauthorized', how often to look for a new token. */
+const PARKED_TOKEN_CHECK_MS = 5_000;
+
 /** Who owns a refusal — see RealtimeStatus.side. */
 type RefusalSide = 'app' | 'bridge' | 'config';
 
@@ -452,6 +462,8 @@ export class RealtimeClient {
   /** A socket we closed on purpose (setUserId & co.) — its close is not a fault. */
   private expectedCloseWs?: WebSocketLike;
   private resumeListenersInstalled = false;
+  /** Runs only while parked — see startParkedTokenCheck. */
+  private parkedTokenTimer?: ReturnType<typeof setInterval>;
 
   constructor(cfg: RealtimeClientConfig) {
     const defaultWs = ((url: string, protocols?: string | string[]) =>
@@ -792,7 +804,7 @@ export class RealtimeClient {
       this.ws = undefined;
     }
     this.episode = undefined;
-    this.refusal = undefined;
+    this.clearRefusal();
     this.setState('closed');
   }
 
@@ -928,8 +940,10 @@ export class RealtimeClient {
    *     `appsync-events.adapter.ts:87` and `appsync-authorizer.handler.ts:59`).
    *
    * Anonymous flow: `getAuthToken()` returns undefined → Authorization sent as
-   * empty string. The Lambda authorizer accepts that only for `app:<appId>`
-   * channels whose origin matches the app's allowedOrigins (demo path).
+   * the marker `REALTIME_ANONYMOUS_TOKEN` (see buildAppSyncAuthHeader for why
+   * it can't be empty). The Lambda authorizer treats exactly that value as "no
+   * token": CONNECT allowed, `app:<appId>` channels origin-checked against the
+   * app's allowedOrigins, everything else denied `no_token`.
    */
   private openAppSyncWebSocket(endpoint: string, channels: string[]): void {
     const { url, httpHost } = normalizeAppSyncEndpoint(endpoint);
@@ -1458,15 +1472,25 @@ export class RealtimeClient {
       verdict = await this.diagnoseRefusal(token, channels, ep.ref);
       if (this.episode !== ep || this.stopped) return;
     }
-    // The token is Bridge-issued, unexpired, and for this environment and app,
-    // yet it was refused — that is Bridge's problem, not the app's.
-    this.enterUnauthorized(token, verdict ?? { reason: 'refused', side: 'bridge' }, ep);
+    // Nothing explained it. With a token: Bridge-issued, unexpired, right
+    // environment and app, yet refused — Bridge's problem, not the app's.
+    // Without one: the server would not take an anonymous connect (e.g. an
+    // authorizer that predates the anonymous marker). That is not a fault in
+    // the app either, but "a problem on Bridge's side" would send developers
+    // chasing an outage — it gets its own reason and wording, and the parked
+    // client resumes as soon as a user signs in.
+    const fallback: RefusalVerdict = token
+      ? { reason: 'refused', side: 'bridge' }
+      : { reason: 'anonymous_refused', side: 'bridge' };
+    this.enterUnauthorized(token, verdict ?? fallback, ep);
   }
 
   /** Explain a refusal from the token alone. Decodes without verifying — this is diagnosis, not auth. */
   private precheckToken(token: string | undefined, channels: string[]): RefusalVerdict | undefined {
     if (!token) {
-      // Anonymous sessions may subscribe to `app:<id>` only; anything else needs a user.
+      // Anonymous is a legitimate state for app-only channels (`app:<id>`).
+      // It is only a fault when a channel needs a user — workspace, user,
+      // integration: anything that is not `app:`.
       return channels.some((c) => !c.startsWith('app:'))
         ? { reason: 'no_token', side: 'app' }
         : undefined;
@@ -1518,8 +1542,8 @@ export class RealtimeClient {
       ]);
       if (!res.ok) return undefined;
       const body = (await res.json()) as { ok?: unknown; reason?: unknown; side?: unknown };
-      // Bridge says the token is fine, yet the connection was refused.
-      if (body?.ok === true) return { reason: 'refused', side: 'bridge' };
+      // Bridge sees nothing wrong — no verdict; the caller's fallback applies.
+      if (body?.ok === true) return undefined;
       const reason =
         typeof body?.reason === 'string' && /^[a-z0-9_]+$/.test(body.reason) ? body.reason : 'refused';
       const side: RefusalSide =
@@ -1537,6 +1561,7 @@ export class RealtimeClient {
     this.refusal = { ...verdict, token, ref: ep.ref, docsUrl };
     this.episode = undefined;
     this.setState('unauthorized');
+    this.startParkedTokenCheck();
     const message = this.formatRefusal(this.refusal);
     const key = `${token ?? ''}|${verdict.reason}|${verdict.side}`;
     if (key === this.lastRefusalKey) {
@@ -1549,6 +1574,34 @@ export class RealtimeClient {
 
   private clearRefusal(): void {
     this.refusal = undefined;
+    if (this.parkedTokenTimer) {
+      clearInterval(this.parkedTokenTimer);
+      this.parkedTokenTimer = undefined;
+    }
+  }
+
+  /**
+   * A parked client must resume when the host's token changes — most
+   * importantly when a signed-out session signs in (undefined → token).
+   * Framework SDKs only call reauthorize() when one token REPLACES another
+   * (TBP-644 fixes that), so auth-core can't rely on being told.
+   *
+   * Chosen over a `notifyAuthTokenChanged()` API because it needs no host
+   * change — the missing host call is the bug. It is cheap and bounded: it
+   * runs only while parked, calls the synchronous `getAuthToken()` getter (no
+   * network), and resumes only on a token DIFFERENT from the refused one, so
+   * an unchanged session can never turn it into a reconnect loop.
+   */
+  private startParkedTokenCheck(): void {
+    if (this.parkedTokenTimer || !this.cfg.getAuthToken) return;
+    this.parkedTokenTimer = setInterval(() => {
+      if (this.state !== 'unauthorized' || this.stopped) {
+        this.clearRefusal();
+        return;
+      }
+      if (this.currentToken() !== this.refusal?.token) void this.start();
+    }, PARKED_TOKEN_CHECK_MS);
+    if ((this.parkedTokenTimer as any)?.unref) (this.parkedTokenTimer as any).unref();
   }
 
   /**
@@ -1560,6 +1613,15 @@ export class RealtimeClient {
       '  Stopped: plan & entitlement changes, feature-flag flips, the plan-changed token refresh. They appear only after a reload.';
     const stillFine = '  Still fine: every API call your app makes.';
     const footer = `  ${r.docsUrl} · ref ${r.ref}`;
+    if (r.reason === 'anonymous_refused') {
+      return [
+        `[bridge] Live updates are unavailable before sign-in — Bridge did not accept this signed-out session's realtime connection (${r.reason}).`,
+        '  They start automatically once a user signs in. Until then, feature-flag flips appear only after a reload.',
+        stillFine,
+        '  Nothing to change in your code.',
+        footer,
+      ].join('\n');
+    }
     if (r.side === 'bridge') {
       return [
         "[bridge] Live updates are OFF — this is a problem on Bridge's side, not in your app.",
@@ -1828,15 +1890,23 @@ function normalizeAppSyncEndpoint(endpoint: string): { url: string; httpHost: st
 
 /**
  * Build the AppSync Events auth header carried in the `header-…` subprotocol
- * token. Anonymous sessions send Authorization: '' — the Lambda authorizer
- * accepts that only for `app:<appId>` channels with a passing origin check.
+ * token — and in every subscribe frame's `authorization`. This is the ONLY
+ * place the anonymous value is decided.
+ *
+ * Anonymous sessions send `Authorization: REALTIME_ANONYMOUS_TOKEN`, never ''.
+ * TBP-643 — AppSync rejects an empty Authorization itself, BEFORE the Lambda
+ * authorizer runs (`connection_error` / UnauthorizedException 401, no
+ * message), so with '' the authorizer's anonymous-CONNECT branch was
+ * unreachable and no signed-out session could ever connect. The authorizer
+ * treats exactly this marker as "no token" (app channels origin-checked,
+ * everything else denied `no_token`).
  */
 function buildAppSyncAuthHeader(
   token: string | undefined,
   host: string,
 ): { Authorization: string; host: string } {
   return {
-    Authorization: token ? `Bearer ${token}` : '',
+    Authorization: token ? `Bearer ${token}` : REALTIME_ANONYMOUS_TOKEN,
     host,
   };
 }

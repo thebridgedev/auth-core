@@ -95,7 +95,7 @@ export { TelemetryBatcher } from './telemetry.js';
 export type { TelemetryBatcherConfig } from './telemetry.js';
 
 // SDK realtime client (TBP-150)
-export { RealtimeClient, REALTIME_DOCS_BASE_URL } from './realtime.js';
+export { RealtimeClient, REALTIME_DOCS_BASE_URL, REALTIME_ANONYMOUS_TOKEN } from './realtime.js';
 export type {
   RealtimeClientConfig,
   RealtimeStatus,

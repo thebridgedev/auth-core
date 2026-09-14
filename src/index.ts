@@ -162,6 +162,7 @@ export {
   TelemetryBatcher,
   RealtimeClient,
   REALTIME_DOCS_BASE_URL,
+  REALTIME_ANONYMOUS_TOKEN,
   BRIDGE_CONTEXT_HEADER,
   serializeContext,
   deserializeContext,
