@@ -222,11 +222,28 @@ describe('RealtimeClient — Centrifugo handshake', () => {
       ...CONFIG,
       fetchFn: mkFetch({
         '/realtime/config': () => ({ kind: 'centrifugo', endpoint: 'wss://x' }),
-        '/realtime/authorize': () => new Response('nope', { status: 401 }),
+        '/realtime/authorize': () => new Response('nope', { status: 500 }),
       }),
     });
     await client.start();
     expect(client.getState()).toBe('closed');
+  });
+
+  // TBP-643 — a 401/403 is a refusal, not a blip: it used to land in 'closed'
+  // and retry on backoff forever with the same token. Now it parks.
+  it('parks in unauthorized when authorize refuses (401)', async () => {
+    const client = new RealtimeClient({
+      ...CONFIG,
+      diagnose: false,
+      logger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      fetchFn: mkFetch({
+        '/realtime/config': () => ({ kind: 'centrifugo', endpoint: 'wss://x' }),
+        '/realtime/authorize': () => new Response('nope', { status: 401 }),
+      }),
+    });
+    await client.start();
+    expect(client.getState()).toBe('unauthorized');
+    expect(FakeWebSocket.instances).toHaveLength(0);
   });
 });
 
