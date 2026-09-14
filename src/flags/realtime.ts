@@ -55,11 +55,76 @@ export interface RealtimeClientConfig {
    */
   getAuthToken?: () => string | undefined;
   /**
+   * The host SDK's token refresh (TBP-643). Called at most once per refused
+   * connection episode; must resolve to the NEW access token (or undefined if
+   * the session could not be refreshed). The client reconnects immediately
+   * with the returned token instead of waiting out the backoff.
+   *
+   * Without it, a refused session is diagnosed and parked in `'unauthorized'`
+   * until `reauthorize()` is called or the token changes.
+   */
+  refreshAuthToken?: () => Promise<string | undefined>;
+  /**
+   * When a refusal can't be explained client-side, ask Bridge why — once per
+   * episode — via `POST <apiBaseUrl>/realtime/diagnose`. Default true.
+   */
+  diagnose?: boolean;
+  /**
+   * Base URL of the realtime error docs; each reason is an anchor on it.
+   * Default {@link REALTIME_DOCS_BASE_URL}.
+   */
+  docsBaseUrl?: string;
+  /**
+   * Tell Bridge how this app's realtime connection is doing, so the admin UI
+   * can show per-app live-update health (TBP-645). Fire-and-forget
+   * `POST <apiBaseUrl>/account/auth/realtime-status` with `x-app-id`, sent
+   * when the connection opens (at most once per 10 minutes) and once per
+   * refused/degraded episode. Never awaited, never throws, carries no token.
+   * Default true; set false to opt out.
+   */
+  reportStatus?: boolean;
+  /**
    * Optional logger. Defaults to a non-debug logger, which still emits
    * `error` — deliberate: a rejected subscription means realtime is silently
    * dead, and that must not require debug mode to notice (TBP-575).
    */
   logger?: Logger;
+}
+
+// TBP-643 — single place to repoint the docs the terminal messages link to.
+// Links render as `<base>#<reason>`, so every reason code we emit is an anchor
+// on that page — keep codes lowercase_with_underscores.
+export const REALTIME_DOCS_BASE_URL = 'https://thebridge.dev/docs/live-updates/troubleshooting/';
+
+/**
+ * The AppSync `Authorization` value a signed-out session presents. Must be
+ * non-empty (AppSync rejects '' before the authorizer runs) and must match
+ * what the bridge-api authorizer recognises as "no token" byte for byte.
+ */
+export const REALTIME_ANONYMOUS_TOKEN = 'anonymous';
+
+/**
+ * What the realtime connection is doing right now, and — when it is not
+ * working — why, whose move it is (`side`), and whether it is still trying.
+ *
+ * `side` exists because the same symptom ("no live updates") has owners who
+ * need opposite actions: `app` = the host app's session/token handling,
+ * `config` = the app's Bridge settings disagree with the session, `bridge` =
+ * Bridge refused a token that checks out (nothing to change in the app),
+ * `network` = transient transport trouble the client is retrying through.
+ */
+export interface RealtimeStatus {
+  state: ConnectionState;
+  /** Machine-readable reason, also the anchor on `docsUrl`. */
+  reason?: string;
+  side?: 'app' | 'bridge' | 'config' | 'network';
+  /** True while the client will keep trying on its own. */
+  retrying: boolean;
+  docsUrl?: string;
+  /** Per-episode correlation id — also sent to Bridge as `x-bridge-realtime-ref`. */
+  ref?: string;
+  /** `Date.now()` at the last state/reason change. */
+  since: number;
 }
 
 /** Minimal WebSocket surface the client uses. */
@@ -276,14 +341,86 @@ export interface FlagChange {
  * Before this state existed such a connection reported `open`, which is how a
  * dead realtime transport passed for healthy in production for months.
  */
-export type ConnectionState = 'idle' | 'connecting' | 'open' | 'degraded' | 'closed';
+//
+// `unauthorized` (TBP-643) means Bridge refused this session's connection and
+// the client has STOPPED retrying: reconnecting with the same token can only
+// be refused again, and doing it on a backoff loop is how a stage app logged
+// the same refusal 101 times without ever saying why.
+export type ConnectionState = 'idle' | 'connecting' | 'open' | 'degraded' | 'closed' | 'unauthorized';
 
 /** How long to wait for a subscribe ack before declaring the connection deaf. */
 const SUBSCRIBE_ACK_TIMEOUT_MS = 10_000;
 
+/** Cap on the diagnose round-trip — a hung call must not leave us 'connecting' forever. */
+const DIAGNOSE_TIMEOUT_MS = 5_000;
+
+/** While parked in 'unauthorized', how often to look for a new token. */
+const PARKED_TOKEN_CHECK_MS = 5_000;
+
+/** Healthy connections are reported at most this often (TBP-645). */
+const STATUS_REPORT_OPEN_INTERVAL_MS = 10 * 60_000;
+
+/** Cap on a status report — it is telemetry, it must not linger. */
+const STATUS_REPORT_TIMEOUT_MS = 3_000;
+
+/** What a status report carries — `RealtimeStatus` minus the client-local fields. */
+interface StatusReport {
+  state: ConnectionState;
+  reason?: string;
+  side?: RealtimeStatus['side'];
+  ref?: string;
+}
+
+/** Who owns a refusal — see RealtimeStatus.side. */
+type RefusalSide = 'app' | 'bridge' | 'config';
+
+interface RefusalVerdict {
+  reason: string;
+  side: RefusalSide;
+  /** wrong_environment: the token's issuer. */
+  tokenIssuer?: string;
+  /** wrong_app: the token's `aid`. */
+  tokenAppId?: string;
+}
+
+/**
+ * One run of trouble, from the first failure to recovery (or to parking in
+ * 'unauthorized'). Logging is keyed to episodes, not attempts: the developer
+ * hears once that something broke and once that it recovered.
+ */
+interface FaultEpisode {
+  kind: 'transient' | 'auth';
+  ref: string;
+  /** Reconnect attempts fired during this episode. */
+  attempts: number;
+  /** transient: the cause; auth: placeholder until a verdict lands. */
+  reason: string;
+  /** transient: the level the start was logged at — recovery logs at the same level. */
+  logLevel?: 'error' | 'warn';
+  refreshed: boolean;
+  diagnosed: boolean;
+}
+
+interface Refusal extends RefusalVerdict {
+  /** The token that was refused — a later start() with the same one stays parked. */
+  token: string | undefined;
+  ref: string;
+  docsUrl: string;
+}
+
+/** Centrifugo `/realtime/authorize` answered 401/403 — a refusal, not a blip. */
+class RealtimeAuthRefusedError extends Error {
+  constructor(readonly status: number) {
+    super(`realtime authorize refused: ${status}`);
+  }
+}
+
 export class RealtimeClient {
   private readonly cfg: Required<
-    Omit<RealtimeClientConfig, 'appId' | 'workspaceId' | 'userId' | 'websocketFactory' | 'fetchFn' | 'getAuthToken'>
+    Omit<
+      RealtimeClientConfig,
+      'appId' | 'workspaceId' | 'userId' | 'websocketFactory' | 'fetchFn' | 'getAuthToken' | 'refreshAuthToken'
+    >
   > & {
     appId?: string;
     workspaceId?: string;
@@ -291,6 +428,7 @@ export class RealtimeClient {
     websocketFactory: (url: string, protocols?: string | string[]) => WebSocketLike;
     fetchFn: typeof fetch;
     getAuthToken: (() => string | undefined) | undefined;
+    refreshAuthToken: (() => Promise<string | undefined>) | undefined;
   };
   private ws?: WebSocketLike;
   private state: ConnectionState = 'idle';
@@ -324,6 +462,33 @@ export class RealtimeClient {
   private ackedChannels = new Set<string>();
   private failedChannels = new Map<string, string>();
   private subscribeAckTimer?: ReturnType<typeof setTimeout>;
+  // ── Fault reporting (TBP-643) ─────────────────────────────────────────────
+  private status: RealtimeStatus;
+  private onStatusChangeHook?: (status: RealtimeStatus) => void;
+  /** The current run of trouble, if any — see FaultEpisode. */
+  private episode?: FaultEpisode;
+  /** Set while parked in 'unauthorized'. */
+  private refusal?: Refusal;
+  /**
+   * token|reason|side of the last refusal we logged. A resume (tab refocus,
+   * `online`) that ends in the identical refusal is the same news — it goes
+   * to debug, not another console error.
+   */
+  private lastRefusalKey?: string;
+  /**
+   * Token handed back by `refreshAuthToken`, used while the host's
+   * `getAuthToken()` still returns the token it replaced (`staleToken`). Hosts
+   * may not have updated their store by the time the refresh resolves.
+   */
+  private freshToken?: string;
+  private staleToken?: string;
+  /** A socket we closed on purpose (setUserId & co.) — its close is not a fault. */
+  private expectedCloseWs?: WebSocketLike;
+  private resumeListenersInstalled = false;
+  /** Runs only while parked — see startParkedTokenCheck. */
+  private parkedTokenTimer?: ReturnType<typeof setInterval>;
+  /** `Date.now()` of the last 'open' report — see STATUS_REPORT_OPEN_INTERVAL_MS. */
+  private lastOpenReportAt?: number;
 
   constructor(cfg: RealtimeClientConfig) {
     const defaultWs = ((url: string, protocols?: string | string[]) =>
@@ -344,9 +509,32 @@ export class RealtimeClient {
       websocketFactory: cfg.websocketFactory ?? defaultWs,
       fetchFn: cfg.fetchFn ?? ((typeof fetch !== 'undefined' ? fetch : undefined) as typeof fetch),
       getAuthToken: cfg.getAuthToken,
+      refreshAuthToken: cfg.refreshAuthToken,
+      diagnose: cfg.diagnose !== false,
+      docsBaseUrl: cfg.docsBaseUrl ?? REALTIME_DOCS_BASE_URL,
+      reportStatus: cfg.reportStatus !== false,
       logger: cfg.logger ?? createLogger(false),
     };
     this.reconnectDelayMs = this.cfg.reconnectBaseMs;
+    this.status = { state: 'idle', retrying: false, since: Date.now() };
+  }
+
+  /**
+   * Current connection status with the reason, whose side a fault is on, and
+   * whether the client is still retrying (TBP-643). `getState()` is the same
+   * `state` without the explanation.
+   */
+  getStatus(): RealtimeStatus {
+    return { ...this.status };
+  }
+
+  /**
+   * Register a hook fired on every status change (state, reason, side or
+   * retrying). Use it to drive a "live updates off" indicator. Hook errors are
+   * swallowed, like every other hook here.
+   */
+  setOnStatusChange(hook: (status: RealtimeStatus) => void): void {
+    this.onStatusChangeHook = hook;
   }
 
   /** Attach to a BridgeFlags instance — flag updates auto-apply to its cache. */
@@ -496,15 +684,23 @@ export class RealtimeClient {
       this.reconnectTimer = undefined;
     }
     this.reconnectDelayMs = this.cfg.reconnectBaseMs;
+    // TBP-643 — an explicit reauthorize is the host saying "try again": it
+    // lifts a parked refusal and starts a fresh episode. An auth episode that
+    // is still in flight is deliberately NOT reset — the host calls this
+    // whenever its token changes, including after the refresh WE asked for,
+    // and resetting would re-arm that refresh and loop.
+    if (this.state === 'unauthorized') this.clearRefusal();
     if (this.ws) {
       const oldWs = this.ws;
       this.ws = undefined;
-      this.state = 'closed';
+      this.setState('closed');
       try {
         oldWs.close(1000, 'sdk.reauthorize');
       } catch {
         // ignore
       }
+    } else if (this.state === 'unauthorized') {
+      this.setState('closed');
     }
     await this.start();
   }
@@ -519,6 +715,7 @@ export class RealtimeClient {
     if (this.cfg.appId === appId) return;
     this.cfg.appId = appId;
     if (this.ws) {
+      this.expectedCloseWs = this.ws;
       this.ws.close(1000, 'sdk.setAppId');
       // onclose → scheduleReconnect → start() picks up updated channelsToSubscribe()
     }
@@ -533,6 +730,7 @@ export class RealtimeClient {
     if (this.cfg.workspaceId === workspaceId) return;
     this.cfg.workspaceId = workspaceId;
     if (this.ws) {
+      this.expectedCloseWs = this.ws;
       this.ws.close(1000, 'sdk.setWorkspaceId');
     }
   }
@@ -546,6 +744,7 @@ export class RealtimeClient {
     if (this.cfg.userId === userId) return;
     this.cfg.userId = userId;
     if (this.ws) {
+      this.expectedCloseWs = this.ws;
       this.ws.close(1000, 'sdk.setUserId');
       // onclose fires → scheduleReconnect → start() picks up updated channelsToSubscribe()
     }
@@ -554,13 +753,24 @@ export class RealtimeClient {
   /** Begin connecting. Idempotent. */
   async start(): Promise<void> {
     if (!this.cfg.enabled || this.stopped) return;
-    if (this.state !== 'idle' && this.state !== 'closed') return;
+    if (this.state === 'unauthorized') {
+      // Parked after a refusal (TBP-643). The same token would only be refused
+      // again, so a plain start() with it stays parked; a different token is
+      // a new session and gets a fresh episode.
+      if (this.currentToken() === this.refusal?.token) return;
+      this.clearRefusal();
+    } else if (this.state !== 'idle' && this.state !== 'closed') {
+      return;
+    }
 
-    this.state = 'connecting';
+    this.installResumeListeners();
+    this.setState('connecting');
     try {
       const serverConfig = await this.fetchServerConfig();
       if (serverConfig.kind === 'noop' || !serverConfig.endpoint) {
-        this.state = 'closed';
+        // Realtime is off for this workspace — nothing to retry or report.
+        this.episode = undefined;
+        this.setState('closed');
         return;
       }
       const channels = this.channelsToSubscribe();
@@ -572,15 +782,32 @@ export class RealtimeClient {
         return;
       }
       if (serverConfig.kind === 'centrifugo') {
-        const auth = await this.authorize(channels);
+        const userToken = this.currentToken();
+        let auth: AuthorizeResponse;
+        try {
+          auth = await this.authorize(channels, userToken);
+        } catch (err) {
+          // A 401/403 from /realtime/authorize is the same refusal AppSync
+          // reports as connection_error — retrying on a backoff can't fix it.
+          if (err instanceof RealtimeAuthRefusedError) {
+            await this.handleAuthRefusal(userToken, channels);
+            return;
+          }
+          throw err;
+        }
         this.openWebSocket(serverConfig.endpoint, auth);
         return;
       }
       // Unknown protocol — close cleanly so consumers don't get stuck in
       // 'connecting'. New transports must be added explicitly here.
-      this.state = 'closed';
-    } catch {
-      this.state = 'closed';
+      this.setState('closed');
+    } catch (err) {
+      this.beginTransient(
+        'setup_failed',
+        `could not reach Bridge to set up the connection (${errorText(err)})`,
+        'warn',
+      );
+      this.setState('closed');
       this.scheduleReconnect();
     }
   }
@@ -589,6 +816,7 @@ export class RealtimeClient {
   async stop(): Promise<void> {
     this.stopped = true;
     this.clearSubscribeAckTimer();
+    this.removeResumeListeners();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
@@ -601,7 +829,9 @@ export class RealtimeClient {
       }
       this.ws = undefined;
     }
-    this.state = 'closed';
+    this.episode = undefined;
+    this.clearRefusal();
+    this.setState('closed');
   }
 
   /** Read connection state. */
@@ -639,8 +869,8 @@ export class RealtimeClient {
     return (await res.json()) as RealtimeServerConfig;
   }
 
-  private async authorize(channels: string[]): Promise<AuthorizeResponse> {
-    const token = this.cfg.getAuthToken?.() ?? this.cfg.apiKey;
+  private async authorize(channels: string[], userToken: string | undefined): Promise<AuthorizeResponse> {
+    const token = userToken ?? this.cfg.apiKey;
     const res = await this.cfg.fetchFn(`${this.cfg.apiBaseUrl}/realtime/authorize`, {
       method: 'POST',
       headers: {
@@ -649,6 +879,9 @@ export class RealtimeClient {
       },
       body: JSON.stringify({ channels }),
     });
+    if (res.status === 401 || res.status === 403) {
+      throw new RealtimeAuthRefusedError(res.status);
+    }
     if (!res.ok) {
       throw new Error(`realtime authorize failed: ${res.status}`);
     }
@@ -660,7 +893,6 @@ export class RealtimeClient {
     this.ws = ws;
     ws.onopen = () => {
       if (this.ws !== ws) return;
-      this.state = 'open';
       this.reconnectDelayMs = this.cfg.reconnectBaseMs;
       // Send connect with the signed token + channels. Centrifugo expects a
       // command frame like `{ "connect": { "token": "..." }, "id": 1 }` and
@@ -671,11 +903,7 @@ export class RealtimeClient {
       } catch {
         // ignore
       }
-      try {
-        this.onOpenHook?.();
-      } catch {
-        // hook errors must not break the connection
-      }
+      this.markOpen();
     };
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return;
@@ -703,7 +931,8 @@ export class RealtimeClient {
       // reauthorize() dropping the ref before close), the late-firing onclose
       // is from a stale socket. Don't flap state or fire hooks.
       if (this.ws !== ws) return;
-      this.state = 'closed';
+      this.noteClose(ws);
+      this.setState('closed');
       try {
         this.onCloseHook?.();
       } catch {
@@ -737,8 +966,10 @@ export class RealtimeClient {
    *     `appsync-events.adapter.ts:87` and `appsync-authorizer.handler.ts:59`).
    *
    * Anonymous flow: `getAuthToken()` returns undefined → Authorization sent as
-   * empty string. The Lambda authorizer accepts that only for `app:<appId>`
-   * channels whose origin matches the app's allowedOrigins (demo path).
+   * the marker `REALTIME_ANONYMOUS_TOKEN` (see buildAppSyncAuthHeader for why
+   * it can't be empty). The Lambda authorizer treats exactly that value as "no
+   * token": CONNECT allowed, `app:<appId>` channels origin-checked against the
+   * app's allowedOrigins, everything else denied `no_token`.
    */
   private openAppSyncWebSocket(endpoint: string, channels: string[]): void {
     const { url, httpHost } = normalizeAppSyncEndpoint(endpoint);
@@ -747,7 +978,10 @@ export class RealtimeClient {
     // server-side validation uses this to verify the connection — sending
     // the realtime host instead produces a silent close 1000 right after
     // the WS upgrade succeeds.
-    const authHeader = buildAppSyncAuthHeader(this.cfg.getAuthToken?.(), httpHost);
+    // Captured once: a refusal must be diagnosed against the token that was
+    // actually presented, not whatever the host holds by the time we look.
+    const token = this.currentToken();
+    const authHeader = buildAppSyncAuthHeader(token, httpHost);
     const headerProtocol = `header-${base64urlEncode(JSON.stringify(authHeader))}`;
 
     const ws = this.cfg.websocketFactory(url, [APPSYNC_WS_PROTOCOL, headerProtocol]);
@@ -861,13 +1095,8 @@ export class RealtimeClient {
             this.ackedChannels.add(channel);
           }
           if (this.state !== 'open') {
-            this.state = 'open';
             this.clearSubscribeAckTimer();
-            try {
-              this.onOpenHook?.();
-            } catch {
-              // hook errors must not break the connection.
-            }
+            this.markOpen();
           }
           break;
         }
@@ -891,9 +1120,23 @@ export class RealtimeClient {
         }
         case 'connection_error':
         case 'error':
-          // Connection-level fault — close cleanly so onclose triggers reconnect.
-          this.cfg.logger.error(
-            `realtime: AppSync ${type} — ${describeAppSyncError(frame)}. Reconnecting.`,
+          // TBP-643 — an auth refusal is not a blip. Reconnecting with the same
+          // token can only be refused again; before this branch existed the
+          // client did exactly that on a backoff loop forever, logging a
+          // reason-less line each time. AppSync never relays the authorizer's
+          // reason, so detect by errorType/errorCode and work out the "why"
+          // ourselves (pre-checks → one refresh → one diagnose).
+          if (isAppSyncAuthRefusal(frame)) {
+            this.detachSocket(ws, `appsync:${type}`);
+            void this.handleAuthRefusal(token, channels);
+            break;
+          }
+          // Anything else is a connection-level fault worth retrying. Logged
+          // once per episode (beginTransient), not once per attempt.
+          this.beginTransient(
+            'server_error',
+            `the realtime server reported ${type}: ${describeAppSyncError(frame)}`,
+            'error',
           );
           try {
             ws.close(1011, `appsync:${type}`);
@@ -910,7 +1153,8 @@ export class RealtimeClient {
 
     ws.onclose = () => {
       if (this.ws !== ws) return;
-      this.state = 'closed';
+      this.noteClose(ws);
+      this.setState('closed');
       this.resetSubscribeTracking();
       try {
         this.onCloseHook?.();
@@ -947,7 +1191,12 @@ export class RealtimeClient {
    * polling or warn the user.
    */
   private markDegraded(): void {
-    this.state = 'degraded';
+    // The transport did come back; degraded has its own error log above, so a
+    // pending "restored" line would be misleading — drop the episode quietly.
+    this.episode = undefined;
+    const alreadyDegraded = this.state === 'degraded';
+    this.setState('degraded');
+    if (!alreadyDegraded) this.sendStatusReport({ state: 'degraded', reason: 'no_channel_accepted' });
     try {
       this.onDegradedHook?.();
     } catch {
@@ -1063,10 +1312,513 @@ export class RealtimeClient {
     if (this.reconnectTimer) return;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
-      this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, this.cfg.reconnectMaxMs);
-      void this.start();
+      this.fireReconnect();
     }, this.reconnectDelayMs);
     if ((this.reconnectTimer as any)?.unref) (this.reconnectTimer as any).unref();
+  }
+
+  private fireReconnect(): void {
+    this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, this.cfg.reconnectMaxMs);
+    if (this.episode) this.episode.attempts++;
+    void this.start();
+  }
+
+  // ── Status + fault reporting (TBP-643) ────────────────────────────────────
+
+  private setState(state: ConnectionState): void {
+    this.state = state;
+    this.publishStatus();
+  }
+
+  private publishStatus(): void {
+    const detail = this.statusDetail();
+    const prev = this.status;
+    if (
+      prev.state === this.state &&
+      prev.reason === detail.reason &&
+      prev.side === detail.side &&
+      prev.retrying === detail.retrying &&
+      prev.ref === detail.ref
+    ) {
+      return;
+    }
+    this.status = { state: this.state, ...detail, since: Date.now() };
+    if (!this.onStatusChangeHook) return;
+    try {
+      this.onStatusChangeHook({ ...this.status });
+    } catch {
+      // a consumer's indicator must never break the connection.
+    }
+  }
+
+  private statusDetail(): Omit<RealtimeStatus, 'state' | 'since'> {
+    if (this.state === 'unauthorized' && this.refusal) {
+      const r = this.refusal;
+      return { reason: r.reason, side: r.side, retrying: false, docsUrl: r.docsUrl, ref: r.ref };
+    }
+    if (this.state === 'degraded') return { reason: 'no_channel_accepted', retrying: false };
+    const ep = this.episode;
+    if (ep?.kind === 'transient') {
+      return { reason: ep.reason, side: 'network', retrying: true, ref: ep.ref };
+    }
+    // Auth episode in flight: refreshing or diagnosing — not given up yet.
+    if (ep?.kind === 'auth') return { reason: ep.reason, retrying: true, ref: ep.ref };
+    return { retrying: false };
+  }
+
+  /** The token to present — see `freshToken`. */
+  private currentToken(): string | undefined {
+    const host = this.cfg.getAuthToken?.();
+    if (this.freshToken !== undefined) {
+      if (host === this.staleToken) return this.freshToken;
+      // The host has caught up (or moved on) — its value wins from here.
+      this.freshToken = undefined;
+      this.staleToken = undefined;
+    }
+    return host;
+  }
+
+  /** The transport is usable. Closes any episode, logging recovery if we logged the fault. */
+  private markOpen(): void {
+    const ep = this.episode;
+    this.episode = undefined;
+    this.lastRefusalKey = undefined;
+    this.setState('open');
+    const now = Date.now();
+    if (this.lastOpenReportAt === undefined || now - this.lastOpenReportAt >= STATUS_REPORT_OPEN_INTERVAL_MS) {
+      if (this.sendStatusReport({ state: 'open' })) this.lastOpenReportAt = now;
+    }
+    if (ep?.kind === 'transient' && ep.logLevel) {
+      const n = Math.max(ep.attempts, 1);
+      this.cfg.logger[ep.logLevel](
+        `[bridge] Live updates restored after ${n} attempt${n === 1 ? '' : 's'}.`,
+      );
+    }
+    try {
+      this.onOpenHook?.();
+    } catch {
+      // hook errors must not break the connection.
+    }
+  }
+
+  /** Called from onclose of the CURRENT socket: an unplanned close starts a transient episode. */
+  private noteClose(ws: WebSocketLike): void {
+    if (this.expectedCloseWs === ws) {
+      this.expectedCloseWs = undefined;
+      return;
+    }
+    this.beginTransient('connection_lost', 'the realtime connection dropped', 'warn');
+  }
+
+  /**
+   * Open a transient episode if none is running, and log its start ONCE.
+   * Server-reported errors log at `error` (they used to, and they are real
+   * faults); plain drops and fetch failures log at `warn` — sleep/wake and
+   * wifi changes cause them constantly and they fix themselves, so they must
+   * not paint every end-user console red.
+   */
+  private beginTransient(reason: string, detail: string, level: 'error' | 'warn'): void {
+    if (this.episode) return;
+    const ref = newRef();
+    this.episode = {
+      kind: 'transient',
+      ref,
+      attempts: 0,
+      reason,
+      logLevel: level,
+      refreshed: false,
+      diagnosed: false,
+    };
+    this.cfg.logger[level](
+      `[bridge] Live updates interrupted — ${detail}. Retrying in the background; plan, entitlement and feature-flag changes resume when it reconnects. ref ${ref}`,
+    );
+  }
+
+  /** Drop a socket without letting its onclose schedule a reconnect. */
+  private detachSocket(ws: WebSocketLike, reason: string): void {
+    if (this.ws === ws) this.ws = undefined;
+    this.resetSubscribeTracking();
+    try {
+      ws.close(1011, reason);
+    } catch {
+      // ignore
+    }
+    try {
+      this.onCloseHook?.();
+    } catch {
+      // hook errors must not break refusal handling.
+    }
+  }
+
+  /**
+   * Bridge refused `token` (TBP-643). Policy, in order:
+   *   a. client-side pre-checks on the token — cheap, and they name the fix;
+   *   b. one host refresh + an immediate reconnect, if the host gave us a hook;
+   *   c. if still refused and the pre-checks found nothing, ask Bridge once;
+   *   d. park in 'unauthorized', stop reconnecting, log ONE message.
+   * Resumes on reauthorize(), a changed token on start(), `online`, or the
+   * tab becoming visible.
+   */
+  private async handleAuthRefusal(token: string | undefined, channels: string[]): Promise<void> {
+    if (this.stopped) return;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    let ep = this.episode;
+    if (!ep || ep.kind !== 'auth') {
+      ep = {
+        kind: 'auth',
+        ref: newRef(),
+        attempts: 0,
+        reason: 'refused',
+        refreshed: false,
+        diagnosed: false,
+      };
+      this.episode = ep;
+    }
+    this.setState('connecting');
+
+    if (this.cfg.refreshAuthToken && !ep.refreshed) {
+      ep.refreshed = true;
+      let fresh: string | undefined;
+      try {
+        fresh = await this.cfg.refreshAuthToken();
+      } catch {
+        fresh = undefined;
+      }
+      if (this.episode !== ep || this.stopped) return;
+      // Same token back = nothing to retry with; fall through to diagnosis.
+      if (fresh && fresh !== token) {
+        this.freshToken = fresh;
+        this.staleToken = this.cfg.getAuthToken?.();
+        this.setState('closed');
+        await this.start();
+        return;
+      }
+    }
+
+    let verdict = this.precheckToken(token, channels);
+    if (!verdict && this.cfg.diagnose && !ep.diagnosed) {
+      ep.diagnosed = true;
+      verdict = await this.diagnoseRefusal(token, channels, ep.ref);
+      if (this.episode !== ep || this.stopped) return;
+    }
+    // Nothing explained it. With a token: Bridge-issued, unexpired, right
+    // environment and app, yet refused — Bridge's problem, not the app's.
+    // Without one: the server would not take an anonymous connect (e.g. an
+    // authorizer that predates the anonymous marker). That is not a fault in
+    // the app either, but "a problem on Bridge's side" would send developers
+    // chasing an outage — it gets its own reason and wording, and the parked
+    // client resumes as soon as a user signs in.
+    const fallback: RefusalVerdict = token
+      ? { reason: 'refused', side: 'bridge' }
+      : { reason: 'anonymous_refused', side: 'bridge' };
+    this.enterUnauthorized(token, verdict ?? fallback, ep);
+  }
+
+  /** Explain a refusal from the token alone. Decodes without verifying — this is diagnosis, not auth. */
+  private precheckToken(token: string | undefined, channels: string[]): RefusalVerdict | undefined {
+    if (!token) {
+      // Anonymous is a legitimate state for app-only channels (`app:<id>`).
+      // It is only a fault when a channel needs a user — workspace, user,
+      // integration: anything that is not `app:`.
+      return channels.some((c) => !c.startsWith('app:'))
+        ? { reason: 'no_token', side: 'app' }
+        : undefined;
+    }
+    const claims = decodeJwtPayload(token);
+    if (!claims) return { reason: 'malformed', side: 'app' };
+    const expectedIssuer = `${this.cfg.apiBaseUrl}/auth`;
+    if (typeof claims.iss === 'string' && !claims.iss.startsWith(expectedIssuer)) {
+      return { reason: 'wrong_environment', side: 'config', tokenIssuer: claims.iss };
+    }
+    if (this.cfg.appId && typeof claims.aid === 'string' && claims.aid !== this.cfg.appId) {
+      return { reason: 'wrong_app', side: 'config', tokenAppId: claims.aid };
+    }
+    if (typeof claims.exp === 'number' && claims.exp * 1000 <= Date.now()) {
+      return { reason: 'expired', side: 'app' };
+    }
+    return undefined;
+  }
+
+  /**
+   * Ask Bridge why it refused (contract: `POST /realtime/diagnose` →
+   * `{ ok, reason, side }`, sharing the authorizer's classifier). The endpoint
+   * may not exist yet — any failure returns undefined and the caller falls
+   * back to 'refused'.
+   */
+  private async diagnoseRefusal(
+    token: string | undefined,
+    channels: string[],
+    ref: string,
+  ): Promise<RefusalVerdict | undefined> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-bridge-realtime-ref': ref,
+    };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (this.cfg.appId) headers['x-app-id'] = this.cfg.appId;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('diagnose timed out')), DIAGNOSE_TIMEOUT_MS);
+      });
+      const res = await Promise.race([
+        this.cfg.fetchFn(`${this.cfg.apiBaseUrl}/realtime/diagnose`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ channels }),
+        }),
+        timeout,
+      ]);
+      if (!res.ok) return undefined;
+      const body = (await res.json()) as { ok?: unknown; reason?: unknown; side?: unknown };
+      // Bridge sees nothing wrong — no verdict; the caller's fallback applies.
+      if (body?.ok === true) return undefined;
+      const reason =
+        typeof body?.reason === 'string' && /^[a-z0-9_]+$/.test(body.reason) ? body.reason : 'refused';
+      const side: RefusalSide =
+        body?.side === 'app' || body?.side === 'config' || body?.side === 'bridge' ? body.side : 'bridge';
+      return { reason, side };
+    } catch {
+      return undefined;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private enterUnauthorized(token: string | undefined, verdict: RefusalVerdict, ep: FaultEpisode): void {
+    const docsUrl = `${this.cfg.docsBaseUrl}#${verdict.reason}`;
+    this.refusal = { ...verdict, token, ref: ep.ref, docsUrl };
+    this.episode = undefined;
+    this.setState('unauthorized');
+    this.startParkedTokenCheck();
+    const message = this.formatRefusal(this.refusal);
+    const key = `${token ?? ''}|${verdict.reason}|${verdict.side}`;
+    if (key === this.lastRefusalKey) {
+      this.cfg.logger.debug(message);
+      return;
+    }
+    this.lastRefusalKey = key;
+    this.cfg.logger.error(message);
+    // Reported under the same dedupe as the log: a resume (tab refocus,
+    // `online`) that ends in the identical refusal is not new health news.
+    this.sendStatusReport({ state: 'unauthorized', reason: verdict.reason, side: verdict.side, ref: ep.ref });
+  }
+
+  /**
+   * TBP-645 — fire-and-forget health report. Returns whether a report was
+   * dispatched (false when opted out, or there is no appId to attribute it
+   * to). Never awaited by the caller and never throws: this runs on the
+   * connect path, and telemetry must not be able to hurt the connection. The
+   * endpoint may not exist yet — every response, 404 included, is ignored.
+   */
+  private sendStatusReport(report: StatusReport): boolean {
+    const appId = this.cfg.appId;
+    if (!this.cfg.reportStatus || !appId || typeof this.cfg.fetchFn !== 'function') return false;
+    try {
+      void this.postStatusReport(appId, report);
+    } catch {
+      // never
+    }
+    return true;
+  }
+
+  private async postStatusReport(appId: string, report: StatusReport): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const AC = (globalThis as any).AbortController as typeof AbortController | undefined;
+      const controller = typeof AC === 'function' ? new AC() : undefined;
+      const timeout = new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          try {
+            controller?.abort();
+          } catch {
+            // ignore
+          }
+          resolve();
+        }, STATUS_REPORT_TIMEOUT_MS);
+        if ((timer as any)?.unref) (timer as any).unref();
+      });
+      const body: StatusReport = { state: report.state };
+      if (report.reason) body.reason = report.reason;
+      if (report.side) body.side = report.side;
+      if (report.ref) body.ref = report.ref;
+      // Deferred so a synchronously-throwing fetch lands in the handler too.
+      const request = Promise.resolve().then(() =>
+        this.cfg.fetchFn(`${this.cfg.apiBaseUrl}/account/auth/realtime-status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-app-id': appId },
+          body: JSON.stringify(body),
+          signal: controller?.signal,
+        }),
+      );
+      await Promise.race([request.then(noop, noop), timeout]);
+    } catch {
+      // swallowed — see sendStatusReport
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private clearRefusal(): void {
+    this.refusal = undefined;
+    if (this.parkedTokenTimer) {
+      clearInterval(this.parkedTokenTimer);
+      this.parkedTokenTimer = undefined;
+    }
+  }
+
+  /**
+   * A parked client must resume when the host's token changes — most
+   * importantly when a signed-out session signs in (undefined → token).
+   * Framework SDKs only call reauthorize() when one token REPLACES another
+   * (TBP-644 fixes that), so auth-core can't rely on being told.
+   *
+   * Chosen over a `notifyAuthTokenChanged()` API because it needs no host
+   * change — the missing host call is the bug. It is cheap and bounded: it
+   * runs only while parked, calls the synchronous `getAuthToken()` getter (no
+   * network), and resumes only on a token DIFFERENT from the refused one, so
+   * an unchanged session can never turn it into a reconnect loop.
+   */
+  private startParkedTokenCheck(): void {
+    if (this.parkedTokenTimer || !this.cfg.getAuthToken) return;
+    this.parkedTokenTimer = setInterval(() => {
+      if (this.state !== 'unauthorized' || this.stopped) {
+        this.clearRefusal();
+        return;
+      }
+      if (this.currentToken() !== this.refusal?.token) void this.start();
+    }, PARKED_TOKEN_CHECK_MS);
+    if ((this.parkedTokenTimer as any)?.unref) (this.parkedTokenTimer as any).unref();
+  }
+
+  /**
+   * The one message a developer gets per refused episode. Product terms, whose
+   * side it is, what still works, one next step, a docs link and a ref.
+   */
+  private formatRefusal(r: Refusal): string {
+    const stopped =
+      '  Stopped: plan & entitlement changes, feature-flag flips, the plan-changed token refresh. They appear only after a reload.';
+    const stillFine = '  Still fine: every API call your app makes.';
+    const footer = `  ${r.docsUrl} · ref ${r.ref}`;
+    if (r.reason === 'anonymous_refused') {
+      return [
+        `[bridge] Live updates are unavailable before sign-in — Bridge did not accept this signed-out session's realtime connection (${r.reason}).`,
+        '  They start automatically once a user signs in. Until then, feature-flag flips appear only after a reload.',
+        stillFine,
+        '  Nothing to change in your code.',
+        footer,
+      ].join('\n');
+    }
+    if (r.side === 'bridge') {
+      return [
+        "[bridge] Live updates are OFF — this is a problem on Bridge's side, not in your app.",
+        `  Bridge refused this session's realtime connection (${r.reason}) although the session token checks out.`,
+        stopped,
+        stillFine,
+        `  Nothing to change in your code — include ref ${r.ref} if you contact support.`,
+        footer,
+      ].join('\n');
+    }
+    if (r.side === 'config') {
+      const apiHost = hostOf(this.cfg.apiBaseUrl);
+      let mismatch: string;
+      let fix: string;
+      if (r.reason === 'wrong_environment' && r.tokenIssuer) {
+        const tokenHost = hostOf(r.tokenIssuer);
+        mismatch = `  This app's Bridge API host is ${apiHost}, but the signed-in session's token was issued by ${tokenHost}.`;
+        fix = `  Fix: point the Bridge API base URL setting (apiBaseUrl) at ${tokenHost}, or sign users in against ${apiHost} — both must be the same environment.`;
+      } else if (r.reason === 'wrong_app' && r.tokenAppId) {
+        mismatch = `  This app is configured with app id ${this.cfg.appId}, but the signed-in session's token belongs to app ${r.tokenAppId}.`;
+        fix = `  Fix: set the appId setting to ${r.tokenAppId}, or sign users in through app ${this.cfg.appId} — both must name the same app.`;
+      } else {
+        mismatch = `  This app's Bridge settings (API host ${apiHost}${this.cfg.appId ? `, app id ${this.cfg.appId}` : ''}) don't match the signed-in session.`;
+        fix = `  Fix: correct the Bridge setting the docs entry below names for '${r.reason}'.`;
+      }
+      return [
+        `[bridge] Live updates are OFF — Bridge refused this session's realtime connection (${r.reason}): your Bridge settings don't match the session.`,
+        mismatch,
+        stopped,
+        fix,
+        footer,
+      ].join('\n');
+    }
+    return [
+      `[bridge] Live updates are OFF — Bridge refused this session's realtime connection (${r.reason}).`,
+      stopped,
+      stillFine,
+      `  Fix: ${appFix(r.reason)}.`,
+      footer,
+    ].join('\n');
+  }
+
+  // ── Resume triggers (browser only; guarded so Node/SSR never touches them) ──
+
+  private readonly onOnline = (): void => this.nudge();
+
+  private readonly onVisibilityChange = (): void => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ((globalThis as any).document?.visibilityState === 'visible') this.nudge();
+  };
+
+  private installResumeListeners(): void {
+    if (this.resumeListenersInstalled) return;
+    this.resumeListenersInstalled = true;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = globalThis as any;
+    if (typeof g.addEventListener === 'function') g.addEventListener('online', this.onOnline);
+    if (typeof g.document?.addEventListener === 'function') {
+      g.document.addEventListener('visibilitychange', this.onVisibilityChange);
+    }
+  }
+
+  private removeResumeListeners(): void {
+    if (!this.resumeListenersInstalled) return;
+    this.resumeListenersInstalled = false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = globalThis as any;
+    if (typeof g.removeEventListener === 'function') g.removeEventListener('online', this.onOnline);
+    if (typeof g.document?.removeEventListener === 'function') {
+      g.document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    }
+  }
+
+  /**
+   * The network came back or the user returned to the tab: the conditions
+   * behind a refusal may have changed (host refreshed the session, clock
+   * caught up), so a parked client gets one new episode; a client waiting out
+   * a backoff tries now instead.
+   */
+  private nudge(): void {
+    if (!this.cfg.enabled || this.stopped) return;
+    if (this.state === 'unauthorized') {
+      this.clearRefusal();
+      this.setState('closed');
+      void this.start();
+      return;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+      this.fireReconnect();
+    }
+  }
+}
+
+/** Reason-specific next step for app-side refusals. */
+function appFix(reason: string): string {
+  switch (reason) {
+    case 'no_token':
+      return "start live updates after sign-in, or pass getAuthToken so the client can read the session's access token";
+    case 'expired':
+      return 'the access token expired and was not refreshed — pass refreshAuthToken to the realtime client (the framework SDKs do this for you), or refresh the session and call reauthorize()';
+    case 'malformed':
+      return 'getAuthToken must return the Bridge access token (a JWT) — not an ID token, an API key or another string';
+    default:
+      return `see the docs entry below for what '${reason}' means for this session`;
   }
 }
 
@@ -1100,13 +1852,16 @@ function parseMessage(raw: unknown): RealtimeMessage | null {
  * months. Anything is better than nothing here, so fall back to the raw frame.
  */
 function describeAppSyncError(frame: { errors?: unknown; message?: unknown }): string {
-  const { errors, message } = frame;
-  if (Array.isArray(errors) && errors.length > 0) {
+  const { message } = frame;
+  const errors = appSyncErrors(frame);
+  if (errors.length > 0) {
     const parts = errors
       .map((e) => {
         if (typeof e === 'string') return e;
         const m = (e as { message?: unknown })?.message;
-        return typeof m === 'string' ? m : undefined;
+        if (typeof m === 'string') return m;
+        const t = (e as { errorType?: unknown })?.errorType;
+        return typeof t === 'string' ? t : undefined;
       })
       .filter((m): m is string => !!m);
     if (parts.length > 0) return parts.join('; ');
@@ -1117,6 +1872,75 @@ function describeAppSyncError(frame: { errors?: unknown; message?: unknown }): s
   } catch {
     return 'no error detail supplied by the server';
   }
+}
+
+/** AppSync puts `errors` at the top level or under `payload` — accept both. */
+function appSyncErrors(frame: { errors?: unknown; payload?: unknown }): unknown[] {
+  if (Array.isArray(frame.errors)) return frame.errors;
+  const nested = (frame.payload as { errors?: unknown } | undefined)?.errors;
+  return Array.isArray(nested) ? nested : [];
+}
+
+/**
+ * TBP-643 — is this error frame an auth refusal? AppSync Events does NOT relay
+ * the authorizer's reason and often sends no message text at all, so match on
+ * errorType / errorCode only, never on wording.
+ */
+function isAppSyncAuthRefusal(frame: { errors?: unknown; payload?: unknown }): boolean {
+  return appSyncErrors(frame).some((e) => {
+    if (!e || typeof e !== 'object') return false;
+    const { errorType, errorCode } = e as { errorType?: unknown; errorCode?: unknown };
+    if (typeof errorType === 'string' && /^unauthori[sz]ed/i.test(errorType)) return true;
+    const code = typeof errorCode === 'string' ? Number(errorCode) : errorCode;
+    return code === 401 || code === 403;
+  });
+}
+
+/** Decode a JWT payload WITHOUT verifying it. undefined = not a JWT. */
+function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
+  const parts = token.split('.');
+  if (parts.length !== 3 || !parts[1]) return undefined;
+  try {
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64 + '==='.slice((b64.length + 3) % 4);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const g = globalThis as any;
+    const json =
+      typeof g.atob === 'function'
+        ? decodeURIComponent(escape(g.atob(padded)))
+        : g.Buffer.from(padded, 'base64').toString('utf-8');
+    const claims = JSON.parse(json);
+    return claims && typeof claims === 'object' && !Array.isArray(claims) ? claims : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+function noop(): void {
+  // intentionally empty
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Short per-episode correlation id — quoted in logs, sent to Bridge on diagnose. */
+function newRef(): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const g = globalThis as any;
+  if (typeof g.crypto?.getRandomValues === 'function') {
+    const bytes = g.crypto.getRandomValues(new Uint8Array(4)) as Uint8Array;
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  return Math.random().toString(16).slice(2, 10).padEnd(8, '0');
 }
 
 /** Subprotocol identifier for AppSync Events realtime channels. */
@@ -1161,15 +1985,23 @@ function normalizeAppSyncEndpoint(endpoint: string): { url: string; httpHost: st
 
 /**
  * Build the AppSync Events auth header carried in the `header-…` subprotocol
- * token. Anonymous sessions send Authorization: '' — the Lambda authorizer
- * accepts that only for `app:<appId>` channels with a passing origin check.
+ * token — and in every subscribe frame's `authorization`. This is the ONLY
+ * place the anonymous value is decided.
+ *
+ * Anonymous sessions send `Authorization: REALTIME_ANONYMOUS_TOKEN`, never ''.
+ * TBP-643 — AppSync rejects an empty Authorization itself, BEFORE the Lambda
+ * authorizer runs (`connection_error` / UnauthorizedException 401, no
+ * message), so with '' the authorizer's anonymous-CONNECT branch was
+ * unreachable and no signed-out session could ever connect. The authorizer
+ * treats exactly this marker as "no token" (app channels origin-checked,
+ * everything else denied `no_token`).
  */
 function buildAppSyncAuthHeader(
   token: string | undefined,
   host: string,
 ): { Authorization: string; host: string } {
   return {
-    Authorization: token ? `Bearer ${token}` : '',
+    Authorization: token ? `Bearer ${token}` : REALTIME_ANONYMOUS_TOKEN,
     host,
   };
 }
