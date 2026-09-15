@@ -3,6 +3,14 @@ import { ManagementWorkflows } from '../../management/workflows.js';
 import type { AppManagementService } from '../../management/app.service.js';
 import type { PlanManagementService } from '../../management/plan.service.js';
 
+/*
+ * setupSSO / setupCommunication are covered by server-contract.test.ts, which
+ * checks every request body against the fields bridge-api declares. The mocks
+ * that lived here repeated the workflows' own wrong field names
+ * (`sendgridApiKey`), so they stayed green while every real call 400'd
+ * (TBP-663).
+ */
+
 const mockApp = { id: 'app-1', name: 'Test', defaultCallbackUri: 'https://app.test/callback' };
 
 function createMockAppService(): AppManagementService {
@@ -33,23 +41,6 @@ describe('ManagementWorkflows', () => {
     workflows = new ManagementWorkflows(appService as any, planService as any);
   });
 
-  describe('setupSSO', () => {
-    it('saves credentials, enables provider, and returns callback URL', async () => {
-      const result = await workflows.setupSSO({
-        provider: 'google',
-        config: { clientId: 'goog-id', clientSecret: 'goog-secret' },
-      });
-
-      expect(appService.updateCredentials).toHaveBeenCalledWith(
-        expect.objectContaining({ googleClientId: 'goog-id', googleClientSecret: 'goog-secret' }),
-      );
-      expect(appService.update).toHaveBeenCalledWith({ googleSsoEnabled: true });
-      expect(result.provider).toBe('google');
-      expect(result.enabled).toBe(true);
-      expect(result.callbackUrl).toBe('https://app.test/callback');
-    });
-  });
-
   describe('setupPayments', () => {
     it('connects Stripe and creates plans', async () => {
       const result = await workflows.setupPayments({
@@ -72,22 +63,6 @@ describe('ManagementWorkflows', () => {
 
       expect(planService.create).not.toHaveBeenCalled();
       expect(result.plans).toHaveLength(0);
-    });
-  });
-
-  describe('setupCommunication', () => {
-    it('saves provider credentials and updates email settings', async () => {
-      const result = await workflows.setupCommunication({
-        provider: 'sendgrid',
-        config: { apiKey: 'sg-key', fromAddress: 'noreply@acme.com', fromName: 'Acme' },
-      });
-
-      expect(appService.updateCredentials).toHaveBeenCalledWith({ sendgridApiKey: 'sg-key' });
-      expect(appService.update).toHaveBeenCalledWith({
-        emailSenderEmail: 'noreply@acme.com',
-        emailSenderName: 'Acme',
-      });
-      expect(result.configured).toBe(true);
     });
   });
 });

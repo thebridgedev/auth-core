@@ -426,15 +426,28 @@ export interface UpdateBrandingRequest {
   linkColor: string;
   borderRadius: string;
   boxShadow: string;
-  customCss?: boolean;
+  // TBP-663 — `customCss` was removed: `PUT /v1/admin/brand` does not declare
+  // it, and the API rejects undeclared fields (400).
 }
 
+/**
+ * `GET /v1/admin/brand/css`.
+ *
+ * TBP-663 — the server's field is `content`. This used to declare `cssFile`,
+ * which was always `undefined`.
+ */
 export interface CssFileResponse {
-  cssFile: string;
+  content: string;
 }
 
+/**
+ * Body of `POST /v1/admin/brand/css`.
+ *
+ * TBP-663 — the server reads `content` and answers 400 ("Missing content in
+ * body") without it. This used to send `cssFile`, so every update failed.
+ */
 export interface UpdateCssFileRequest {
-  cssFile?: string;
+  content: string;
 }
 
 // ─── Plan ───────────────────────────────────────────────────────────────────
@@ -587,8 +600,10 @@ export interface CredentialsState {
  * not declare (400), so only these exist. An empty string clears a value.
  *
  * TBP-663 — `sendgridApiKey` was listed here but the API has no such field:
- * Bridge sends email through its own provider. The index signature remains
- * for compatibility with existing callers.
+ * Bridge sends email through its own provider. The `[key: string]` index
+ * signature was removed as well: it is what let `workflows.setupSSO` compile
+ * while writing field names the API does not have (`azureClientId`,
+ * `samlMetadataUrl`, …).
  */
 export interface UpdateCredentialsRequest {
   stripeSecretKey?: string;
@@ -611,20 +626,34 @@ export interface UpdateCredentialsRequest {
   microsoftAzureMarketplaceClientId?: string;
   microsoftAzureMarketplaceClientSecret?: string;
   microsoftAzureMarketplaceTenantId?: string;
-  [key: string]: string | undefined;
 }
 
 // ─── Workflow Params ────────────────────────────────────────────────────────
 
-export type SSOProvider = 'google' | 'azure' | 'github' | 'linkedin' | 'facebook' | 'saml' | 'oidc';
+/**
+ * SSO providers `workflows.setupSSO` can configure: the ones the management
+ * API has credential fields for.
+ *
+ * @remarks TBP-663 — `'saml'` and `'oidc'` were removed. The API has no
+ * fields for SAML or OIDC connections, so every call for them failed with a
+ * 400. Configure them in the Bridge admin UI.
+ */
+export type SSOProvider = 'google' | 'azure' | 'github' | 'linkedin' | 'facebook';
 
+/**
+ * @remarks TBP-663 — `config.metadataUrl` and `config.discoveryUrl` were
+ * removed (the API has no fields for them; `setupSSO` throws if they are
+ * passed). `config.tenantId` was added: azure needs it.
+ */
 export interface SetupSSOParams {
   provider: SSOProvider;
   config: {
-    clientId?: string;
-    clientSecret?: string;
-    metadataUrl?: string;
-    discoveryUrl?: string;
+    /** OAuth client id from the provider console. */
+    clientId: string;
+    /** OAuth client secret from the provider console. */
+    clientSecret: string;
+    /** Entra ID Directory (tenant) ID. Required for `azure`; rejected for every other provider. */
+    tenantId?: string;
   };
 }
 
@@ -653,17 +682,28 @@ export interface SetupPaymentsResult {
   app: AppResponse;
 }
 
+/**
+ * Sender of the transactional email Bridge sends for the app. At least one
+ * of `fromAddress` / `fromName` is required.
+ *
+ * @remarks TBP-663 — `provider` and `config.apiKey` were removed. Bridge sends
+ * all email through its own provider and the API has never accepted a provider
+ * key, so every call that sent one failed with a 400. `setupCommunication`
+ * throws if either is passed.
+ */
 export interface SetupCommunicationParams {
-  provider: string;
   config: {
-    apiKey: string;
+    /** Sender email address. A new address is verified by email before Bridge uses it. */
     fromAddress?: string;
+    /** Sender display name. */
     fromName?: string;
   };
 }
 
+/** @remarks TBP-663 — `provider` was removed along with the param of the same name. */
 export interface SetupCommunicationResult {
-  provider: string;
   configured: boolean;
+  emailSenderEmail: string | null;
+  emailSenderName: string | null;
   app: AppResponse;
 }
