@@ -699,3 +699,112 @@ describe('onStatusChange', () => {
     expect(client.getState()).toBe('open');
   });
 });
+
+// ── TBP-669 — the page's origin is not in the app's allowed origins ────────
+//
+// AppSync accepts the CONNECT and refuses the `app:` channel at SUBSCRIBE with
+// a bare "not authorized"; before TBP-669 the client logged exactly that and
+// went `degraded` / `no_channel_accepted`, although the authorizer knew the
+// reason. Only `/realtime/diagnose` can tell the client, and it reports every
+// channel-check failure as side `app` — the fix is in Bridge settings.
+
+describe('origin_not_allowed (TBP-669)', () => {
+  const PAGE_ORIGIN = 'http://localhost:5181';
+  // Stage's real answer for this case (curl from a non-allowed origin, 2026-09-15).
+  const SERVER_VERDICT: Responder = () => ({
+    status: 200,
+    body: { ok: false, reason: 'origin_not_allowed', side: 'app' },
+  });
+  const ADMIN_PATH = 'Authentication → Security → Allowed Origins';
+
+  beforeEach(() => {
+    vi.stubGlobal('location', { origin: PAGE_ORIGIN });
+  });
+
+  /** Ack the connection; refuse the subscribes `refused` picks with AppSync's auth error. */
+  function subscribeWith(ws: FakeWebSocket, refused: (channel: string) => boolean, errors: unknown[]): void {
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack' });
+    for (const raw of ws.sent) {
+      const f = JSON.parse(raw);
+      if (f.type !== 'subscribe') continue;
+      if (refused(f.channel)) ws.triggerMessage({ type: 'subscribe_error', id: f.id, errors });
+      else ws.triggerMessage({ type: 'subscribe_success', id: f.id });
+    }
+  }
+  const UNAUTHORIZED = [{ errorType: 'UnauthorizedException', message: 'not authorized' }];
+
+  it('signed out: the refused app channel is diagnosed — origin_not_allowed, side config, with the fix', async () => {
+    const { client, logger, calls } = setup({ ...ANON, routes: { '/realtime/diagnose': SERVER_VERDICT } });
+    await client.start();
+    subscribeWith(lastWs(), () => true, UNAUTHORIZED);
+    await flush();
+
+    const status = client.getStatus();
+    expect(status).toMatchObject({
+      state: 'degraded',
+      reason: 'origin_not_allowed',
+      side: 'config',
+      retrying: false,
+      docsUrl: `${REALTIME_DOCS_BASE_URL}#origin_not_allowed`,
+    });
+    expect(status.hint).toContain(PAGE_ORIGIN);
+    expect(status.hint).toContain(ADMIN_PATH);
+
+    const diag = diagnoseCalls(calls);
+    expect(diag).toHaveLength(1);
+    expect(JSON.parse(diag[0].init.body)).toEqual({ channels: ['app:app-1'] });
+
+    const text = errorText(logger);
+    expect(text).toContain('origin_not_allowed');
+    expect(text).toContain(PAGE_ORIGIN);
+    expect(text).toContain(ADMIN_PATH);
+    // A per-channel fault: the socket stays up, no reconnect loop.
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it('signed in with only the app channel refused: stays open, still names the reason', async () => {
+    const { client } = setup({ routes: { '/realtime/diagnose': SERVER_VERDICT } });
+    await client.start();
+    subscribeWith(lastWs(), (ch) => ch.startsWith('/app/'), UNAUTHORIZED);
+    await flush();
+    expect(client.getStatus()).toMatchObject({ state: 'open', reason: 'origin_not_allowed', side: 'config' });
+  });
+
+  it('logs the verdict once per channel, even across reconnects that hit the same refusal', async () => {
+    const { client, logger } = setup({ ...ANON, routes: { '/realtime/diagnose': SERVER_VERDICT } });
+    await client.start();
+    subscribeWith(lastWs(), () => true, UNAUTHORIZED);
+    await flush();
+    lastWs().close(1006);
+    await vi.advanceTimersByTimeAsync(2_000);
+    subscribeWith(lastWs(), () => true, UNAUTHORIZED);
+    await flush();
+    const verdictLines = logger.error.mock.calls.filter((c) => String(c[0]).includes('Bridge refused the subscription'));
+    expect(verdictLines).toHaveLength(1);
+    expect(client.getStatus()).toMatchObject({ reason: 'origin_not_allowed', side: 'config' });
+  });
+
+  it('a connect-level origin refusal is side config with the origin fix, not the settings-mismatch wording', async () => {
+    const { client, logger } = setup({ ...ANON, routes: { '/realtime/diagnose': SERVER_VERDICT } });
+    await client.start();
+    refuse(lastWs());
+    await flush();
+    const status = client.getStatus();
+    expect(status).toMatchObject({ state: 'unauthorized', reason: 'origin_not_allowed', side: 'config' });
+    expect(status.hint).toContain(PAGE_ORIGIN);
+    const text = errorText(logger);
+    expect(text).toContain(ADMIN_PATH);
+    expect(text).not.toContain("don't match the session");
+  });
+
+  it('leaves other channel faults alone: a non-auth subscribe_error is not diagnosed', async () => {
+    const { client, calls } = setup({ ...ANON, routes: { '/realtime/diagnose': SERVER_VERDICT } });
+    await client.start();
+    subscribeWith(lastWs(), () => true, [{ message: 'NamespaceNotFound' }]);
+    await flush();
+    expect(diagnoseCalls(calls)).toHaveLength(0);
+    expect(client.getStatus()).toMatchObject({ state: 'degraded', reason: 'no_channel_accepted' });
+    expect(client.getStatus().hint).toBeUndefined();
+  });
+});

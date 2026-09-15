@@ -230,13 +230,35 @@ export class BridgeAuth {
     // Auto-select tenant if only one and MFA is not pending
     const mfaReady = result.mfaState === 'COMPLETED' || result.mfaState === 'DISABLED';
     if (mfaReady && result.tenantUsers.length === 1) {
-      const tokens = await this.directAuth.selectTenant(result.session, result.tenantUsers[0].id);
-      this.tokenManager.setTokens(tokens);
-      this.stateManager.onAuthenticated();
-      this.emitter.emit('auth:login', tokens);
+      await this.finishSingleTenantSignIn(result.session, result.tenantUsers[0].id);
     }
 
     return result;
+  }
+
+  /**
+   * The token exchange that ends a single-tenant sign-in (password, magic
+   * link, passkey, and the MFA steps). If it fails, the sign-in is over: the
+   * state goes back to `unauthenticated` before the error propagates.
+   *
+   * TBP-669 — the exchange used to leave the state at `credentials-validated`
+   * when it threw. Nothing moves on from there, so a sign-in form keyed on the
+   * state kept showing "Signing in…" forever and never rendered the error. On
+   * stage, a magic-link sign-in from an origin missing from the app's allowed
+   * origins did exactly that: the link was accepted, `token/direct` answered
+   * 403 "Origin not allowed", and the form hung.
+   */
+  private async finishSingleTenantSignIn(session: string, tenantUserId: string): Promise<void> {
+    let tokens: TokenSet;
+    try {
+      tokens = await this.directAuth.selectTenant(session, tenantUserId);
+    } catch (err) {
+      this.stateManager.reset();
+      throw err;
+    }
+    this.tokenManager.setTokens(tokens);
+    this.stateManager.onAuthenticated();
+    this.emitter.emit('auth:login', tokens);
   }
 
   async verifyMfa(code: string): Promise<MfaResult> {
@@ -249,10 +271,7 @@ export class BridgeAuth {
     const mfaDone = result.mfaState === 'COMPLETED' || result.mfaState === 'DISABLED';
     const tenantUsers = this.stateManager.getTenantUsers();
     if (mfaDone && tenantUsers.length === 1) {
-      const tokens = await this.directAuth.selectTenant(result.session, tenantUsers[0].id);
-      this.tokenManager.setTokens(tokens);
-      this.stateManager.onAuthenticated();
-      this.emitter.emit('auth:login', tokens);
+      await this.finishSingleTenantSignIn(result.session, tenantUsers[0].id);
     }
 
     return result;
@@ -296,10 +315,7 @@ export class BridgeAuth {
     if (!session) throw new Error('No active session. Call confirmMfaSetup() first.');
     const tenantUsers = this.stateManager.getTenantUsers();
     if (tenantUsers.length === 1) {
-      const tokens = await this.directAuth.selectTenant(session, tenantUsers[0].id);
-      this.tokenManager.setTokens(tokens);
-      this.stateManager.onAuthenticated();
-      this.emitter.emit('auth:login', tokens);
+      await this.finishSingleTenantSignIn(session, tenantUsers[0].id);
     } else {
       // Multi-tenant: mark MFA as complete so LoginForm renders TenantSelector
       const expires = this.stateManager.getSessionExpires() ?? 0;
@@ -396,10 +412,7 @@ export class BridgeAuth {
 
     const mfaReady = result.mfaState === 'COMPLETED' || result.mfaState === 'DISABLED';
     if (mfaReady && result.tenantUsers.length === 1) {
-      const tokens = await this.directAuth.selectTenant(result.session, result.tenantUsers[0].id);
-      this.tokenManager.setTokens(tokens);
-      this.stateManager.onAuthenticated();
-      this.emitter.emit('auth:login', tokens);
+      await this.finishSingleTenantSignIn(result.session, result.tenantUsers[0].id);
     }
 
     return result;
@@ -433,10 +446,7 @@ export class BridgeAuth {
     // Auto-select tenant if only one and MFA is not pending
     const mfaReady = result.mfaState === 'COMPLETED' || result.mfaState === 'DISABLED';
     if (mfaReady && result.tenantUsers.length === 1) {
-      const tokens = await this.directAuth.selectTenant(result.session, result.tenantUsers[0].id);
-      this.tokenManager.setTokens(tokens);
-      this.stateManager.onAuthenticated();
-      this.emitter.emit('auth:login', tokens);
+      await this.finishSingleTenantSignIn(result.session, result.tenantUsers[0].id);
     }
 
     return result;

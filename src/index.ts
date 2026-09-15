@@ -77,7 +77,16 @@ export type {
 } from './api-token-service.js';
 
 // Errors
-export { BridgeAuthError, HttpError, BillingLockedError } from './errors.js';
+export {
+  BridgeAuthError,
+  HttpError,
+  BillingLockedError,
+  OriginNotAllowedError,
+  isOriginNotAllowedError,
+  originNotAllowedHint,
+  ALLOWED_ORIGINS_ADMIN_PATH,
+  ORIGIN_NOT_ALLOWED_DOCS_URL,
+} from './errors.js';
 
 // Storage adapters (for custom configuration)
 export { LocalStorageAdapter, MemoryAdapter } from './token-storage.js';

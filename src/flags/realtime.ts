@@ -21,6 +21,7 @@
 
 import type { BridgeFlags, CachedFlag } from './flag.js';
 import { createLogger, type Logger } from '../logger.js';
+import { currentOrigin, originNotAllowedHint } from '../errors.js';
 
 export interface RealtimeClientConfig {
   /** Bridge API base URL — same as the telemetry batcher. */
@@ -121,6 +122,12 @@ export interface RealtimeStatus {
   /** True while the client will keep trying on its own. */
   retrying: boolean;
   docsUrl?: string;
+  /**
+   * One sentence naming the fix, when the client knows it — e.g. for
+   * `origin_not_allowed`, the origin and where to add it in Bridge admin
+   * (TBP-669).
+   */
+  hint?: string;
   /** Per-episode correlation id — also sent to Bridge as `x-bridge-realtime-ref`. */
   ref?: string;
   /** `Date.now()` at the last state/reason change. */
@@ -408,6 +415,13 @@ interface Refusal extends RefusalVerdict {
   docsUrl: string;
 }
 
+/** A channel AppSync refused on an otherwise working connection, with Bridge's verdict. */
+interface ChannelRefusal extends RefusalVerdict {
+  channel: string;
+  ref: string;
+  docsUrl: string;
+}
+
 /** Centrifugo `/realtime/authorize` answered 401/403 — a refusal, not a blip. */
 class RealtimeAuthRefusedError extends Error {
   constructor(readonly status: number) {
@@ -475,6 +489,17 @@ export class RealtimeClient {
    * to debug, not another console error.
    */
   private lastRefusalKey?: string;
+  /**
+   * TBP-669 — Bridge's verdict on a channel refused at SUBSCRIBE on the
+   * current connection. AppSync accepts the CONNECT and refuses the channel
+   * with a bare "not authorized"; the reason (e.g. the page's origin is not
+   * in the app's allowed origins) only comes from `/realtime/diagnose`.
+   */
+  private channelRefusal?: ChannelRefusal;
+  /** Channels already sent to diagnose on the current connection. */
+  private diagnosedChannels = new Set<string>();
+  /** channel|reason|side of the last channel refusal logged — same dedupe as lastRefusalKey. */
+  private lastChannelRefusalKey?: string;
   /**
    * Token handed back by `refreshAuthToken`, used while the host's
    * `getAuthToken()` still returns the token it replaced (`staleToken`). Hosts
@@ -1111,6 +1136,11 @@ export class RealtimeClient {
           this.cfg.logger.error(
             `realtime: AppSync rejected subscription to '${channel}' — ${describeAppSyncError(frame)}. Live updates will not arrive on this channel.`,
           );
+          // AppSync never says why; ask Bridge once per channel per connection.
+          if (isAppSyncAuthRefusal(frame) && this.cfg.diagnose && !this.diagnosedChannels.has(channel)) {
+            this.diagnosedChannels.add(channel);
+            void this.diagnoseChannelRefusal(ws, token, channel);
+          }
           // Every channel rejected → connected but deaf.
           if (this.pendingSubscribes.size === 0 && this.ackedChannels.size === 0) {
             this.clearSubscribeAckTimer();
@@ -1175,6 +1205,44 @@ export class RealtimeClient {
     this.pendingSubscribes.clear();
     this.ackedChannels.clear();
     this.failedChannels.clear();
+    this.diagnosedChannels.clear();
+    this.channelRefusal = undefined;
+  }
+
+  /**
+   * TBP-669 — explain a channel AppSync refused at SUBSCRIBE. The connection
+   * stays up (see `subscribe_error`); this only attaches Bridge's reason to
+   * the status and logs it once, with the fix when the client knows it.
+   */
+  private async diagnoseChannelRefusal(ws: WebSocketLike, token: string | undefined, channel: string): Promise<void> {
+    const ref = newRef();
+    const verdict = await this.diagnoseRefusal(token, [channel], ref);
+    if (!verdict || this.ws !== ws || this.stopped) return;
+    const refusal: ChannelRefusal = {
+      ...verdict,
+      channel,
+      ref,
+      docsUrl: `${this.cfg.docsBaseUrl}#${verdict.reason}`,
+    };
+    this.channelRefusal = refusal;
+    this.publishStatus();
+    const message = this.formatChannelRefusal(refusal);
+    const key = `${channel}|${verdict.reason}|${verdict.side}`;
+    if (key === this.lastChannelRefusalKey) {
+      this.cfg.logger.debug(message);
+      return;
+    }
+    this.lastChannelRefusalKey = key;
+    this.cfg.logger.error(message);
+  }
+
+  private formatChannelRefusal(r: ChannelRefusal): string {
+    const hint = refusalHint(r.reason);
+    return [
+      `[bridge] Live updates are OFF on channel '${r.channel}' — Bridge refused the subscription (${r.reason}).`,
+      hint ? `  Fix: ${hint}` : `  See the docs entry below for what '${r.reason}' means for this session.`,
+      `  ${r.docsUrl} · ref ${r.ref}`,
+    ].join('\n');
   }
 
   private clearSubscribeAckTimer(): void {
@@ -1337,6 +1405,7 @@ export class RealtimeClient {
       prev.state === this.state &&
       prev.reason === detail.reason &&
       prev.side === detail.side &&
+      prev.hint === detail.hint &&
       prev.retrying === detail.retrying &&
       prev.ref === detail.ref
     ) {
@@ -1354,7 +1423,13 @@ export class RealtimeClient {
   private statusDetail(): Omit<RealtimeStatus, 'state' | 'since'> {
     if (this.state === 'unauthorized' && this.refusal) {
       const r = this.refusal;
-      return { reason: r.reason, side: r.side, retrying: false, docsUrl: r.docsUrl, ref: r.ref };
+      return withHint({ reason: r.reason, side: r.side, retrying: false, docsUrl: r.docsUrl, ref: r.ref });
+    }
+    // A channel Bridge refused and explained (TBP-669): all of them
+    // (degraded) or some of them (open — the others still deliver).
+    const cr = this.channelRefusal;
+    if (cr && (this.state === 'degraded' || this.state === 'open')) {
+      return withHint({ reason: cr.reason, side: cr.side, retrying: false, docsUrl: cr.docsUrl, ref: cr.ref });
     }
     if (this.state === 'degraded') return { reason: 'no_channel_accepted', retrying: false };
     const ep = this.episode;
@@ -1580,7 +1655,7 @@ export class RealtimeClient {
         typeof body?.reason === 'string' && /^[a-z0-9_]+$/.test(body.reason) ? body.reason : 'refused';
       const side: RefusalSide =
         body?.side === 'app' || body?.side === 'config' || body?.side === 'bridge' ? body.side : 'bridge';
-      return { reason, side };
+      return { reason, side: sideFor(reason, side) };
     } catch {
       return undefined;
     } finally {
@@ -1723,6 +1798,14 @@ export class RealtimeClient {
         footer,
       ].join('\n');
     }
+    if (r.reason === 'origin_not_allowed') {
+      return [
+        `[bridge] Live updates are OFF — Bridge refused this session's realtime connection (${r.reason}): this page's origin is not in the app's allowed origins.`,
+        stopped,
+        `  Fix: ${originNotAllowedHint()}`,
+        footer,
+      ].join('\n');
+    }
     if (r.side === 'config') {
       const apiHost = hostOf(this.cfg.apiBaseUrl);
       let mismatch: string;
@@ -1806,6 +1889,26 @@ export class RealtimeClient {
       this.fireReconnect();
     }
   }
+}
+
+/**
+ * Whose move a diagnosed reason is. The server's answer, except where the
+ * client knows better: `/realtime/diagnose` reports every channel-check
+ * failure as side `app`, but an origin missing from the app's allowed origins
+ * is fixed in the app's Bridge settings, not in its code (TBP-669).
+ */
+function sideFor(reason: string, serverSide: RefusalSide): RefusalSide {
+  return reason === 'origin_not_allowed' ? 'config' : serverSide;
+}
+
+/** The one-sentence fix for a reason, when the client can name it. */
+function refusalHint(reason: string): string | undefined {
+  return reason === 'origin_not_allowed' ? originNotAllowedHint(currentOrigin()) : undefined;
+}
+
+function withHint<T extends { reason?: string }>(detail: T): T & { hint?: string } {
+  const hint = detail.reason ? refusalHint(detail.reason) : undefined;
+  return hint ? { ...detail, hint } : detail;
 }
 
 /** Reason-specific next step for app-side refusals. */
