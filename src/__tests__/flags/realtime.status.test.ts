@@ -308,7 +308,9 @@ describe('refused connect with a refresh hook', () => {
     expect(diag[0].init.method).toBe('POST');
     expect(diag[0].init.headers.Authorization).toBe(`Bearer ${tokenB}`);
     expect(diag[0].init.headers['x-app-id']).toBe('app-1');
-    expect(diag[0].init.headers['x-bridge-realtime-ref']).toBe(status.ref);
+    // TBP-669: no custom header, so the browser's CORS preflight passes.
+    expect(Object.keys(diag[0].init.headers).sort()).toEqual(['Authorization', 'Content-Type', 'x-app-id']);
+    expect(JSON.parse(diag[0].init.body)).toEqual({ channels: expect.any(Array) });
 
     expect(logger.error).toHaveBeenCalledTimes(1);
     const msg = errorText(logger);

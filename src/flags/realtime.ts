@@ -128,7 +128,7 @@ export interface RealtimeStatus {
    * (TBP-669).
    */
   hint?: string;
-  /** Per-episode correlation id — also sent to Bridge as `x-bridge-realtime-ref`. */
+  /** Per-episode correlation id, shown in the console line. Client-side only (TBP-669). */
   ref?: string;
   /** `Date.now()` at the last state/reason change. */
   since: number;
@@ -1216,7 +1216,7 @@ export class RealtimeClient {
    */
   private async diagnoseChannelRefusal(ws: WebSocketLike, token: string | undefined, channel: string): Promise<void> {
     const ref = newRef();
-    const verdict = await this.diagnoseRefusal(token, [channel], ref);
+    const verdict = await this.diagnoseRefusal(token, [channel]);
     if (!verdict || this.ws !== ws || this.stopped) return;
     const refusal: ChannelRefusal = {
       ...verdict,
@@ -1576,7 +1576,7 @@ export class RealtimeClient {
     let verdict = this.precheckToken(token, channels);
     if (!verdict && this.cfg.diagnose && !ep.diagnosed) {
       ep.diagnosed = true;
-      verdict = await this.diagnoseRefusal(token, channels, ep.ref);
+      verdict = await this.diagnoseRefusal(token, channels);
       if (this.episode !== ep || this.stopped) return;
     }
     // Nothing explained it. With a token: Bridge-issued, unexpired, right
@@ -1626,12 +1626,15 @@ export class RealtimeClient {
   private async diagnoseRefusal(
     token: string | undefined,
     channels: string[],
-    ref: string,
   ): Promise<RefusalVerdict | undefined> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'x-bridge-realtime-ref': ref,
-    };
+    // Only headers bridge-api's CORS allow-list accepts (TBP-669). This runs
+    // in the browser, and one unlisted header fails the preflight, so the
+    // request never leaves (net::ERR_FAILED) and the verdict is lost. The
+    // episode ref used to travel as `x-bridge-realtime-ref`; it stays
+    // client-side now (status + console line). It can't move to the body
+    // either: the diagnose DTO answers an unknown property with 400.
+    // Pinned by cors-allowed-headers.test.ts.
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (token) headers.Authorization = `Bearer ${token}`;
     if (this.cfg.appId) headers['x-app-id'] = this.cfg.appId;
     let timer: ReturnType<typeof setTimeout> | undefined;
