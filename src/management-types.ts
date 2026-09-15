@@ -560,15 +560,57 @@ export interface UpdateOnboardingRequest {
 
 // ─── Credentials ────────────────────────────────────────────────────────────
 
+/**
+ * What `GET /v1/account/app/credentialsState` and `PUT /v1/account/app/credentials`
+ * return: booleans saying which credentials are stored, never the values.
+ *
+ * TBP-663 — this used to declare `hasStripeCredentials` / `hasSendgridCredentials`,
+ * fields the API has never returned. Anything reading them got `undefined`
+ * (the MCP `get_stripe_status` tool returned `{}` because of it, TBP-656).
+ * These are the server's own field names (bridge-api GetCredentialsStateResponseDto).
+ */
 export interface CredentialsState {
-  hasStripeCredentials: boolean;
-  hasSendgridCredentials: boolean;
+  stripeCredentialsAdded: boolean;
+  /** Bridge holds the signing secret for the app's Stripe webhook. Sent by bridge-api since TBP-658. */
+  stripeWebhookConfigured?: boolean;
+  azureMarketplaceCredentialsAdded: boolean;
+  azureAdSsoCredentialsAdded: boolean;
+  googleSsoCredentialsAdded: boolean;
+  linkedinSsoCredentialsAdded: boolean;
+  appleSsoCredentialsAdded: boolean;
+  githubSsoCredentialsAdded: boolean;
+  facebookSsoCredentialsAdded: boolean;
 }
 
+/**
+ * Body of `PUT /v1/account/app/credentials`. The API rejects any field it does
+ * not declare (400), so only these exist. An empty string clears a value.
+ *
+ * TBP-663 — `sendgridApiKey` was listed here but the API has no such field:
+ * Bridge sends email through its own provider. The index signature remains
+ * for compatibility with existing callers.
+ */
 export interface UpdateCredentialsRequest {
   stripeSecretKey?: string;
   stripePublicKey?: string;
-  sendgridApiKey?: string;
+  googleClientId?: string;
+  googleClientSecret?: string;
+  githubClientId?: string;
+  githubClientSecret?: string;
+  linkedinClientId?: string;
+  linkedinClientSecret?: string;
+  facebookClientId?: string;
+  facebookClientSecret?: string;
+  microsoftAzureADClientId?: string;
+  microsoftAzureADClientSecret?: string;
+  microsoftAzureADTenantId?: string;
+  appleClientId?: string;
+  appleTeamId?: string;
+  appleKeyId?: string;
+  applePrivateKey?: string;
+  microsoftAzureMarketplaceClientId?: string;
+  microsoftAzureMarketplaceClientSecret?: string;
+  microsoftAzureMarketplaceTenantId?: string;
   [key: string]: string | undefined;
 }
 
