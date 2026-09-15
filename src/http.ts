@@ -1,7 +1,42 @@
-import { BillingLockedError, HttpError } from './errors.js';
+import {
+  BillingLockedError,
+  HttpError,
+  ORIGIN_NOT_ALLOWED_DOCS_URL,
+  OriginNotAllowedError,
+  currentOrigin,
+  isOriginNotAllowedResponse,
+  originNotAllowedHint,
+} from './errors.js';
 import { emitBillingLock } from './billing/lock-signal.js';
 import type { BillingLockedPayload } from './billing/types.js';
 import type { Logger } from './logger.js';
+
+// Origins already reported this page load — the console line is a diagnosis,
+// not a per-request log, so a retrying form must not repeat it.
+const reportedOrigins = new Set<string>();
+
+/**
+ * TBP-669 — one console line naming the refused origin, the fix and the docs.
+ * At error level, which the default logger prints without debug mode: a
+ * sign-in that cannot work must not need a flag to be explained.
+ */
+function logOriginNotAllowed(logger: Logger, url: string, origin: string | undefined): void {
+  const key = origin ?? '';
+  if (reportedOrigins.has(key)) return;
+  reportedOrigins.add(key);
+  let path = url;
+  try {
+    path = new URL(url).pathname;
+  } catch {
+    // keep the raw url
+  }
+  logger.error(`Origin not allowed (403 on ${path}). ${originNotAllowedHint(origin)} Docs: ${ORIGIN_NOT_ALLOWED_DOCS_URL}`);
+}
+
+/** Test seam — forget which origins were reported. */
+export function _resetOriginNotAllowedReports(): void {
+  reportedOrigins.clear();
+}
 
 function isBillingLockedPayload(body: unknown): body is BillingLockedPayload {
   return (
@@ -74,6 +109,12 @@ export async function httpFetch<T>(url: string, options: HttpOptions, logger: Lo
           return JSON.parse(retryText) as T;
         }
       }
+    }
+
+    if (isOriginNotAllowedResponse(response.status, errorBody)) {
+      const origin = currentOrigin();
+      logOriginNotAllowed(logger, url, origin);
+      throw new OriginNotAllowedError(origin, errorBody);
     }
 
     const message = typeof errorBody === 'object' && errorBody && 'message' in errorBody
