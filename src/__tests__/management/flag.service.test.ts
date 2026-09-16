@@ -107,6 +107,23 @@ describe('FlagManagementService — FF 2.0 typed payloads (TBP-235)', () => {
     expect(sample.evalCount).toBe(42);
   });
 
+  it('toggle() writes the FF 2.0 state, never the legacy enabled boolean (TBP-548)', async () => {
+    (http.put as any).mockResolvedValue({ id: 'f1', state: 'on' });
+
+    await service.toggle('f1', true);
+    await service.toggle('f1', false);
+
+    // The exact body matters. Asserting only "a PUT happened" passes against
+    // the old `{ enabled }` payload, which the server's write DTO strips —
+    // the request succeeded and the flag never moved (TBP-548).
+    expect(http.put).toHaveBeenNthCalledWith(1, '/v1/admin/flags/flag/f1', { state: 'on' });
+    expect(http.put).toHaveBeenNthCalledWith(2, '/v1/admin/flags/flag/f1', { state: 'off' });
+
+    for (const call of (http.put as any).mock.calls) {
+      expect(call[1]).not.toHaveProperty('enabled');
+    }
+  });
+
   it('1.0 legacy callers still compile (additive change, no removals)', async () => {
     const legacyInput: CreateFlagInput = {
       key: 'legacy',
