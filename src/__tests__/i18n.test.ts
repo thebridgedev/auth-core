@@ -517,6 +517,27 @@ describe('interpolated copy', () => {
       expect(catalogue['mfa.resendCountdown']).toContain('{seconds}');
     }
   });
+
+  // TBP-634 — sso.continueWith was the one interpolated key with no
+  // per-locale retention test, so a translator dropping {provider} in a
+  // single locale would have shipped green. It renders the name of the
+  // identity provider on the sign-in button; without the variable the
+  // button reads "Continue with" and names nothing.
+  it('keeps {provider} in sso.continueWith in every locale', () => {
+    for (const name of Object.keys(LOCALES)) {
+      expect(LOCALES[name]['sso.continueWith']).toContain('{provider}');
+    }
+  });
+
+  it('sso.continueWith renders the provider, not the placeholder, in every locale', () => {
+    for (const name of Object.keys(LOCALES)) {
+      const rendered = createTranslator({ locale: name })('sso.continueWith', {
+        provider: 'Okta',
+      });
+      expect(rendered).toContain('Okta');
+      expect(rendered).not.toContain('{provider}');
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -637,6 +658,99 @@ describe('missing-locale warning (TBP-633)', () => {
       expect(warnings).toEqual([]);
     } finally {
       process.env.NODE_ENV = previous;
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. Synchrony — the promise that there is no flash of English (TBP-633)
+// ---------------------------------------------------------------------------
+
+// TBP-633 AC: "Resolver stays synchronous in every package. These render during
+// an auth redirect; an async catalogue load flashes English first." That
+// guarantee rested entirely on a structural property — static imports, no
+// Promise in the module — that no test defended. Making `createTranslator` or
+// its returned function async would have shipped green while reintroducing
+// exactly the flash the AC forbids, because a component awaiting its copy
+// paints the fallback first.
+describe('resolver synchrony (TBP-633)', () => {
+  it('createTranslator returns a usable function, not a promise', () => {
+    const t = createTranslator({ locale: 'sv' });
+    expect(typeof t).toBe('function');
+    expect(t).not.toHaveProperty('then');
+  });
+
+  it('resolves to a plain string in the same tick, for every locale', () => {
+    for (const name of Object.keys(LOCALES)) {
+      const rendered = createTranslator({ locale: name })('login.submit');
+      // A thenable here means a component would render the fallback first.
+      expect(typeof rendered).toBe('string');
+      expect(rendered).not.toHaveProperty('then');
+      expect(rendered.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('resolves every rung synchronously — override, locale and English fallback', () => {
+    const t = createTranslator({
+      locale: 'sv',
+      messages: { 'login.submit': 'Override' },
+    });
+    // Rung 1: override. Rung 2: locale. Rung 3: English for an unknown locale.
+    expect(typeof t('login.submit')).toBe('string');
+    expect(typeof createTranslator({ locale: 'sv' })('login.submit')).toBe('string');
+    expect(typeof createTranslator({ locale: 'zz' })('login.submit')).toBe('string');
+  });
+
+  it('renders an interpolated string synchronously', () => {
+    const rendered = createTranslator({ locale: 'de' })('sso.continueWith', {
+      provider: 'Okta',
+    });
+    expect(typeof rendered).toBe('string');
+    expect(rendered).toContain('Okta');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 11. Root entry surface — what the UI packages actually import (TBP-633/634)
+// ---------------------------------------------------------------------------
+
+// The four UI packages consume the catalogue through the package root; there is
+// no `./i18n` subpath export, so a dropped re-export line in index.ts breaks all
+// of them at once. Nothing asserted that surface — it was checked only by the
+// compiler, and the compiler is happy to remove an export nobody in-repo imports.
+describe('root entry re-exports the catalogue surface (TBP-633)', () => {
+  it('exports a working translator factory, locales and helpers', async () => {
+    const root = await import('../index.js');
+
+    expect(typeof root.createTranslator).toBe('function');
+    expect(typeof root.interpolate).toBe('function');
+    expect(typeof root.normalizeLocale).toBe('function');
+    expect(typeof root.hasLocale).toBe('function');
+    expect(typeof root.resetMissingLocaleWarnings).toBe('function');
+
+    // Exercised, not merely present: a resolver re-exported but broken is the
+    // same outage as one not re-exported at all.
+    expect(root.createTranslator({ locale: 'sv' })('login.submit')).toBe(
+      sv['login.submit'],
+    );
+    expect(root.normalizeLocale('sv-SE')).toBe('sv');
+    expect(root.hasLocale('de')).toBe(true);
+    expect(root.interpolate('Hi {name}', { name: 'Ada' })).toBe('Hi Ada');
+  });
+
+  it('exports all twelve locale catalogues and the LOCALES registry', async () => {
+    const root = await import('../index.js');
+
+    expect(Object.keys(root.LOCALES).slice().sort()).toEqual([
+      'da', 'de', 'en', 'es', 'fi', 'fr', 'it', 'nb', 'nl', 'pl', 'pt', 'sv',
+    ]);
+    // Each named locale export is the very object LOCALES resolves, so a
+    // consumer importing `sv` directly and one passing locale: 'sv' agree.
+    for (const [name, catalogue] of Object.entries({
+      da, de, en, es, fi, fr, it: itLocale, nb, nl, pl, pt, sv,
+    })) {
+      expect(root.LOCALES[name]).toBe(catalogue);
+      expect((root as Record<string, unknown>)[name]).toBe(catalogue);
     }
   });
 });
