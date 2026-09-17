@@ -91,6 +91,21 @@ const DEFAULT_INTROSPECTION_CACHE_TTL_MS = 0; // disabled → instant revocation
  *
  * This is a plain class — NOT a DI provider. Framework plugins wrap it.
  */
+/**
+ * The only algorithm Bridge signs user access tokens with.
+ *
+ * bridge-api signs every user token `PS256` (`microservices/auth/utils/jwt-util.ts`)
+ * and pins the same value on its own verifier (TBP-218, citing
+ * GHSA-hjrf-2m68-5959). bridge-nextjs pins it too
+ * (`server/utils/verify-session.ts`). This verifier documented PS256 as its
+ * contract but did not enforce it, so the pin is what makes the three agree.
+ *
+ * The pin matters because the live JWKS keys carry no `alg` of their own: left
+ * unpinned, jose accepts any algorithm the key type supports, which is the
+ * algorithm-confusion class the bridge-api comment names.
+ */
+const USER_TOKEN_ALGORITHMS = ['PS256'];
+
 export class JwksService {
   private jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
   private jwksInitTime = 0;
@@ -139,6 +154,7 @@ export class JwksService {
       const { payload } = await jwtVerify(token, jwks, {
         issuer: this.config.issuer,
         audience: this.config.audience,
+        algorithms: USER_TOKEN_ALGORITHMS,
       });
 
       this.log('Token verified successfully', {
