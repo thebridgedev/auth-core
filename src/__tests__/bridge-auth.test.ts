@@ -430,6 +430,55 @@ describe('BridgeAuth', () => {
     it('selectTenant throws when no active session', async () => {
       await expect(auth.selectTenant('tu1')).rejects.toThrow('No active session');
     });
+
+    // Regression: BridgeAuth.sendMagicLink took no options and dropped the
+    // caller's successUrl on the floor, so the emailed link always fell back to
+    // Bridge's hosted magic-link route — which an SDK app does not serve.
+    // These assert the facade actually threads options through to DirectAuth.
+    // (TBP-682, 2026-09-20)
+    it('sendMagicLink forwards options.successUrl through to DirectAuth', async () => {
+      mockHttpFetch.mockResolvedValueOnce({ success: true });
+
+      await auth.sendMagicLink('user@test.com', { successUrl: 'https://myapp.com/login' });
+
+      expect(mockHttpFetch).toHaveBeenCalledWith(
+        'https://api.test.com/auth/magic-link',
+        expect.objectContaining({
+          method: 'POST',
+          body: {
+            username: 'user@test.com',
+            mode: 'sdk',
+            appId: 'test-app',
+            successUrl: 'https://myapp.com/login',
+          },
+        }),
+        expect.anything(),
+      );
+    });
+
+    it('sendMagicLink lets DirectAuth default successUrl to the current page', async () => {
+      vi.stubGlobal('location', {
+        origin: 'https://myapp.com',
+        pathname: '/login',
+        search: '?redirect=%2Fdashboard',
+        hash: '#top',
+      });
+      mockHttpFetch.mockResolvedValueOnce({ success: true });
+
+      try {
+        await auth.sendMagicLink('user@test.com');
+      } finally {
+        vi.unstubAllGlobals();
+      }
+
+      const [, opts] = mockHttpFetch.mock.calls[0];
+      expect(opts.body).toEqual({
+        username: 'user@test.com',
+        mode: 'sdk',
+        appId: 'test-app',
+        successUrl: 'https://myapp.com/login',
+      });
+    });
   });
 
   describe('Profile', () => {

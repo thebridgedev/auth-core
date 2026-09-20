@@ -14,6 +14,19 @@ import type {
   Workspace,
 } from './types.js';
 
+/**
+ * The current page without query or fragment, or undefined outside a browser
+ * (a server-side caller has no page to return to, so Bridge falls back to the
+ * hosted magic-link route).
+ */
+function currentPageUrl(): string | undefined {
+  const loc = typeof globalThis !== 'undefined'
+    ? (globalThis as { location?: { origin?: string; pathname?: string } }).location
+    : undefined;
+  if (!loc?.origin || typeof loc.pathname !== 'string') return undefined;
+  return `${loc.origin}${loc.pathname}`;
+}
+
 interface DirectTokenResponse {
   access_token: string;
   refresh_token: string;
@@ -163,11 +176,28 @@ export class DirectAuthService {
 
   // --- Magic link ---
 
-  async sendMagicLink(email: string): Promise<MagicLinkResult> {
+  /**
+   * TBP-682: the emailed link has to come back to the page that redeems it.
+   * `successUrl` tells Bridge where that is; without it the email points at the
+   * hosted magic-link route, which an SDK app does not serve — so every link
+   * 404s. Defaults to the current page (no query, no fragment), which is where
+   * the login component reads `bridge_magic_link_token` on mount.
+   *
+   * The URL must be one of the app's allowed origins or Bridge rejects the
+   * request — the token in that email signs the user in, so it cannot be sent
+   * to an address the app does not own.
+   */
+  async sendMagicLink(email: string, options?: { successUrl?: string }): Promise<MagicLinkResult> {
     const url = `${this.config.authBaseUrl}/magic-link`;
+    const successUrl = options?.successUrl ?? currentPageUrl();
     return httpFetch<MagicLinkResult>(url, {
       method: 'POST',
-      body: { username: email, mode: 'sdk', appId: this.config.appId },
+      body: {
+        username: email,
+        mode: 'sdk',
+        appId: this.config.appId,
+        ...(successUrl ? { successUrl } : {}),
+      },
     }, this.logger);
   }
 

@@ -397,8 +397,14 @@ export class BridgeAuth {
 
   // --- Magic link ---
 
-  async sendMagicLink(email: string): Promise<MagicLinkResult> {
-    return this.directAuth.sendMagicLink(email);
+  /**
+   * Sends a magic-link email. By default the link returns to the current page,
+   * which is where the SDK login component redeems it (TBP-682); pass
+   * `successUrl` to send it elsewhere. The URL must be one of the app's allowed
+   * origins.
+   */
+  async sendMagicLink(email: string, options?: { successUrl?: string }): Promise<MagicLinkResult> {
+    return this.directAuth.sendMagicLink(email, options);
   }
 
   async authenticateWithMagicLinkToken(token: string): Promise<AuthResult> {
