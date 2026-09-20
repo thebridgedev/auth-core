@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DirectAuthService } from '../direct-auth.js';
 import type { Logger } from '../logger.js';
 import type { ResolvedConfig } from '../types.js';
@@ -317,6 +317,140 @@ describe('DirectAuthService', () => {
         refreshToken: 'REFRESH',
         idToken: 'ID',
       });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // sendMagicLink
+  //
+  // Regression: the POST carried no `successUrl`, so the emailed link pointed
+  // at Bridge's hosted magic-link route — a route an SDK app does not serve,
+  // which made every emailed link 404. The link has to come back to the page
+  // that redeems it, because that is where the login component reads
+  // `bridge_magic_link_token` on mount. It now defaults to the current page
+  // with the query string and fragment stripped (a stale `?redirect=`/`#hash`
+  // carried into the email would survive the round trip), and is omitted
+  // entirely outside a browser so Bridge keeps its hosted fallback.
+  // (TBP-682, 2026-09-20)
+  // -------------------------------------------------------------------------
+
+  describe('sendMagicLink', () => {
+    const MAGIC_LINK_RESULT = { success: true };
+
+    // `location` is a global: stub it per-case and hand it back afterwards so
+    // no sibling test inherits a browser that this block invented.
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function stubBrowserLocation(origin: string, pathname: string, search = '', hash = '') {
+      vi.stubGlobal('location', {
+        origin,
+        pathname,
+        search,
+        hash,
+        href: `${origin}${pathname}${search}${hash}`,
+      });
+    }
+
+    function magicLinkCall(): [string, { method: string; body: Record<string, unknown> }] {
+      return mockHttpFetch.mock.calls[0] as [string, { method: string; body: Record<string, unknown> }];
+    }
+
+    it('POSTs to the magic-link endpoint', async () => {
+      stubBrowserLocation('https://app.example.com', '/login');
+      mockHttpFetch.mockResolvedValue(MAGIC_LINK_RESULT);
+
+      await service.sendMagicLink('user@example.com');
+
+      const [url] = magicLinkCall();
+      expect(url).toBe('https://api.example.com/auth/magic-link');
+    });
+
+    it('defaults successUrl to the current page with no query string and no fragment', async () => {
+      stubBrowserLocation(
+        'https://app.example.com',
+        '/login',
+        '?redirect=%2Fdashboard&utm_source=email',
+        '#top',
+      );
+      mockHttpFetch.mockResolvedValue(MAGIC_LINK_RESULT);
+
+      await service.sendMagicLink('user@example.com');
+
+      const [, opts] = magicLinkCall();
+      expect(opts.body.successUrl).toBe('https://app.example.com/login');
+      expect(String(opts.body.successUrl)).not.toMatch(/[?#]/);
+    });
+
+    it('keeps username, mode and appId unchanged alongside the defaulted successUrl', async () => {
+      stubBrowserLocation('https://app.example.com', '/login');
+      mockHttpFetch.mockResolvedValue(MAGIC_LINK_RESULT);
+
+      await service.sendMagicLink('user@example.com');
+
+      const [, opts] = magicLinkCall();
+      expect(opts.method).toBe('POST');
+      expect(opts.body).toEqual({
+        username: 'user@example.com',
+        mode: 'sdk',
+        appId: 'app1',
+        successUrl: 'https://app.example.com/login',
+      });
+    });
+
+    it('posts an explicit successUrl exactly as given', async () => {
+      stubBrowserLocation('https://app.example.com', '/login', '?redirect=%2Fdashboard');
+      mockHttpFetch.mockResolvedValue(MAGIC_LINK_RESULT);
+
+      await service.sendMagicLink('user@example.com', {
+        successUrl: 'https://app.example.com/auth/finish?flow=magic#done',
+      });
+
+      const [, opts] = magicLinkCall();
+      // Verbatim: an explicit value is not re-derived, stripped or normalized.
+      expect(opts.body).toEqual({
+        username: 'user@example.com',
+        mode: 'sdk',
+        appId: 'app1',
+        successUrl: 'https://app.example.com/auth/finish?flow=magic#done',
+      });
+    });
+
+    it('omits successUrl entirely when there is no location (non-browser)', async () => {
+      vi.stubGlobal('location', undefined);
+      mockHttpFetch.mockResolvedValue(MAGIC_LINK_RESULT);
+
+      await service.sendMagicLink('user@example.com');
+
+      const [, opts] = magicLinkCall();
+      // The key must be ABSENT, not present-and-undefined: a serialized
+      // `"successUrl": null` would defeat the server-side hosted fallback.
+      expect(Object.keys(opts.body)).not.toContain('successUrl');
+      expect('successUrl' in opts.body).toBe(false);
+      expect(opts.body).toEqual({
+        username: 'user@example.com',
+        mode: 'sdk',
+        appId: 'app1',
+      });
+    });
+
+    it('still sends an explicit successUrl outside a browser', async () => {
+      vi.stubGlobal('location', undefined);
+      mockHttpFetch.mockResolvedValue(MAGIC_LINK_RESULT);
+
+      await service.sendMagicLink('user@example.com', { successUrl: 'https://app.example.com/login' });
+
+      const [, opts] = magicLinkCall();
+      expect(opts.body.successUrl).toBe('https://app.example.com/login');
+    });
+
+    it('returns the response from the endpoint', async () => {
+      stubBrowserLocation('https://app.example.com', '/login');
+      mockHttpFetch.mockResolvedValue(MAGIC_LINK_RESULT);
+
+      const result = await service.sendMagicLink('user@example.com');
+      expect(result).toEqual(MAGIC_LINK_RESULT);
     });
   });
 
