@@ -36,9 +36,13 @@ const noopLogger: Logger = {
   error: () => {},
 };
 
+/** Minimum gap between read-triggered hydration attempts. */
+const RETRY_INTERVAL_MS = 2000;
+
 export class EntitlementsStore {
   private _cache: EntitlementSnapshot = {};
   private _hydrated = false;
+  private _lastAttemptAt = 0;
   private _hydrating = false;
   private _subscribers = new Set<Listener>();
   private _opts: ConfigureOptions | null = null;
@@ -50,7 +54,15 @@ export class EntitlementsStore {
     this._logger = logger;
   }
 
-  /** Has the initial REST fetch completed? Drives fail-closed reads. */
+  /**
+   * Has a real answer arrived yet? Drives fail-closed reads.
+   *
+   * `can()` cannot distinguish "not loaded" from "explicitly denied" — both
+   * read as `false`. That is correct for gating UX, but it is also why a store
+   * that never hydrated looked exactly like a workspace entitled to nothing,
+   * instead of a bug (TBP-686). Check this before treating a `false` as a
+   * denial, and when showing a paywall rather than a spinner.
+   */
   isHydrated(): boolean {
     return this._hydrated;
   }
@@ -65,7 +77,13 @@ export class EntitlementsStore {
     if (this._hydrated || this._hydrating) return;
     if (!this._opts) return;
     const token = this._opts.getAccessToken();
+    // No token yet. Attach fires before sign-in has produced one, so this is
+    // the normal first-load case, not an error — leave the store unhydrated so
+    // `_ensureHydrating()` can pick it up on the next read once a token exists.
+    // Returning here used to be terminal: nothing ever called hydrate again, so
+    // `can()` answered false for every key for the whole session (TBP-686).
     if (!token) return;
+    this._lastAttemptAt = Date.now();
     this._hydrating = true;
     try {
       const url = `${this._opts.apiBaseUrl.replace(/\/+$/, '')}/entitlements`;
@@ -111,13 +129,42 @@ export class EntitlementsStore {
    * — fail-closed protects against showing privileged UX on a cold start.
    */
   can(name: string): boolean {
-    if (!this._hydrated) return false;
+    if (!this._hydrated) {
+      this._ensureHydrating();
+      return false;
+    }
     return this._cache[name] === true;
   }
 
   /** All cached entitlements (shallow copy). */
   all(): EntitlementSnapshot {
+    if (!this._hydrated) this._ensureHydrating();
     return { ...this._cache };
+  }
+
+  /**
+   * Force a re-fetch, ignoring the retry interval and the hydrated flag.
+   * For a consumer that knows something changed out of band.
+   */
+  async refresh(): Promise<void> {
+    this._hydrated = false;
+    this._lastAttemptAt = 0;
+    await this.hydrate();
+  }
+
+  /**
+   * Kick a hydration attempt from a read, so the store recovers on its own
+   * once a token exists.
+   *
+   * Deliberately throttled: a failing endpoint would otherwise be retried on
+   * every `can()` call, and `can()` runs inside render. The in-flight guard in
+   * `hydrate()` handles concurrency; this handles repetition.
+   */
+  private _ensureHydrating(): void {
+    if (this._hydrating || !this._opts) return;
+    if (Date.now() - this._lastAttemptAt < RETRY_INTERVAL_MS) return;
+    if (!this._opts.getAccessToken()) return;
+    void this.hydrate();
   }
 
   /**
@@ -137,6 +184,7 @@ export class EntitlementsStore {
     this._cache = {};
     this._hydrated = false;
     this._hydrating = false;
+    this._lastAttemptAt = 0;
     this._subscribers.clear();
     this._opts = null;
   }
