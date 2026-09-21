@@ -152,3 +152,111 @@ describe('EntitlementsStore', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// TBP-686 — hydration must survive a first load with no token yet.
+//
+// `hydrate()` was called once, at attach. Attach happens before sign-in has
+// produced an access token, so it returned at `if (!token) return;` — and
+// nothing ever called it again. `can()` then answered false for every key for
+// the entire session, indistinguishable from a workspace entitled to nothing.
+// ---------------------------------------------------------------------------
+describe('EntitlementsStore — recovery when the token arrives late (TBP-686)', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  function storeWithLateToken() {
+    const store = new EntitlementsStore();
+    let token: string | null = null;
+    store.configure({
+      apiBaseUrl: 'https://api.example.com',
+      getAccessToken: () => token,
+    });
+    return { store, signIn: () => { token = 'jwt-token'; } };
+  }
+
+  it('does not mark itself hydrated when attach finds no token', async () => {
+    const { store } = storeWithLateToken();
+
+    await store.hydrate();
+
+    expect(mockHttpFetch).not.toHaveBeenCalled();
+    expect(store.isHydrated()).toBe(false);
+  });
+
+  it('hydrates on the next read once a token exists, instead of staying false forever', async () => {
+    const { store, signIn } = storeWithLateToken();
+    mockHttpFetch.mockResolvedValue({ entitlements: { app_active: true } });
+
+    await store.hydrate();          // attach: no token, gives up
+    expect(store.can('app_active')).toBe(false);
+
+    signIn();
+    // The read is synchronous and still fail-closed — it kicks the fetch.
+    expect(store.can('app_active')).toBe(false);
+    await vi.waitFor(() => expect(store.isHydrated()).toBe(true));
+
+    expect(store.can('app_active')).toBe(true);
+    expect(mockHttpFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('notifies subscribers when the late hydration lands, so reactive UI updates', async () => {
+    const { store, signIn } = storeWithLateToken();
+    mockHttpFetch.mockResolvedValue({ entitlements: { pro: true } });
+    const seen: Array<Record<string, boolean>> = [];
+    store.subscribe((snap) => seen.push(snap));
+
+    signIn();
+    store.can('pro');
+    await vi.waitFor(() => expect(seen.length).toBe(1));
+
+    expect(seen[0]).toEqual({ pro: true });
+  });
+
+  it('does not re-fetch on every read while a request is in flight', async () => {
+    const { store, signIn } = storeWithLateToken();
+    mockHttpFetch.mockResolvedValue({ entitlements: {} });
+    signIn();
+
+    for (let i = 0; i < 50; i++) store.can('anything');
+    await vi.waitFor(() => expect(store.isHydrated()).toBe(true));
+
+    expect(mockHttpFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('throttles retries after a failure — a dead endpoint is not hammered from render', async () => {
+    const { store, signIn } = storeWithLateToken();
+    mockHttpFetch.mockRejectedValue(new Error('network down'));
+    signIn();
+
+    store.can('x');
+    await vi.waitFor(() => expect(mockHttpFetch).toHaveBeenCalledTimes(1));
+    for (let i = 0; i < 50; i++) store.can('x');
+
+    expect(mockHttpFetch).toHaveBeenCalledTimes(1);
+    expect(store.isHydrated()).toBe(false);
+  });
+
+  it('stays quiet while signed out — no token, no requests', async () => {
+    const { store } = storeWithLateToken();
+
+    for (let i = 0; i < 20; i++) store.can('x');
+
+    expect(mockHttpFetch).not.toHaveBeenCalled();
+  });
+
+  it('refresh() re-fetches even once hydrated', async () => {
+    const { store, signIn } = storeWithLateToken();
+    signIn();
+    mockHttpFetch.mockResolvedValue({ entitlements: { pro: false } });
+    await store.hydrate();
+    expect(store.can('pro')).toBe(false);
+
+    mockHttpFetch.mockResolvedValue({ entitlements: { pro: true } });
+    await store.refresh();
+
+    expect(store.can('pro')).toBe(true);
+    expect(mockHttpFetch).toHaveBeenCalledTimes(2);
+  });
+});
