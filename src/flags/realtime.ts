@@ -22,6 +22,7 @@
 import type { BridgeFlags, CachedFlag } from './flag.js';
 import { createLogger, type Logger } from '../logger.js';
 import { currentOrigin, originNotAllowedHint } from '../errors.js';
+import { defaultFetch } from '../default-fetch.js';
 
 export interface RealtimeClientConfig {
   /** Bridge API base URL — same as the telemetry batcher. */
@@ -532,7 +533,11 @@ export class RealtimeClient {
       reconnectBaseMs: cfg.reconnectBaseMs ?? 1000,
       reconnectMaxMs: cfg.reconnectMaxMs ?? 30_000,
       websocketFactory: cfg.websocketFactory ?? defaultWs,
-      fetchFn: cfg.fetchFn ?? ((typeof fetch !== 'undefined' ? fetch : undefined) as typeof fetch),
+      // TBP-722 — never store the native `fetch` itself: it is called below as
+      // `this.cfg.fetchFn(...)`, and a browser's `fetch` invoked with a
+      // non-Window `this` throws "Illegal invocation". Svelte only escaped it
+      // because it swaps `globalThis.fetch` for a plain wrapper.
+      fetchFn: cfg.fetchFn ?? defaultFetch(),
       getAuthToken: cfg.getAuthToken,
       refreshAuthToken: cfg.refreshAuthToken,
       diagnose: cfg.diagnose !== false,

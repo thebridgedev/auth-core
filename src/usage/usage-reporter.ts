@@ -21,6 +21,7 @@
 // Framework-agnostic: uses global `fetch`, `setTimeout`, and `crypto.randomUUID`.
 // Constructed lazily by `BridgeAuth` on first access of `bridge.usage`.
 
+import { defaultFetch } from '../default-fetch.js';
 import {
   createDurableStorage,
   type DurableStorage,
@@ -84,7 +85,9 @@ export class UsageReporter {
     this.logger = opts.logger ?? { warn: noopWarn };
     this.batchSize = opts.batchSize ?? 10;
     this.flushIntervalMs = opts.flushIntervalMs ?? 1000;
-    this.fetchFn = opts.fetchFn ?? ((typeof fetch !== 'undefined' ? fetch : undefined) as typeof fetch);
+    // TBP-722 — a stored native `fetch` called as `this.fetchFn(...)` throws
+    // "Illegal invocation" in browsers; see defaultFetch.
+    this.fetchFn = opts.fetchFn ?? defaultFetch();
     this.storage = opts.storage ?? createDurableStorage();
 
     // Hydrate on init: if storage carries unsent events from a previous
