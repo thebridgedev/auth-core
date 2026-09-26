@@ -1,0 +1,15 @@
+name: PR gate
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    uses: ./.github/workflows/merge-gate.yml
+    with:
+      # npm, with no tracked package-lock: prove every pinned version resolves.
+      install-command: npm install --no-package-lock --ignore-scripts --no-audit --no-fund
