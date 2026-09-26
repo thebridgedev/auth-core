@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""
+pin-guard — refuse local-only package pins before they become history.
+
+A local development setup can rewire package.json and lockfiles to test
+unpublished builds from a local registry: a per-checkout dist-tag such as
+"wt1", versions like 0.7.0-wt1.3 or 0.7.0-dev.<timestamp>.wt1, a registry on
+:4873, a bunfig.toml or .npmrc routing a scope there, and a machine-local
+notes file. None of that resolves anywhere but the machine that made it, and
+once committed it is permanent history.
+
+WHAT COUNTS IS A PROPERTY OF THE CHANGE, NOT OF THE FILE. A value is refused
+only when a commit INTRODUCES it: anything already present in a parent
+passes. Legitimate committed values (a publish-to-local-registry script, a
+public CDN tarball) stay quiet, and merging the base branch in never
+re-litigates the base branch.
+
+One self-contained, stdlib-only script with three callers:
+  pre-commit hook   pin-guard --staged
+  pre-push hook     pin-guard --range <remote-sha>..<local-sha>
+  CI merge gate     pin-guard --range <base-sha>..<head-sha>
+
+Exit 0 clean, 1 pins found, 2 usage/git error.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+
+VERDACCIO = re.compile(r"(host\.docker\.internal|localhost|127\.0\.0\.1):4873")
+SLOT_VERSION = re.compile(r"-wt\d+\.")            # 0.7.0-wt1.3
+DEV_VERSION = re.compile(r"-dev\.\d")             # 0.7.0-dev.1790000000.wt1
+SLOT_TAG = re.compile(r"^wt\d+$")                 # the bare "wt1" dist-tag
+SLOT_TAG_TOKEN = re.compile(r'"wt\d+"')           # ... as it appears in a lock
+
+DEP_SECTIONS = ("dependencies", "devDependencies", "optionalDependencies",
+                "peerDependencies", "overrides", "resolutions")
+LOCKFILES = ("bun.lock", "package-lock.json", "yarn.lock", "pnpm-lock.yaml")
+ZERO = "0" * 40
+
+
+def git(repo, *args, check=True):
+    r = subprocess.run(["git", "-C", repo, *args], capture_output=True)
+    if check and r.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)}: {r.stderr.decode(errors='replace').strip()}")
+    return r.stdout.decode(errors="replace") if r.returncode == 0 else ""
+
+
+def blob(repo, spec):
+    """Content at `<rev>:<path>` or `:<path>` (index); '' when absent."""
+    return git(repo, "show", spec, check=False)
+
+
+# --- judges: (path, new_text, [parent_texts]) -> [(line, why, text)] ---------
+
+def pin_value(value):
+    if not isinstance(value, str):
+        return None
+    if SLOT_TAG.match(value):
+        return "slot dist-tag"
+    if SLOT_VERSION.search(value):
+        return "slot-only version"
+    if DEV_VERSION.search(value):
+        return "local dev build version"
+    if VERDACCIO.search(value):
+        return "local registry address"
+    return None
+
+
+def flatten(text):
+    try:
+        doc = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    flat = {}
+    if isinstance(doc.get("version"), str):
+        flat["version"] = doc["version"]
+    for sec in DEP_SECTIONS:
+        block = doc.get(sec)
+        if isinstance(block, dict):
+            for k, v in block.items():
+                flat[f"{sec}.{k}"] = v
+    return flat
+
+
+def line_of(text, needle):
+    for i, line in enumerate(text.splitlines(), 1):
+        if needle in line:
+            return i
+    return 0
+
+
+def judge_package_json(path, new, parents):
+    # Structural, dependency and version values only: a raw scan would flag a
+    # deliberate local-registry URL inside a `publish:local` script.
+    flat = flatten(new)
+    if flat is None:
+        return []
+    olds = [f for f in (flatten(p) for p in parents if p) if f is not None]
+    hits = []
+    for key, val in flat.items():
+        why = pin_value(val)
+        if not why or any(o.get(key) == val for o in olds):
+            continue
+        dep = key.split(".", 1)[-1]
+        hits.append((line_of(new, f'"{dep}"' if key != "version" else '"version"'),
+                     why, f"{key}: {val}"))
+    return hits
+
+
+def added_lines(new, parents):
+    seen = set()
+    for p in parents:
+        seen.update(p.splitlines())
+    for i, line in enumerate(new.splitlines(), 1):
+        if line not in seen:
+            yield i, line
+
+
+def judge_lockfile(path, new, parents):
+    hits = []
+    for i, line in added_lines(new, parents):
+        for pat, why in ((VERDACCIO, "local registry address"),
+                         (SLOT_VERSION, "slot-only version"),
+                         (DEV_VERSION, "local dev build version"),
+                         (SLOT_TAG_TOKEN, "slot dist-tag")):
+            if pat.search(line):
+                hits.append((i, why, line.strip()[:120]))
+                break
+    return hits
+
+
+def judge_registry_config(path, new, parents):
+    return [(i, "routes packages to the local registry", line.strip()[:120])
+            for i, line in added_lines(new, parents) if VERDACCIO.search(line)]
+
+
+def judge_claude_md(path, new, parents):
+    # The machine-local notes file a local checkout setup writes. Only that
+    # note, never a real, committed CLAUDE.md.
+    first = next((l.strip() for l in new.splitlines() if l.strip()), "")
+    if first != "# Current Focus":
+        return []
+    if any(p.strip() == new.strip() for p in parents):
+        return []
+    return [(1, "machine-local slot notes file", first)]
+
+
+def judge(path, new, parents):
+    base = os.path.basename(path)
+    if base == "package.json":
+        return judge_package_json(path, new, parents)
+    if base in LOCKFILES:
+        return judge_lockfile(path, new, parents)
+    if base in ("bunfig.toml", ".npmrc", ".yarnrc.yml"):
+        return judge_registry_config(path, new, parents)
+    if base == "CLAUDE.md":
+        return judge_claude_md(path, new, parents)
+    return []
+
+
+WATCHED = re.compile(r"(^|/)(package\.json|bun\.lock|package-lock\.json|yarn\.lock|"
+                     r"pnpm-lock\.yaml|bunfig\.toml|\.npmrc|\.yarnrc\.yml|CLAUDE\.md)$")
+
+
+# --- modes -------------------------------------------------------------------
+
+def check_staged(repo):
+    gitdir = git(repo, "rev-parse", "--git-dir").strip()
+    if not os.path.isabs(gitdir):
+        gitdir = os.path.join(repo, gitdir)
+    parents = []
+    if git(repo, "rev-parse", "-q", "--verify", "HEAD", check=False).strip():
+        parents.append("HEAD")
+    merge_head = os.path.join(gitdir, "MERGE_HEAD")
+    if os.path.exists(merge_head):
+        parents += [l.strip() for l in open(merge_head) if l.strip()]
+    names = git(repo, "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z")
+    findings = []
+    for path in filter(None, names.split("\0")):
+        if not WATCHED.search(path):
+            continue
+        new = blob(repo, f":{path}")
+        olds = [blob(repo, f"{p}:{path}") for p in parents]
+        for line, why, text in judge(path, new, olds):
+            findings.append(("staged", path, line, why, text))
+    return findings
+
+
+def check_commit(repo, sha):
+    parents = git(repo, "rev-list", "--parents", "-n1", sha).split()[1:]
+    if parents:
+        # -m with --first-parent would hide what a merge's other side brought;
+        # judging against every parent is what we want, so list paths changed
+        # relative to ANY parent.
+        paths = set()
+        for p in parents:
+            paths.update(filter(None, git(repo, "diff", "--name-only", "--diff-filter=ACMR",
+                                          "-z", p, sha).split("\0")))
+    else:
+        paths = set(filter(None, git(repo, "ls-tree", "-r", "--name-only", "-z", sha).split("\0")))
+    findings = []
+    for path in sorted(paths):
+        if not WATCHED.search(path):
+            continue
+        new = blob(repo, f"{sha}:{path}")
+        olds = [blob(repo, f"{p}:{path}") for p in parents]
+        for line, why, text in judge(path, new, olds):
+            findings.append((sha[:9], path, line, why, text))
+    return findings
+
+
+def commits_in(repo, spec):
+    """`A..B`, or a bare `B` meaning 'not yet on any remote'."""
+    if ".." in spec:
+        a, b = spec.split("..", 1)
+        if not a or a == ZERO:
+            return git(repo, "rev-list", b, "--not", "--remotes").split()
+        return git(repo, "rev-list", spec).split()
+    return git(repo, "rev-list", spec, "--not", "--remotes").split()
+
+
+def report(findings, context):
+    if not findings:
+        return 0
+    out = sys.stderr
+    red, dim, off = ("\033[31m", "\033[2m", "\033[0m") if out.isatty() else ("", "", "")
+    print(f"{red}✗ pin-guard{off}  {context} carries local-only pins "
+          f"— these never go into a commit:", file=out)
+    for where, path, line, why, text in findings:
+        loc = f"{path}:{line}" if line else path
+        print(f"   {where}  {loc} — {why}", file=out)
+        print(f"   {dim}{' ' * len(where)}  {text}{off}", file=out)
+    print("\n   These values only resolve on the machine that made them. Unstage the\n"
+          "   file, or commit the published version instead.", file=out)
+    return 1
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--repo", default=".")
+    mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--staged", action="store_true", help="the index against HEAD")
+    mode.add_argument("--range", help="every commit in A..B (or B not on any remote)")
+    mode.add_argument("--commit", help="one commit against its parents")
+    a = ap.parse_args()
+    try:
+        if a.staged:
+            return report(check_staged(a.repo), "this commit")
+        if a.commit:
+            return report(check_commit(a.repo, a.commit), f"commit {a.commit[:9]}")
+        findings = []
+        for sha in commits_in(a.repo, a.range):
+            findings += check_commit(a.repo, sha)
+        return report(findings, f"range {a.range}")
+    except RuntimeError as e:
+        print(f"pin-guard: {e}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

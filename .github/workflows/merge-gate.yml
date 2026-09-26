@@ -1,0 +1,81 @@
+# Merge gate for pull requests into main — shared by every plugin repo.
+#
+# Callers:  uses: thebridgedev/auth-core/.github/workflows/merge-gate.yml@main
+#
+# Two required checks:
+#   pin-guard      no commit in the pull request introduces a local-only pin
+#                  (a local-registry URL, a -dev./-wt<N>. build version, a
+#                  per-checkout dist-tag, a local registry config).
+#   clean-install  the committed manifests install from the PUBLIC registry,
+#                  with the lockfile frozen where one is tracked — the same
+#                  install the publish pipeline will run after the merge.
+name: Merge gate
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: Directory the install runs in (where the tracked lockfile lives)
+        required: false
+        default: '.'
+        type: string
+      install-command:
+        description: Frozen install command, e.g. `npm ci` or `bun install --frozen-lockfile`
+        required: true
+        type: string
+      setup-bun:
+        required: false
+        default: false
+        type: boolean
+      node-version:
+        required: false
+        default: '20'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  pin-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout pull request with history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch the guard at the gate's own revision
+        uses: actions/checkout@v4
+        with:
+          repository: thebridgedev/auth-core
+          ref: ${{ github.job_workflow_sha || 'main' }}
+          path: .merge-gate
+          sparse-checkout: .github/scripts
+
+      - name: No local-only pins in any commit of this pull request
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 .merge-gate/.github/scripts/pin-guard --range "$BASE..$HEAD"
+
+  clean-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://registry.npmjs.org
+
+      - if: ${{ inputs.setup-bun }}
+        uses: oven-sh/setup-bun@v2
+
+      - name: Drop any local registry routing so only the public registry is used
+        run: |
+          find . -path ./node_modules -prune -o \( -name bunfig.toml -o -name .npmrc \) -print \
+            | while read -r f; do echo "removing $f"; rm -f "$f"; done
+
+      - name: Install exactly what is committed
+        working-directory: ${{ inputs.working-directory }}
+        run: ${{ inputs.install-command }}
