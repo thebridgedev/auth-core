@@ -34,6 +34,15 @@ export interface QuotaSnapshot {
    * `policy`): `'metered'`.
    */
   policy: 'hard' | 'metered';
+  /**
+   * TBP-699 — `counter`: `used` is this billing period's total, reset each
+   * period. `gauge`: `used` is how many exist right now (never reset), so a
+   * UI can say "8 of 10 projects" rather than "8 used this month". The store
+   * always sets it (`'counter'` for servers that predate gauges); optional in
+   * the type only so snapshot literals written against older versions still
+   * compile.
+   */
+  kind?: 'counter' | 'gauge';
   warningLevel: null | 'approaching' | 'critical';
   /** Display label. US-11 uses the raw metric key; framework wrappers can override. */
   label: string;
@@ -145,6 +154,7 @@ export class QuotaStore {
       // an older bridge-api hasn't shipped US-12 yet so existing UI stays
       // visually identical.
       policy: msg.policy === 'hard' ? 'hard' : 'metered',
+      kind: msg.quotaKind === 'gauge' ? 'gauge' : 'counter',
       warningLevel: msg.warningLevel ?? null,
       label: msg.metric,
       // TBP-275 — overage fields (server-authoritative; overcap falls back to a
@@ -188,6 +198,7 @@ export class QuotaStore {
       // US-12 — accept the server-supplied policy; fall back to `'metered'`
       // for older bridge-api responses.
       policy: snapshot.policy === 'hard' ? 'hard' : 'metered',
+      kind: snapshot.kind === 'gauge' ? 'gauge' : 'counter',
       warningLevel: snapshot.warningLevel ?? null,
       label: metric,
       // TBP-275 — overage fields from the hydration response.
@@ -241,6 +252,8 @@ export class QuotaStore {
         warningLevel: null | 'approaching' | 'critical';
         /** US-12 — optional; server may omit on older builds. */
         policy?: 'hard' | 'metered';
+        /** TBP-699 — optional; absent from servers that predate gauges. */
+        kind?: 'counter' | 'gauge';
         /** TBP-275 — optional overage fields for metered quotas. */
         unitAmount?: number;
         currency?: string;
@@ -267,6 +280,7 @@ export class QuotaStore {
               remaining: body.remaining,
               warningLevel: body.warningLevel,
               policy: body.policy,
+              kind: body.kind,
               unitAmount: body.unitAmount,
               currency: body.currency,
               overageEstimate: body.overageEstimate,

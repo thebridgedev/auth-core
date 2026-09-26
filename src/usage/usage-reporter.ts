@@ -3,7 +3,8 @@
 //
 // `bridge.usage.report(metric, value?, idempotencyKey?)` enqueues a usage
 // event for the workspace and the SDK fire-and-forgets it to bridge-api's
-// `/usage/ingest` endpoint. The server's idempotency-key dedupe makes safe
+// `/usage/ingest` endpoint. TBP-699 adds `bridge.usage.set(metric, value)` for
+// gauges (absolute values), sent immediately to `/usage/gauge/:metric`. The server's idempotency-key dedupe makes safe
 // retries acceptable.
 //
 // US-19 adds a `DurableStorage` layer underneath the in-memory hot path:
@@ -22,6 +23,7 @@
 // Constructed lazily by `BridgeAuth` on first access of `bridge.usage`.
 
 import { defaultFetch } from '../default-fetch.js';
+import { BridgeAuthError, HttpError } from '../errors.js';
 import {
   createDurableStorage,
   type DurableStorage,
@@ -129,6 +131,60 @@ export class UsageReporter {
       this.logger.warn('[bridge.usage] storage.enqueue failed', err);
     });
     this._scheduleFlush();
+  }
+
+  /**
+   * TBP-699 — record the current absolute value of a gauge metric: how many of
+   * something exist right now (projects, tickets, stored bytes). If deleting it
+   * frees room, it's a gauge and your app counts it; if it happened, it's a
+   * counter and `report()` is the call.
+   *
+   * Unlike `report()` this is not queued: it PUTs `/usage/gauge/:metric`
+   * immediately and resolves once Bridge has stored the value. There is no
+   * decrement — send the whole current count each time it changes, so a
+   * missed or repeated call is corrected by the next one. A value that
+   * arrives after a newer one would overwrite it, which is why it is sent
+   * now rather than buffered and replayed later.
+   *
+   * Rejects when there is no signed-in user (the value belongs to the user's
+   * workspace), on an invalid value, and on any non-2xx answer (`HttpError`).
+   * `users` is maintained by Bridge from workspace membership and cannot be set.
+   */
+  public async set(metric: string, value: number): Promise<void> {
+    if (typeof metric !== 'string' || metric.length === 0) {
+      throw new TypeError('[bridge.usage] set() needs a metric name');
+    }
+    if (!Number.isInteger(value) || value < 0) {
+      throw new RangeError(
+        `[bridge.usage] set('${metric}', ${String(value)}): value must be an integer >= 0 — the current count, not a change`,
+      );
+    }
+    const token = this.getAccessToken();
+    if (token === null) {
+      throw new BridgeAuthError(
+        '[bridge.usage] set() needs a signed-in user — gauge values belong to the user\'s workspace',
+        'NOT_AUTHENTICATED',
+      );
+    }
+    const url = `${this.apiBaseUrl}/usage/gauge/${encodeURIComponent(metric)}`;
+    const res = await this.fetchFn(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ value }),
+    });
+    if (!res.ok) {
+      let body: unknown;
+      try {
+        body = await res.json();
+      } catch {
+        body = undefined;
+      }
+      const detail =
+        body && typeof body === 'object' && 'message' in body
+          ? `: ${String((body as { message: unknown }).message)}`
+          : '';
+      throw new HttpError(`[bridge.usage] set('${metric}') failed (${res.status})${detail}`, res.status, body);
+    }
   }
 
   /** Force an immediate drain of the queue. Resolves once all in-flight POSTs settle. */
