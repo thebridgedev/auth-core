@@ -76,6 +76,20 @@ describe('QuotaStore', () => {
       expect(store.get('ai_completions')!.policy).toBe('metered');
     });
 
+    // TBP-699 — the push names the quota kind `quotaKind` (`kind` is the
+    // message type); a server that predates gauges sends neither.
+    it("carries `quotaKind: 'gauge'` from the push onto the snapshot's kind", () => {
+      const store = new QuotaStore();
+      store.applyQuotaUpdated(makeMsg({ quotaKind: 'gauge' }));
+      expect(store.get('ai_completions')!.kind).toBe('gauge');
+    });
+
+    it("defaults kind to 'counter' when the push has no quotaKind", () => {
+      const store = new QuotaStore();
+      store.applyQuotaUpdated(makeMsg());
+      expect(store.get('ai_completions')!.kind).toBe('counter');
+    });
+
     it('successive applies are last-write-wins', () => {
       const store = new QuotaStore();
       store.applyQuotaUpdated(makeMsg({ used: 10 }));
@@ -110,6 +124,29 @@ describe('QuotaStore', () => {
         policy: 'hard',
       });
       expect(snap!.percent_used).toBeCloseTo(0.8);
+    });
+
+    it("carries the hydration payload's kind (TBP-699), defaulting to 'counter'", () => {
+      const store = new QuotaStore();
+      store.applyInitialSnapshot('projects', {
+        metric: 'projects',
+        used: 8,
+        limit: 10,
+        remaining: 2,
+        warningLevel: 'approaching',
+        policy: 'hard',
+        kind: 'gauge',
+      });
+      store.applyInitialSnapshot('ai_completions', {
+        metric: 'ai_completions',
+        used: 1,
+        limit: 10,
+        remaining: 9,
+        warningLevel: null,
+        policy: 'hard',
+      });
+      expect(store.get('projects')!.kind).toBe('gauge');
+      expect(store.get('ai_completions')!.kind).toBe('counter');
     });
 
     it('removes the entry from the cache when the server returns null (no quota configured)', () => {
@@ -156,6 +193,25 @@ describe('QuotaStore', () => {
 
       // Unblock the pending promise so vitest can settle.
       resolveFetch(null);
+    });
+
+    it('a hydrated gauge keeps the kind the server reports (TBP-699)', async () => {
+      const store = new QuotaStore();
+      mockHttpFetch.mockResolvedValue({
+        metric: 'projects',
+        used: 8,
+        limit: 10,
+        remaining: 2,
+        warningLevel: 'approaching',
+        policy: 'hard',
+        kind: 'gauge',
+      });
+      store.configure({ apiBaseUrl: 'https://api.example.com', accessToken: 'access-tok', appId: 'app-1' });
+
+      store.ensureHydrated('projects');
+      await vi.waitFor(() => expect(store.get('projects')).toBeDefined());
+
+      expect(store.get('projects')).toMatchObject({ used: 8, limit: 10, kind: 'gauge' });
     });
 
     it('returns the cached snapshot without re-fetching when one is already present', () => {

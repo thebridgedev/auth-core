@@ -796,7 +796,9 @@ export class BridgeAuth {
 
   /**
    * `bridge.usage.report(metric, value?, idempotencyKey?)` — fire-and-forget
-   * usage event emitter. Events are batched (default 10 events / 1s) and
+   * usage event emitter for counters. `bridge.usage.set(metric, value)`
+   * (TBP-699) records a gauge's current absolute value and resolves once
+   * stored. Events are batched (default 10 events / 1s) and
    * POSTed to `${apiBaseUrl}/usage/ingest` with the current access token.
    *
    * Events are persisted via a `DurableStorage` layer (IndexedDB in browser,
@@ -812,6 +814,8 @@ export class BridgeAuth {
    */
   get usage(): {
     report: (metric: string, value?: number, idempotencyKey?: string) => void;
+    /** TBP-699 — set a gauge's current absolute value (see UsageReporter.set). */
+    set: (metric: string, value: number) => Promise<void>;
     getQueueStatus: () => Promise<QueueStatus>;
   } {
     if (!this._usageReporter) {
@@ -825,6 +829,7 @@ export class BridgeAuth {
     return {
       report: (metric: string, value: number = 1, idempotencyKey?: string) =>
         reporter.report(metric, value, idempotencyKey),
+      set: (metric: string, value: number) => reporter.set(metric, value),
       getQueueStatus: () => reporter.getQueueStatus(),
     };
   }

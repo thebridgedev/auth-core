@@ -480,6 +480,14 @@ export interface PlanQuotaEntry {
   metric: string;
   limit: number;
   policy: 'hard' | 'metered';
+  /**
+   * TBP-699 — how the metric is counted. `counter` (the default when absent):
+   * reported events summed per billing period, reset each period. `gauge`: an
+   * absolute value the app sets with `bridge.usage.set()`, never reset.
+   * `users` is always a gauge Bridge maintains itself. A gauge cannot be
+   * `metered`.
+   */
+  kind?: 'counter' | 'gauge';
   /** Required for `metered`, forbidden for `hard`. */
   pricing?: PlanQuotaPricing;
 }

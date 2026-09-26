@@ -256,6 +256,11 @@ export interface QuotaUpdatedMessage {
    */
   policy?: 'hard' | 'metered';
   /**
+   * TBP-699 — `counter` | `gauge`. Named `quotaKind` because `kind` is this
+   * message's type. Absent from servers that predate gauges: a counter.
+   */
+  quotaKind?: 'counter' | 'gauge';
+  /**
    * TBP-275 — metered overage context. Optional (absent for hard quotas and
    * older servers). `unitAmount` + `currency` describe the per-unit price;
    * `overageEstimate` is the server-computed estimated cost this period;
