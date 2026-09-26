@@ -48,7 +48,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: thebridgedev/auth-core
-          ref: ${{ github.job_workflow_sha || 'main' }}
+          # The gate's own revision. A local call (`./…`, this repo) leaves
+          # job_workflow_sha empty, so use the pull request head there.
+          ref: ${{ github.job_workflow_sha || (github.repository == 'thebridgedev/auth-core' && github.event.pull_request.head.sha) || 'main' }}
           path: .merge-gate
           sparse-checkout: .github/scripts
 
