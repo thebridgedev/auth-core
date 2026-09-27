@@ -177,6 +177,76 @@ describe('BridgeAuth', () => {
         idToken: 'idt2',
       });
     });
+
+    // TBP-700 — a refresh that started before a server-side change can carry
+    // the old claims. A caller asking "what is the server's state now" must
+    // get a token minted after it asked, not one it happened to join.
+    describe('refreshTokens({ fresh: true })', () => {
+      async function signedIn() {
+        mockHttpFetch.mockResolvedValueOnce({ access_token: 'at1', refresh_token: 'rt1', id_token: 'idt1' });
+        await auth.handleCallback('code');
+      }
+      // Each refresh request resolves only when the test says so, in order.
+      function deferredRefreshes() {
+        const releases: Array<(t: string) => void> = [];
+        mockHttpFetch.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              releases.push((t) => resolve({ access_token: t, refresh_token: `r-${t}`, id_token: 'idt' }));
+            }),
+        );
+        return releases;
+      }
+
+      it('a plain call joins the refresh already in flight — one request', async () => {
+        await signedIn();
+        const releases = deferredRefreshes();
+        const earlier = auth.refreshTokens();
+        const joined = auth.refreshTokens();
+        releases[0]('at-early');
+        await expect(joined).resolves.toMatchObject({ accessToken: 'at-early' });
+        await earlier;
+        expect(releases).toHaveLength(1);
+      });
+
+      it('waits for the earlier refresh, then mints a new token', async () => {
+        await signedIn();
+        const releases = deferredRefreshes();
+        const earlier = auth.refreshTokens();
+        const fresh = auth.refreshTokens({ fresh: true });
+        releases[0]('at-early'); // minted before the change the caller cares about
+        await expect(earlier).resolves.toMatchObject({ accessToken: 'at-early' });
+        await vi.waitFor(() => expect(releases).toHaveLength(2));
+        releases[1]('at-after');
+        await expect(fresh).resolves.toMatchObject({ accessToken: 'at-after' });
+        expect(auth.getTokens()?.accessToken).toBe('at-after');
+      });
+
+      it('with nothing in flight it is an ordinary refresh', async () => {
+        await signedIn();
+        const releases = deferredRefreshes();
+        const fresh = auth.refreshTokens({ fresh: true });
+        await vi.waitFor(() => expect(releases).toHaveLength(1));
+        releases[0]('at2');
+        await expect(fresh).resolves.toMatchObject({ accessToken: 'at2' });
+      });
+
+      it('a failed earlier refresh does not fail the fresh one', async () => {
+        await signedIn();
+        let call = 0;
+        let rejectFirst!: (e: Error) => void;
+        mockHttpFetch.mockImplementation(() => {
+          call += 1;
+          if (call === 1) return new Promise((_, reject) => { rejectFirst = reject; });
+          return Promise.resolve({ access_token: 'at-after', refresh_token: 'r2', id_token: 'idt' });
+        });
+        const earlier = auth.refreshTokens();
+        const fresh = auth.refreshTokens({ fresh: true });
+        rejectFirst(new Error('network'));
+        await expect(earlier).resolves.toBeNull();
+        await expect(fresh).resolves.toMatchObject({ accessToken: 'at-after' });
+      });
+    });
   });
 
   describe('Direct auth (SDK mode)', () => {

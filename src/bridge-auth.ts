@@ -196,7 +196,22 @@ export class BridgeAuth {
   // response arriving simultaneously) coalesce into one POST /auth/token call.
   private _refreshInFlight: Promise<TokenSet | null> | null = null;
 
-  async refreshTokens(): Promise<TokenSet | null> {
+  /**
+   * Mint new tokens from the current session. Concurrent calls share one
+   * request.
+   *
+   * `fresh: true` (TBP-700) never joins a refresh that started BEFORE this
+   * call: it waits for that one, then mints again (or joins a refresh that
+   * started after this call). A joined refresh may have been minted before a
+   * server-side change the caller needs to see — e.g. a role change published
+   * while the realtime socket was being replaced — so a caller asking "what
+   * is the server's state NOW" cannot use its answer.
+   */
+  async refreshTokens(options?: { fresh?: boolean }): Promise<TokenSet | null> {
+    if (this._refreshInFlight && options?.fresh) {
+      await this._refreshInFlight.catch(() => null);
+      return this.refreshTokens();
+    }
     if (this._refreshInFlight) return this._refreshInFlight;
     this._refreshInFlight = this._doRefresh().finally(() => {
       this._refreshInFlight = null;
