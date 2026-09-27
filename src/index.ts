@@ -243,6 +243,12 @@ export { BridgeSubscription } from './billing/bridge-subscription.js';
 export { fetchBillingState } from './billing/fetch-billing-state.js';
 export { QuotaStore } from './billing/quota-store.js';
 export type { QuotaSnapshot } from './billing/quota-store.js';
+// TBP-697 — the reporter behind `bridge.usage.report()` / `bridge.usage.set()`,
+// by name. It was reachable only through the `BridgeAuth.usage` getter, so a
+// consumer typing a reference to it (or constructing one for a non-BridgeAuth
+// runtime) had to read node_modules to find it.
+export { UsageReporter } from './usage/usage-reporter.js';
+export type { UsageReporterOptions, QueueStatus } from './usage/usage-reporter.js';
 // Billing 2.0 US-12 — entitlement cache + types.
 export { EntitlementsStore } from './billing/entitlements-store.js';
 export type { EntitlementSnapshot } from './billing/entitlements-store.js';
