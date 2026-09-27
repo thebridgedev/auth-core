@@ -464,6 +464,9 @@ export class RealtimeClient {
   // the consumer has wired (app.branding, tenant.subscription, etc.).
   private onSnapshotHook?: (msg: SessionSnapshotMessage) => void;
   private onOpenHook?: () => void;
+  private onSubscribedHook?: () => void;
+  /** TBP-700 — `onSubscribedHook` has fired for the current connection. */
+  private subscribedFired = false;
   private onCloseHook?: () => void;
   /**
    * TBP-575 — fires whenever a flag mutation arrives on the wire, regardless
@@ -674,6 +677,26 @@ export class RealtimeClient {
    */
   setOnOpen(hook: () => void): void {
     this.onOpenHook = hook;
+  }
+
+  /**
+   * TBP-700 — register a hook fired once per connection when EVERY channel it
+   * asked for has been answered (accepted or refused) and at least one was
+   * accepted: the first moment from which nothing published on any of those
+   * channels can be missed. Fires on the initial connect and on every
+   * reconnect, always after `setOnOpen`'s hook for the same connection.
+   *
+   * Use this, not `setOnOpen`, to catch up on state a socket swap may have
+   * lost. `'open'` fires on the FIRST accepted subscription (TBP-575), while
+   * the others — the per-user channel among them — may still be pending: a
+   * read taken at `open` can predate a publish that then lands before the
+   * user channel is live, and AppSync has no replay.
+   *
+   * Centrifugo subscribes server-side from the connection token, so there it
+   * fires together with `open`.
+   */
+  setOnSubscribed(hook: () => void): void {
+    this.onSubscribedHook = hook;
   }
 
   /**
@@ -939,6 +962,9 @@ export class RealtimeClient {
         // ignore
       }
       this.markOpen();
+      // Channels come from the token's `channels` claim: nothing to wait for.
+      this.subscribedFired = false;
+      this.maybeMarkSubscribed();
     };
     ws.onmessage = (ev) => {
       if (this.ws !== ws) return;
@@ -1133,6 +1159,7 @@ export class RealtimeClient {
             this.clearSubscribeAckTimer();
             this.markOpen();
           }
+          this.maybeMarkSubscribed();
           break;
         }
         case 'subscribe_error': {
@@ -1156,6 +1183,9 @@ export class RealtimeClient {
             this.clearSubscribeAckTimer();
             this.markDegraded();
           }
+          // The refused channel was the last one outstanding: the accepted
+          // ones are all live now.
+          this.maybeMarkSubscribed();
           break;
         }
         case 'connection_error':
@@ -1211,6 +1241,7 @@ export class RealtimeClient {
   // ── AppSync subscribe bookkeeping (TBP-575) ──────────────────────────────
 
   private resetSubscribeTracking(): void {
+    this.subscribedFired = false;
     this.clearSubscribeAckTimer();
     this.pendingSubscribes.clear();
     this.ackedChannels.clear();
@@ -1481,6 +1512,21 @@ export class RealtimeClient {
     }
     try {
       this.onOpenHook?.();
+    } catch {
+      // hook errors must not break the connection.
+    }
+  }
+
+  /**
+   * TBP-700 — every channel answered and at least one live: fire
+   * `onSubscribedHook`, once per connection. See `setOnSubscribed`.
+   */
+  private maybeMarkSubscribed(): void {
+    if (this.subscribedFired) return;
+    if (this.pendingSubscribes.size > 0 || (this.ackedChannels.size === 0 && this.state !== 'open')) return;
+    this.subscribedFired = true;
+    try {
+      this.onSubscribedHook?.();
     } catch {
       // hook errors must not break the connection.
     }

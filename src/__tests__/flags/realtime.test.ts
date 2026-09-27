@@ -940,3 +940,109 @@ describe('RealtimeClient — flag-change hook feeds the route-guard cache (TBP-5
     expect(ws.readyState).not.toBe(3);
   });
 });
+
+// TBP-700 — `open` fires on the FIRST accepted subscription, while the others
+// (the per-user channel among them) may still be pending. A catch-up read
+// taken at `open` can predate a publish that then lands before the user
+// channel is live — AppSync has no replay, so that change is gone. Stage
+// showed the three acks arriving in any order. `setOnSubscribed` is the point
+// where every channel is live, so a read from there misses nothing.
+describe('RealtimeClient — setOnSubscribed fires once every channel is live (TBP-700)', () => {
+  const APPSYNC_HOST = 'svc.appsync-realtime-api.eu-west-1.amazonaws.com';
+  const appsyncFetch = () =>
+    mkFetch({
+      '/realtime/config': () => ({
+        kind: 'appsync',
+        endpoint: APPSYNC_HOST,
+        protocol: 'appsync-events',
+        params: { region: 'eu-west-1', apiId: 'svc' },
+      }),
+    });
+
+  async function connect(client: RealtimeClient) {
+    await client.start();
+    const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack' });
+    const subs = ws.sent
+      .map((raw) => JSON.parse(raw))
+      .filter((f) => f.type === 'subscribe') as Array<{ id: string; channel: string }>;
+    return { ws, subs };
+  }
+
+  function mkClient() {
+    const client = new RealtimeClient({ ...CONFIG, appId: 'app-1', fetchFn: appsyncFetch() });
+    const order: string[] = [];
+    client.setOnOpen(() => order.push('open'));
+    client.setOnSubscribed(() => order.push('subscribed'));
+    return { client, order };
+  }
+
+  it('waits for the LAST subscription ack — open fires on the first', async () => {
+    const { client, order } = mkClient();
+    const { ws, subs } = await connect(client);
+    expect(subs.length).toBe(3); // app, workspace, user
+    const user = subs.find((s) => s.channel.startsWith('/user/'))!;
+    const others = subs.filter((s) => s !== user);
+    for (const s of others) ws.triggerMessage({ type: 'subscribe_success', id: s.id });
+    expect(order).toEqual(['open']); // the user channel is not live yet
+    ws.triggerMessage({ type: 'subscribe_success', id: user.id });
+    expect(order).toEqual(['open', 'subscribed']);
+  });
+
+  it('a refused channel does not hold it back — the accepted ones are live', async () => {
+    const { client, order } = mkClient();
+    const { ws, subs } = await connect(client);
+    ws.triggerMessage({ type: 'subscribe_success', id: subs[0].id });
+    ws.triggerMessage({ type: 'subscribe_success', id: subs[1].id });
+    ws.triggerMessage({ type: 'subscribe_error', id: subs[2].id, errors: [{ message: 'denied' }] });
+    expect(order).toEqual(['open', 'subscribed']);
+  });
+
+  it('never fires when every channel is refused — nothing is live (degraded)', async () => {
+    const { client, order } = mkClient();
+    const { ws, subs } = await connect(client);
+    for (const s of subs) ws.triggerMessage({ type: 'subscribe_error', id: s.id, errors: [{ message: 'denied' }] });
+    expect(client.getState()).toBe('degraded');
+    expect(order).toEqual([]);
+  });
+
+  it('fires once per connection, and again on the next one', async () => {
+    const { client, order } = mkClient();
+    const first = await connect(client);
+    for (const s of first.subs) first.ws.triggerMessage({ type: 'subscribe_success', id: s.id });
+    first.ws.triggerMessage({ type: 'subscribe_success', id: first.subs[0].id }); // duplicate ack
+    expect(order).toEqual(['open', 'subscribed']);
+
+    const reauth = client.reauthorize();
+    await reauth;
+    const ws = FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
+    expect(ws).not.toBe(first.ws);
+    ws.triggerOpen();
+    ws.triggerMessage({ type: 'connection_ack' });
+    const subs = ws.sent.map((raw) => JSON.parse(raw)).filter((f) => f.type === 'subscribe');
+    for (const s of subs) ws.triggerMessage({ type: 'subscribe_success', id: s.id });
+    expect(order).toEqual(['open', 'subscribed', 'open', 'subscribed']);
+  });
+
+  it('Centrifugo subscribes server-side from the token — it fires with open', async () => {
+    const client = new RealtimeClient({
+      ...CONFIG,
+      fetchFn: mkFetch({
+        '/realtime/config': () => ({ kind: 'centrifugo', endpoint: 'wss://x' }),
+        '/realtime/authorize': () => ({
+          allowed: ['workspace:ws-1', 'user:ws-1:u-1'],
+          denied: [],
+          signedToken: 'sig',
+          expiresAt: Date.now() + 60_000,
+        }),
+      }),
+    });
+    const order: string[] = [];
+    client.setOnOpen(() => order.push('open'));
+    client.setOnSubscribed(() => order.push('subscribed'));
+    await client.start();
+    FakeWebSocket.instances[FakeWebSocket.instances.length - 1].triggerOpen();
+    expect(order).toEqual(['open', 'subscribed']);
+  });
+});
