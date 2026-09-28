@@ -16,6 +16,7 @@ import { httpFetch } from './http.js';
 import { decodeJwtPayload } from './token-utils.js';
 import type { AuthJwtClaims } from './flags/attribute-providers.js';
 import { UsageReporter, type QueueStatus } from './usage/usage-reporter.js';
+import { reconcileQuotasAfterReport } from './billing/use-bridge.js';
 import type {
   AppConfig,
   AuthConfigResponse,
@@ -840,6 +841,9 @@ export class BridgeAuth {
         apiBaseUrl: this.config.apiBaseUrl,
         getAccessToken: () => this.tokenManager.getTokens()?.accessToken ?? null,
         logger: this.logger,
+        // TBP-700 — the page that reported must see its own usage even when
+        // the live push for it is lost.
+        onAccepted: reconcileQuotasAfterReport,
       });
     }
     const reporter = this._usageReporter;

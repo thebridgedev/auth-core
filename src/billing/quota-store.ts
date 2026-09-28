@@ -77,6 +77,14 @@ interface MountOptions {
   appId: string;
 }
 
+/**
+ * TBP-700 — how long after Bridge accepts a usage report the store waits for
+ * that report's `quota.updated` push before asking the server itself. The push
+ * is published before the ingest request returns, so on a healthy socket it has
+ * normally arrived by the time the report is acknowledged.
+ */
+export const RECONCILE_AFTER_REPORT_MS = 1000;
+
 const noopLogger: Logger = {
   debug: () => {},
   warn: () => {},
@@ -94,6 +102,12 @@ export class QuotaStore {
    */
   private _opts: MountOptions | null = null;
   private _logger: Logger = noopLogger;
+  /**
+   * Bumped on every value the cache takes for a metric (push or REST answer),
+   * so an in-flight reconcile can tell that something newer landed meanwhile.
+   */
+  private _version = new Map<string, number>();
+  private _reconcileTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   /** Wire HTTP options + optional logger. Framework wrappers call this once. */
   configure(opts: MountOptions, logger: Logger = noopLogger): void {
@@ -166,6 +180,7 @@ export class QuotaStore {
     };
     this._snapshots.set(msg.metric, snap);
     this._hydrating.delete(msg.metric);
+    this._bump(msg.metric);
     this._notify(msg.metric, snap);
   }
 
@@ -182,6 +197,7 @@ export class QuotaStore {
       | null,
   ): void {
     this._hydrating.delete(metric);
+    this._bump(metric);
     if (!snapshot) {
       // Server returned null → no quota configured. Notify with undefined so
       // subscribers can show an "unmetered" UI state without an extra check.
@@ -212,6 +228,45 @@ export class QuotaStore {
   }
 
   /**
+   * Bridge has just accepted usage for `metric` from this client. If no new
+   * value for the metric reaches the cache within `delayMs`, read
+   * `GET /usage/quota/:metric` once, so the page shows its own usage even when
+   * the `quota.updated` push for it is lost. A push that lands while the read
+   * is in flight is newer and wins. Only metrics the store already shows are
+   * reconciled; repeated reports for one metric share one pending read.
+   */
+  /*
+   * TBP-700 — why the push alone is not enough. AppSync Events accepts a
+   * publish (HTTP 200) and now and then never delivers it to a subscription
+   * made shortly after the same client's previous connection closed: a page
+   * navigation, or a socket swap. Measured on stage with a direct IAM publish,
+   * no bridge-api involved: 3 of 40 events lost 1.2 s after `subscribe_success`
+   * when the old socket closed 0.7 s before the new one opened, 5 of 155 when
+   * it closed as the new one opened; 0 of 50 with a 3 s pause and 0 of 160 on
+   * a long-lived socket. The lost subscription recovers — a publish 10 s later
+   * arrives — but the lost event is gone, and before this the page kept the
+   * old `used` until the next push (metered-plan-switch US-D, ~2 in 3 stage
+   * runs). The on-connect catch-up in the framework runtimes cannot cover it:
+   * the event is published after the subscription is acknowledged.
+   */
+  reconcileAfterReport(metric: string, delayMs: number = RECONCILE_AFTER_REPORT_MS): void {
+    if (!this._snapshots.has(metric) && !this._hydrating.has(metric)) return;
+    const acceptedAt = this._versionOf(metric);
+    const pending = this._reconcileTimers.get(metric);
+    if (pending !== undefined) clearTimeout(pending);
+    const timer = setTimeout(() => {
+      this._reconcileTimers.delete(metric);
+      // Something reached the cache after the report was accepted — the push
+      // got through (or a fresher read did). Nothing was lost.
+      if (this._versionOf(metric) !== acceptedAt) return;
+      void this._reconcile(metric);
+    }, delayMs);
+    const t = timer as unknown as { unref?: () => void };
+    if (typeof t.unref === 'function') t.unref();
+    this._reconcileTimers.set(metric, timer);
+  }
+
+  /**
    * Wire the store to a RealtimeClient so `quota.updated` pushes flow into
    * `applyQuotaUpdated`. Idempotent: re-attaching replaces the hook.
    */
@@ -221,6 +276,9 @@ export class QuotaStore {
 
   /** Test-only: clear cache + listeners. */
   __resetForTests(): void {
+    for (const t of this._reconcileTimers.values()) clearTimeout(t);
+    this._reconcileTimers.clear();
+    this._version.clear();
     this._snapshots.clear();
     this._hydrating.clear();
     this._listeners.clear();
@@ -237,57 +295,21 @@ export class QuotaStore {
     }
   }
 
+  private _bump(metric: string): void {
+    this._version.set(metric, this._versionOf(metric) + 1);
+  }
+
+  private _versionOf(metric: string): number {
+    return this._version.get(metric) ?? 0;
+  }
+
   private async _fetchSnapshot(metric: string): Promise<void> {
     if (!this._opts || !this._opts.accessToken) {
       this._hydrating.delete(metric);
       return;
     }
-    const url = `${this._opts.apiBaseUrl.replace(/\/+$/, '')}/usage/quota/${encodeURIComponent(metric)}`;
     try {
-      const body = await httpFetch<{
-        metric: string;
-        used: number;
-        limit: number;
-        remaining: number;
-        warningLevel: null | 'approaching' | 'critical';
-        /** US-12 — optional; server may omit on older builds. */
-        policy?: 'hard' | 'metered';
-        /** TBP-699 — optional; absent from servers that predate gauges. */
-        kind?: 'counter' | 'gauge';
-        /** TBP-275 — optional overage fields for metered quotas. */
-        unitAmount?: number;
-        currency?: string;
-        overageEstimate?: number;
-        overcap?: boolean;
-      } | null>(
-        url,
-        {
-          method: 'GET',
-          headers: {
-            Authorization: `Bearer ${this._opts.accessToken}`,
-            'x-app-id': this._opts.appId,
-          },
-        },
-        this._logger,
-      );
-      this.applyInitialSnapshot(
-        metric,
-        body
-          ? {
-              metric: body.metric,
-              used: body.used,
-              limit: body.limit,
-              remaining: body.remaining,
-              warningLevel: body.warningLevel,
-              policy: body.policy,
-              kind: body.kind,
-              unitAmount: body.unitAmount,
-              currency: body.currency,
-              overageEstimate: body.overageEstimate,
-              overcap: body.overcap,
-            }
-          : null,
-      );
+      this.applyInitialSnapshot(metric, await this._readSnapshot(this._opts, metric));
     } catch (err) {
       // Hydration is best-effort. Drop the hydrating mark so a later push or
       // a manual retry can re-populate. Log at warn so the consumer can
@@ -298,5 +320,74 @@ export class QuotaStore {
       );
       this._hydrating.delete(metric);
     }
+  }
+
+  /** TBP-700 — the read behind `reconcileAfterReport`. */
+  private async _reconcile(metric: string): Promise<void> {
+    const opts = this._opts;
+    if (!opts || !opts.accessToken) return;
+    const before = this._versionOf(metric);
+    try {
+      const snapshot = await this._readSnapshot(opts, metric);
+      // A push (or another read) landed while this one was in flight: it is at
+      // least as new as this answer, so this answer must not overwrite it.
+      if (this._versionOf(metric) !== before) return;
+      // Signed out or switched workspace meanwhile: the answer is not ours.
+      if (this._opts?.accessToken !== opts.accessToken) return;
+      this.applyInitialSnapshot(metric, snapshot);
+    } catch (err) {
+      this._logger.warn(
+        '[bridge.quota] reconcile after report failed',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  private async _readSnapshot(
+    opts: MountOptions,
+    metric: string,
+  ): Promise<Parameters<QuotaStore['applyInitialSnapshot']>[1]> {
+    const url = `${opts.apiBaseUrl.replace(/\/+$/, '')}/usage/quota/${encodeURIComponent(metric)}`;
+    const body = await httpFetch<{
+      metric: string;
+      used: number;
+      limit: number;
+      remaining: number;
+      warningLevel: null | 'approaching' | 'critical';
+      /** US-12 — optional; server may omit on older builds. */
+      policy?: 'hard' | 'metered';
+      /** TBP-699 — optional; absent from servers that predate gauges. */
+      kind?: 'counter' | 'gauge';
+      /** TBP-275 — optional overage fields for metered quotas. */
+      unitAmount?: number;
+      currency?: string;
+      overageEstimate?: number;
+      overcap?: boolean;
+    } | null>(
+      url,
+      {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${opts.accessToken}`,
+          'x-app-id': opts.appId,
+        },
+      },
+      this._logger,
+    );
+    return body
+      ? {
+          metric: body.metric,
+          used: body.used,
+          limit: body.limit,
+          remaining: body.remaining,
+          warningLevel: body.warningLevel,
+          policy: body.policy,
+          kind: body.kind,
+          unitAmount: body.unitAmount,
+          currency: body.currency,
+          overageEstimate: body.overageEstimate,
+          overcap: body.overcap,
+        }
+      : null;
   }
 }

@@ -48,6 +48,15 @@ export interface UsageReporterOptions {
    * auto-detects browser / Node / fallback. Tests can inject `InMemoryStorage`.
    */
   storage?: DurableStorage;
+  /**
+   * Called with the metrics whose values Bridge has just accepted — after a
+   * flush (distinct metrics of the acknowledged events) and after a successful
+   * `set()`. Never throws into the reporter: errors are logged and dropped.
+   *
+   * `BridgeAuth` wires it to the quota store so the reporting page does not
+   * depend on a single live push to see its own usage (TBP-700).
+   */
+  onAccepted?: (metrics: string[]) => void;
 }
 
 export interface QueueStatus {
@@ -71,6 +80,7 @@ export class UsageReporter {
   private readonly flushIntervalMs: number;
   private readonly fetchFn: typeof fetch;
   private readonly storage: DurableStorage;
+  private readonly onAccepted?: (metrics: string[]) => void;
 
   private timer: ReturnType<typeof setTimeout> | undefined;
   private stopped = false;
@@ -91,6 +101,7 @@ export class UsageReporter {
     // "Illegal invocation" in browsers; see defaultFetch.
     this.fetchFn = opts.fetchFn ?? defaultFetch();
     this.storage = opts.storage ?? createDurableStorage();
+    this.onAccepted = opts.onAccepted;
 
     // Hydrate on init: if storage carries unsent events from a previous
     // session, schedule an immediate replay flush (no debounce).
@@ -185,6 +196,7 @@ export class UsageReporter {
           : '';
       throw new HttpError(`[bridge.usage] set('${metric}') failed (${res.status})${detail}`, res.status, body);
     }
+    this._notifyAccepted([metric]);
   }
 
   /** Force an immediate drain of the queue. Resolves once all in-flight POSTs settle. */
@@ -290,6 +302,7 @@ export class UsageReporter {
     }
     const url = `${this.apiBaseUrl}/usage/ingest`;
     const succeeded: string[] = [];
+    const acceptedMetrics = new Set<string>();
     const failures: Array<{ key: string; error: string }> = [];
 
     await Promise.all(
@@ -315,6 +328,7 @@ export class UsageReporter {
             return;
           }
           succeeded.push(event.idempotencyKey);
+          acceptedMetrics.add(event.metric);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           this.logger.warn('[bridge.usage] ingest error', err);
@@ -338,11 +352,21 @@ export class UsageReporter {
 
     this._lastFlushError = failures.length > 0 ? failures[failures.length - 1].error : null;
 
+    if (acceptedMetrics.size > 0) this._notifyAccepted([...acceptedMetrics]);
+
     // If items remain (more than batchSize were queued or some failed),
     // schedule another flush. Failures will be retried on the next pass.
     if (!this.stopped) {
       const remaining = await this.storage.size().catch(() => 0);
       if (remaining > 0) this._scheduleFlush();
+    }
+  }
+  private _notifyAccepted(metrics: string[]): void {
+    if (!this.onAccepted) return;
+    try {
+      this.onAccepted(metrics);
+    } catch (err) {
+      this.logger.warn('[bridge.usage] onAccepted hook failed', err);
     }
   }
 }
