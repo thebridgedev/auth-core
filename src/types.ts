@@ -359,6 +359,11 @@ export interface Plan {
    * metered plans don't bypass payment-method capture (US-C).
    */
   hasCost?: boolean;
+  /**
+   * TBP-755 — the features the plan includes, for the pricing table and the
+   * upgrade dialog. Absent from APIs that predate it; treat as empty.
+   */
+  features?: Array<{ key: string; name: string }>;
 }
 
 /** Price offer for a plan */

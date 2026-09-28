@@ -115,7 +115,7 @@ export type {
   // Branding
   BrandingResponse, UpdateBrandingRequest, CssFileResponse, UpdateCssFileRequest,
   // Plan
-  PlanResponse, CreatePlanRequest, UpdatePlanRequest, PlanPrice,
+  PlanResponse, CreatePlanRequest, UpdatePlanRequest, PlanPrice, PlanFeature, PlanFeatureInput,
   // Token
   TokenRecord, CreateTokenRequest, CreateTokenResponse,
   // Event
