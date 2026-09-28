@@ -16,6 +16,7 @@ import { httpFetch } from './http.js';
 import { decodeJwtPayload } from './token-utils.js';
 import type { AuthJwtClaims } from './flags/attribute-providers.js';
 import { UsageReporter, type QueueStatus } from './usage/usage-reporter.js';
+import { reconcileQuotasAfterReport } from './billing/use-bridge.js';
 import type {
   AppConfig,
   AuthConfigResponse,
@@ -791,12 +792,14 @@ export class BridgeAuth {
 
   // Returns the onTokenStale callback for authenticated httpFetch calls.
   // When a REST 401 TOKEN_VERSION_STALE is detected, httpFetch calls this to
-  // get a fresh token and retry. The dedup gate in refreshTokens() ensures
-  // only one POST /auth/token goes out even if the WebSocket path fires at
-  // the same time.
+  // get a fresh token and retry once. `fresh: true` (TBP-747): the server has
+  // just said our tokenVersion is behind, so a refresh already in flight
+  // (per-connect reconcile, WebSocket user.state_changed) may have been
+  // minted before the bump — retrying with it fails again. `fresh` waits for
+  // it and mints a new one, or joins a refresh that started after this call.
   private _onTokenStale(): () => Promise<string | null> {
     return async () => {
-      const t = await this.refreshTokens();
+      const t = await this.refreshTokens({ fresh: true });
       return t?.accessToken ?? null;
     };
   }
@@ -838,6 +841,9 @@ export class BridgeAuth {
         apiBaseUrl: this.config.apiBaseUrl,
         getAccessToken: () => this.tokenManager.getTokens()?.accessToken ?? null,
         logger: this.logger,
+        // TBP-700 — the page that reported must see its own usage even when
+        // the live push for it is lost.
+        onAccepted: reconcileQuotasAfterReport,
       });
     }
     const reporter = this._usageReporter;

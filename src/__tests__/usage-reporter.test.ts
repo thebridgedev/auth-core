@@ -250,4 +250,66 @@ describe('UsageReporter', () => {
       expect((await reporter.getQueueStatus()).queueDepth).toBe(0);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // TBP-700 — onAccepted: what Bridge accepted, so the quota store can reconcile
+  // -------------------------------------------------------------------------
+  describe('onAccepted (TBP-700)', () => {
+    function withHook(fetchFn: ReturnType<typeof vi.fn>) {
+      const onAccepted = vi.fn();
+      const reporter = new UsageReporter({
+        apiBaseUrl: 'https://api.example.com',
+        getAccessToken: () => 'access-tok',
+        logger: { warn: vi.fn() },
+        fetchFn,
+        storage: new InMemoryStorage(),
+        onAccepted,
+      });
+      return { reporter, onAccepted };
+    }
+
+    it('is called once per flush with the distinct metrics Bridge accepted', async () => {
+      const { reporter, onAccepted } = withHook(vi.fn().mockResolvedValue({ ok: true, status: 201 }));
+      reporter.report('a', 1);
+      reporter.report('a', 2);
+      reporter.report('b', 1);
+      await reporter.flushNow();
+      expect(onAccepted).toHaveBeenCalledTimes(1);
+      expect([...onAccepted.mock.calls[0][0]].sort()).toEqual(['a', 'b']);
+    });
+
+    it('leaves out metrics whose ingest failed', async () => {
+      const fetchFn = vi.fn().mockImplementation(async (_url: string, init: { body: string }) =>
+        JSON.parse(init.body).metric === 'bad' ? { ok: false, status: 500 } : { ok: true, status: 201 });
+      const { reporter, onAccepted } = withHook(fetchFn);
+      reporter.report('good', 1);
+      reporter.report('bad', 1);
+      await reporter.flushNow();
+      expect(onAccepted).toHaveBeenCalledWith(['good']);
+    });
+
+    it('is not called when nothing was accepted', async () => {
+      const { reporter, onAccepted } = withHook(vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+      reporter.report('a', 1);
+      await reporter.flushNow();
+      expect(onAccepted).not.toHaveBeenCalled();
+    });
+
+    it('is called after a successful set()', async () => {
+      const { reporter, onAccepted } = withHook(vi.fn().mockResolvedValue({ ok: true, status: 200 }));
+      await reporter.set('projects', 3);
+      expect(onAccepted).toHaveBeenCalledWith(['projects']);
+    });
+
+    it('a throwing hook does not break the flush', async () => {
+      const fetchFn = vi.fn().mockResolvedValue({ ok: true, status: 201 });
+      const { reporter, onAccepted } = withHook(fetchFn);
+      onAccepted.mockImplementation(() => {
+        throw new Error('boom');
+      });
+      reporter.report('a', 1);
+      await expect(reporter.flushNow()).resolves.toBeUndefined();
+      expect((await reporter.getQueueStatus()).queueDepth).toBe(0);
+    });
+  });
 });
