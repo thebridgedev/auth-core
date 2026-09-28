@@ -24,6 +24,8 @@ export {
   evaluateRule,
   resolveAttribute,
   validateRule,
+  attributeFamily,
+  isOffValue,
 } from './evaluator.js';
 
 export type {
@@ -33,6 +35,8 @@ export type {
   EvalContext,
   EvalResult,
   RuleValidationError,
+  FlagOffReason,
+  AttributeFamily,
 } from './evaluator.js';
 
 // SDK API: bridge.flag(key, default) with type inference (TBP-160)
