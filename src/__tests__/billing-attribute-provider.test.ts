@@ -163,3 +163,41 @@ describe('BillingAttributeProvider — bindStores (US-13)', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// TBP-755 — a plan's included features arrive in the same entitlement
+// snapshot as the quota-derived keys: `<key>: true` when the workspace's plan
+// lists the feature, `<key>: false` when only another plan of the app does.
+// A flag rule `bridge:billing.entitlement.<key> eq true` depends on BOTH values
+// being emitted — a missing false would leave the rule unable to tell "not on
+// your plan" from "not loaded yet".
+// ---------------------------------------------------------------------------
+describe('BillingAttributeProvider — plan features (TBP-755)', () => {
+  it('emits bridge:billing.entitlement.<feature> true for an included feature and false for one another plan sells', () => {
+    const provider = new BillingAttributeProvider();
+    const subscription = new BridgeSubscription();
+    const entitlements = new EntitlementsStore();
+    subscription.hydrate({ plan: { slug: 'pro', name: 'Pro' }, status: 'active' });
+    entitlements.applyEntitlementsChanged({
+      app_active: true,
+      analytics: true,
+      sso: false,
+    });
+    provider.bindStores({ subscription, quotas: new QuotaStore(), entitlements });
+
+    const out = provider.provide() as Record<string, unknown>;
+    expect(out['bridge:billing.entitlement.analytics']).toBe(true);
+    expect(out['bridge:billing.entitlement.sso']).toBe(false);
+  });
+
+  it('follows the plan when the feature list changes (entitlements.changed replaces the snapshot)', () => {
+    const provider = new BillingAttributeProvider();
+    const entitlements = new EntitlementsStore();
+    entitlements.applyEntitlementsChanged({ app_active: true, analytics: false });
+    provider.bindStores({ subscription: new BridgeSubscription(), quotas: new QuotaStore(), entitlements });
+    expect((provider.provide() as Record<string, unknown>)['bridge:billing.entitlement.analytics']).toBe(false);
+
+    entitlements.applyEntitlementsChanged({ app_active: true, analytics: true });
+    expect((provider.provide() as Record<string, unknown>)['bridge:billing.entitlement.analytics']).toBe(true);
+  });
+});

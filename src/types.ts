@@ -1,3 +1,4 @@
+import type { FlagOffReason } from './flags/evaluator.js';
 /** Bridge auth configuration */
 export interface BridgeAuthConfig {
   /** Your Bridge application ID */
@@ -283,13 +284,41 @@ export type NavigationDecision =
        */
       returnTo?: string;
     }
-  | { type: 'redirect'; to: string };
+  | {
+      type: 'redirect';
+      to: string;
+      /**
+       * TBP-756 — why a route's feature flag turned the visitor away, when the
+       * server said. `plan` means an upgrade alone would open the route: an
+       * adapter shows the upgrade dialog (redirecting first only when there is
+       * no current page to stay on). Absent for billing-lock redirects and
+       * when the reason is unknown.
+       */
+      reason?: FlagOffReason;
+      /** TBP-756 — the route rule's flag whose reason this is. */
+      flag?: string;
+      /** TBP-756 — with `reason: 'plan'`, the plan feature the flag's rule asks for. */
+      feature?: string;
+    };
+
+/** TBP-756 — a route restriction: where to send the visitor, and why. */
+export interface RouteRestriction {
+  to: string;
+  reason?: FlagOffReason;
+  flag?: string;
+  feature?: string;
+}
 
 export interface RouteGuard {
   isPublicRoute(pathname: string): boolean;
   isProtectedRoute(pathname: string): boolean;
   shouldRedirectToLogin(pathname: string): boolean;
   checkRouteRestrictions(pathname: string): Promise<string | null>;
+  /**
+   * TBP-756 — `checkRouteRestrictions` with the reason: null when the route
+   * is open, else where to send the visitor and, for a feature flag, why.
+   */
+  checkRouteRestriction(pathname: string): Promise<RouteRestriction | null>;
   getLoginRedirect(): string;
   /**
    * `attempted` is the full path+query the visitor asked for. Optional so the
@@ -359,6 +388,11 @@ export interface Plan {
    * metered plans don't bypass payment-method capture (US-C).
    */
   hasCost?: boolean;
+  /**
+   * TBP-755 — the features the plan includes, for the pricing table and the
+   * upgrade dialog. Absent from APIs that predate it; treat as empty.
+   */
+  features?: Array<{ key: string; name: string }>;
 }
 
 /** Price offer for a plan */

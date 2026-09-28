@@ -461,6 +461,24 @@ export interface PlanResponse {
   prices: PlanPrice[];
   /** TBP-275 — per-metric usage quotas (hard caps + metered pricing). */
   quotas?: PlanQuotaEntry[];
+  /**
+   * TBP-755 — the on/off features the plan includes. Each key reaches the SDK
+   * as the entitlement `bridge:billing.entitlement.<key>`: true on this plan,
+   * false on the app's other plans.
+   */
+  features?: PlanFeature[];
+}
+
+/** TBP-755 — one feature a plan includes (key `^[a-z][a-z0-9_]*$`). */
+export interface PlanFeature {
+  key: string;
+  name: string;
+}
+
+/** TBP-755 — a feature as create/update take it; `name` defaults to the key. */
+export interface PlanFeatureInput {
+  key: string;
+  name?: string;
 }
 
 export interface PlanPrice {
@@ -500,6 +518,8 @@ export interface CreatePlanRequest {
   trialDays?: number;
   prices?: PlanPrice[];
   quotas?: PlanQuotaEntry[];
+  /** TBP-755 — full replace of the plan's included features. */
+  features?: PlanFeatureInput[];
 }
 
 export interface UpdatePlanRequest {
@@ -509,6 +529,8 @@ export interface UpdatePlanRequest {
   trialDays?: number;
   prices?: PlanPrice[];
   quotas?: PlanQuotaEntry[];
+  /** TBP-755 — full replace of the plan's included features. */
+  features?: PlanFeatureInput[];
 }
 
 // ─── API Token ──────────────────────────────────────────────────────────────

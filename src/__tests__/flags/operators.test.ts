@@ -9,7 +9,9 @@ import {
   validOperatorsForType,
   validateConditions,
   type Condition,
+  type ConditionValue,
 } from '../../flags/operators.js';
+import { evaluateRule } from '../../flags/evaluator.js';
 
 describe('flags/operators — locked set', () => {
   it('exports exactly 12 operators in the locked v1 set', () => {
@@ -449,5 +451,60 @@ describe('evaluateCondition — tenant.plan is case-insensitive (TBP-610)', () =
     expect(evaluateCondition(plan('eq', [42]), 42)).toBe(true);
     expect(evaluateCondition(plan('exists', []), 'FREE')).toBe(true);
     expect(evaluateCondition(plan('not_exists', []), undefined)).toBe(true);
+  });
+});
+
+// TBP-757: a list operator on a list attribute (privileges) is exact element
+// membership. Before the fix `contains` joined the array into a string and
+// substring-matched, so REPORTS_VIEW also matched REPORTS_VIEW_ALL.
+describe('evaluateCondition — list attributes are matched by exact membership (TBP-757)', () => {
+  const priv = (operator: Condition['operator'], ...values: ConditionValue[]): Condition => ({
+    attribute: 'privileges',
+    operator,
+    values,
+  });
+
+  it('contains: REPORTS_VIEW does not match a user holding only REPORTS_VIEW_ALL', () => {
+    expect(evaluateCondition(priv('contains', 'REPORTS_VIEW'), ['REPORTS_VIEW_ALL'])).toBe(false);
+    expect(evaluateCondition(priv('contains', 'REPORTS_VIEW'), ['USER_READ', 'REPORTS_VIEW_ALL'])).toBe(false);
+    expect(evaluateCondition(priv('contains', 'USER_WRITE'), ['USER_WRITE_OWN'])).toBe(false);
+    // Joined-string artefacts must not match either.
+    expect(evaluateCondition(priv('contains', 'USER_READ,REPORTS'), ['USER_READ', 'REPORTS'])).toBe(false);
+  });
+
+  it('contains: matches an exact element', () => {
+    expect(evaluateCondition(priv('contains', 'REPORTS_VIEW'), ['REPORTS_VIEW'])).toBe(true);
+    expect(evaluateCondition(priv('contains', 'REPORTS_VIEW'), ['REPORTS_VIEW_ALL', 'REPORTS_VIEW'])).toBe(true);
+  });
+
+  it('not_contains: is exact non-membership', () => {
+    expect(evaluateCondition(priv('not_contains', 'REPORTS_VIEW'), ['REPORTS_VIEW_ALL'])).toBe(true);
+    expect(evaluateCondition(priv('not_contains', 'REPORTS_VIEW'), ['REPORTS_VIEW'])).toBe(false);
+    expect(evaluateCondition(priv('not_contains', 'REPORTS_VIEW'), [])).toBe(true);
+    expect(evaluateCondition({ attribute: 'privileges', operator: 'not_contains', values: [] }, ['X'])).toBe(false);
+  });
+
+  it('contains: an empty list holds nothing', () => {
+    expect(evaluateCondition(priv('contains', 'REPORTS_VIEW'), [])).toBe(false);
+  });
+
+  it('in / not_in: some element of the list is (not) one of the values', () => {
+    expect(evaluateCondition(priv('in', 'REPORTS_VIEW', 'ADMIN_ALL'), ['USER_READ', 'REPORTS_VIEW'])).toBe(true);
+    expect(evaluateCondition(priv('in', 'REPORTS_VIEW'), ['REPORTS_VIEW_ALL'])).toBe(false);
+    expect(evaluateCondition(priv('not_in', 'BANNED'), ['USER_READ'])).toBe(true);
+    expect(evaluateCondition(priv('not_in', 'BANNED'), ['USER_READ', 'BANNED'])).toBe(false);
+  });
+
+  it('plain string attributes keep substring behaviour', () => {
+    expect(evaluateCondition(c('contains', 'REPORTS_VIEW'), 'REPORTS_VIEW_ALL')).toBe(true);
+  });
+
+  it('evaluateRule: a privilege rule gates by exact key', () => {
+    const rule = {
+      branches: [{ conditions: [priv('contains', 'REPORTS_VIEW')], returnValue: true }],
+      otherwiseValue: false,
+    };
+    expect(evaluateRule(rule, 'reports', { identity: 'u1', attributes: { privileges: ['REPORTS_VIEW_ALL'] } }).value).toBe(false);
+    expect(evaluateRule(rule, 'reports', { identity: 'u1', attributes: { privileges: ['REPORTS_VIEW'] } }).value).toBe(true);
   });
 });

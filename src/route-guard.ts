@@ -1,4 +1,5 @@
-import type { FeatureFlagService } from './feature-flag-service.js';
+import type { FeatureFlagService, FlagOffExplanation } from './feature-flag-service.js';
+import type { FlagOffReason } from './flags/evaluator.js';
 import { sanitizeReturnTo } from './return-to.js';
 import { useBridge } from './billing/use-bridge.js';
 import type { Logger } from './logger.js';
@@ -8,8 +9,14 @@ import type {
   ResolvedConfig,
   RouteGuard,
   RouteGuardConfig,
+  RouteRestriction,
   RouteRule,
 } from './types.js';
+
+// TBP-756 — how close a reason is to "an upgrade alone opens it".
+const REASON_RANK: Record<FlagOffReason, number> = { plan: 0, permission: 1, rule: 2, off: 3, rollout: 4 };
+
+type FlagVerdict = { ok: boolean; flag?: string; explanation?: FlagOffExplanation };
 
 function escapeRegex(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -53,38 +60,79 @@ export function createRouteGuard(
     return isProtectedRoute(pathname) && !isAuthenticated();
   }
 
-  async function evaluateFlagRequirement(req: FlagRequirement): Promise<boolean> {
-    if (typeof req === 'string') return featureFlags.isEnabled(req);
-    if ('any' in req) {
-      const results = await Promise.all(req.any.map((f) => featureFlags.isEnabled(f)));
-      return results.some(Boolean);
-    }
-    if ('all' in req) {
-      const results = await Promise.all(req.all.map((f) => featureFlags.isEnabled(f)));
-      return results.every(Boolean);
-    }
-    return true;
+  function explain(flag: string): FlagOffExplanation | undefined {
+    // Older FeatureFlagService stand-ins (tests, adapters) have no getReason.
+    const read = (featureFlags as Partial<FeatureFlagService>).getReason;
+    return typeof read === 'function' ? read.call(featureFlags, flag) : undefined;
   }
 
-  async function checkRouteRestrictions(pathname: string): Promise<string | null> {
+  /**
+   * TBP-756 — evaluate a route's flag requirement and, when it fails, say why.
+   *   - one flag: that flag's reason;
+   *   - `any`: every flag failed; the one closest to "an upgrade alone opens
+   *     it" wins, since opening any one of them is enough;
+   *   - `all`: only the failing flags count, and the one furthest from it
+   *     wins, since each of them has to open.
+   * A failing flag whose reason is unknown makes the whole reason unknown.
+   */
+  async function evaluateFlagRequirement(req: FlagRequirement): Promise<FlagVerdict> {
+    if (typeof req === 'string') {
+      const ok = await featureFlags.isEnabled(req);
+      return ok ? { ok } : { ok, flag: req, explanation: explain(req) };
+    }
+    const flags = 'any' in req ? req.any : 'all' in req ? req.all : null;
+    if (!flags) return { ok: true };
+    const results = await Promise.all(flags.map((f) => featureFlags.isEnabled(f)));
+    const isAny = 'any' in req;
+    const ok = isAny ? results.some(Boolean) : results.every(Boolean);
+    if (ok) return { ok };
+    const failing = flags.filter((_, i) => !results[i]);
+    let pick: { flag: string; explanation: FlagOffExplanation } | undefined;
+    for (const flag of failing) {
+      const explanation = explain(flag);
+      if (!explanation) return { ok, flag: failing[0] };
+      const better = !pick
+        || (isAny
+          ? REASON_RANK[explanation.reason] < REASON_RANK[pick.explanation.reason]
+          : REASON_RANK[explanation.reason] > REASON_RANK[pick.explanation.reason]);
+      if (better) pick = { flag, explanation };
+    }
+    return pick ? { ok, flag: pick.flag, explanation: pick.explanation } : { ok, flag: failing[0] };
+  }
+
+  async function checkRouteRestriction(pathname: string): Promise<RouteRestriction | null> {
     const rule = findMatchingRule(pathname, guardConfig.rules);
     if (!rule) return null;
 
     if (rule.featureFlag) {
-      const ok = await evaluateFlagRequirement(rule.featureFlag);
-      logger.debug(`Route ${pathname} flag check: ${ok}`);
-      if (!ok) return rule.redirectTo ?? '/';
+      const verdict = await evaluateFlagRequirement(rule.featureFlag);
+      logger.debug(`Route ${pathname} flag check: ${verdict.ok}`);
+      if (!verdict.ok) {
+        return {
+          to: rule.redirectTo ?? '/',
+          // Only with a known reason, so a server that says nothing gives the
+          // exact pre-TBP-756 decision.
+          ...(verdict.explanation && verdict.flag ? { flag: verdict.flag } : {}),
+          ...(verdict.explanation ? { reason: verdict.explanation.reason } : {}),
+          ...(verdict.explanation?.feature ? { feature: verdict.explanation.feature } : {}),
+        };
+      }
     }
 
     if (rule.billing === 'hard') {
       const gate = useBridge().gateState();
       if (gate.locked) {
         logger.debug(`Route ${pathname} billing-locked → recovery`);
-        return gate.recoveryUrl ?? rule.redirectTo ?? '/billing';
+        return { to: gate.recoveryUrl ?? rule.redirectTo ?? '/billing' };
       }
     }
 
     return null;
+  }
+
+  async function checkRouteRestrictions(pathname: string): Promise<string | null> {
+    const restriction = await checkRouteRestriction(pathname);
+    return restriction ? restriction.to : null;
   }
 
   function getLoginRedirect(): string {
@@ -142,9 +190,9 @@ export function createRouteGuard(
         ...(returnTo ? { returnTo } : {}),
       };
     }
-    const redirectTo = await checkRouteRestrictions(pathname);
-    if (redirectTo) {
-      return { type: 'redirect', to: redirectTo };
+    const restriction = await checkRouteRestriction(pathname);
+    if (restriction) {
+      return { type: 'redirect', ...restriction };
     }
     return { type: 'allow' };
   }
@@ -154,6 +202,7 @@ export function createRouteGuard(
     isProtectedRoute,
     shouldRedirectToLogin,
     checkRouteRestrictions,
+    checkRouteRestriction,
     getLoginRedirect,
     getNavigationDecision,
     resolveReturnTo,
