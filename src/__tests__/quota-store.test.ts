@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QuotaStore } from '../billing/quota-store.js';
 import type { QuotaUpdatedMessage } from '../flags/realtime.js';
 
@@ -315,6 +315,103 @@ describe('QuotaStore', () => {
       expect(snap.currency).toBe('EUR');
       expect(snap.overageEstimate).toBe(1);
       expect(snap.overcap).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // TBP-700 — reconcileAfterReport: a lost push for the client's own report
+  // -------------------------------------------------------------------------
+  describe('reconcileAfterReport (TBP-700)', () => {
+    const OPTS = { apiBaseUrl: 'https://api.example.com', accessToken: 'access-tok', appId: 'app-1' };
+    const serverAt = (used: number, limit = 200) => ({
+      metric: 'ai_completions', used, limit, remaining: limit - used, warningLevel: null,
+      policy: 'metered' as const, kind: 'counter' as const,
+    });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    /** A store already showing used=80 of 200, as the page does before the report. */
+    function showing80(): QuotaStore {
+      const store = new QuotaStore();
+      store.configure(OPTS);
+      store.applyQuotaUpdated(makeMsg({ used: 80, limit: 200, remaining: 120 }));
+      return store;
+    }
+
+    it('reads the server when the push for the report never arrives, so the page shows the new usage', async () => {
+      const store = showing80();
+      mockHttpFetch.mockResolvedValue(serverAt(120));
+
+      store.reconcileAfterReport('ai_completions');
+      // The push is lost: nothing reaches the store.
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(mockHttpFetch).toHaveBeenCalledTimes(1);
+      expect(mockHttpFetch.mock.calls[0][0]).toBe('https://api.example.com/usage/quota/ai_completions');
+      expect(store.get('ai_completions')!.used).toBe(120);
+    });
+
+    it('does not read when the push arrives in time', async () => {
+      const store = showing80();
+      store.reconcileAfterReport('ai_completions');
+      store.applyQuotaUpdated(makeMsg({ used: 120, limit: 200, remaining: 80 }));
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(mockHttpFetch).not.toHaveBeenCalled();
+      expect(store.get('ai_completions')!.used).toBe(120);
+    });
+
+    it('keeps a push that lands while the read is in flight — it is newer than the answer', async () => {
+      const store = showing80();
+      let answer!: (v: unknown) => void;
+      mockHttpFetch.mockReturnValue(new Promise((r) => (answer = r)));
+
+      store.reconcileAfterReport('ai_completions');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockHttpFetch).toHaveBeenCalledTimes(1);
+      // A later report's push lands first; the slower read then returns an older value.
+      store.applyQuotaUpdated(makeMsg({ used: 130, limit: 200, remaining: 70 }));
+      answer(serverAt(120));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(store.get('ai_completions')!.used).toBe(130);
+    });
+
+    it('does nothing for a metric the page is not showing', async () => {
+      const store = new QuotaStore();
+      store.configure(OPTS);
+      store.reconcileAfterReport('never_read');
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(mockHttpFetch).not.toHaveBeenCalled();
+    });
+
+    it('folds a burst of reports into one read', async () => {
+      const store = showing80();
+      mockHttpFetch.mockResolvedValue(serverAt(150));
+      for (let i = 0; i < 5; i++) {
+        store.reconcileAfterReport('ai_completions');
+        await vi.advanceTimersByTimeAsync(200);
+      }
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockHttpFetch).toHaveBeenCalledTimes(1);
+      expect(store.get('ai_completions')!.used).toBe(150);
+    });
+
+    it('drops the answer when the session changed while the read was in flight', async () => {
+      const store = showing80();
+      let answer!: (v: unknown) => void;
+      mockHttpFetch.mockReturnValue(new Promise((r) => (answer = r)));
+      store.reconcileAfterReport('ai_completions');
+      await vi.advanceTimersByTimeAsync(1000);
+      store.configure({ ...OPTS, accessToken: 'other-workspace-tok' });
+      answer(serverAt(120));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.get('ai_completions')!.used).toBe(80);
     });
   });
 });

@@ -291,6 +291,17 @@ export function useBridge(): UseBridgeApi {
 }
 
 /**
+ * TBP-700 — Bridge accepted usage for these metrics from this client: have the
+ * quota store make sure the page ends up showing it (see
+ * `QuotaStore.reconcileAfterReport`). A no-op until something has used
+ * `useBridge()` — an app that never reads a quota has nothing to reconcile.
+ */
+export function reconcileQuotasAfterReport(metrics: string[]): void {
+  if (!_quotaStore) return;
+  for (const metric of metrics) _quotaStore.reconcileAfterReport(metric);
+}
+
+/**
  * Test-only: drop the singleton so each test starts with a fresh surface.
  * Not exported from the package entry — internal to the test suite.
  */

@@ -246,6 +246,23 @@ describe('BridgeAuth', () => {
         await expect(earlier).resolves.toBeNull();
         await expect(fresh).resolves.toMatchObject({ accessToken: 'at-after' });
       });
+
+      // TBP-747 — a REST 401 TOKEN_VERSION_STALE must be retried with a token
+      // minted after the 401, never with one from a refresh that was already
+      // in flight: that one may predate the tokenVersion bump and fail again
+      // (stage 2026-09-28, a new user's first request after sign-in).
+      it('the stale-token retry never reuses a refresh that started before the 401', async () => {
+        await signedIn();
+        const releases = deferredRefreshes();
+        const earlier = auth.refreshTokens(); // e.g. the per-connect reconcile
+        const onStale = (auth as unknown as { _onTokenStale(): () => Promise<string | null> })._onTokenStale();
+        const retryToken = onStale();
+        releases[0]('at-pre-bump');
+        await earlier;
+        await vi.waitFor(() => expect(releases).toHaveLength(2));
+        releases[1]('at-post-bump');
+        await expect(retryToken).resolves.toBe('at-post-bump');
+      });
     });
   });
 
