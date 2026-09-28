@@ -67,6 +67,8 @@ export {
   AttributeProviderRegistry,
   AuthAttributeProvider,
   BillingAttributeProvider,
+  claimsToAttributes,
+  flattenBillingSnapshot,
 } from './attribute-providers.js';
 export type {
   AttributeProvider,
@@ -75,6 +77,9 @@ export type {
   BillingSnapshot,
   BillingProviderConfig,
   BillingProviderStores,
+  BillingSnapshotInput,
+  BillingSubscriptionInput,
+  BillingQuotaInput,
 } from './attribute-providers.js';
 
 // Phase 5 (TBP-328/329/330) — dev-managed AttributeProvider backing the
