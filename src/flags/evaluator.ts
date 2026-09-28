@@ -54,6 +54,123 @@ export interface EvalResult {
   variantIndex: number;
   matched: boolean;
   excludedByRollout: boolean;
+  /**
+   * TBP-756 — why the feature is off. Set only when the served value is off
+   * (`false`, `null` or `undefined`); absent when it is on. See
+   * {@link FlagOffReason}.
+   */
+  reason?: FlagOffReason;
+  /**
+   * TBP-756 — with `reason: 'plan'`, the plan feature the decisive rule
+   * condition asks for (`bridge:billing.entitlement.<feature>`), so an upgrade
+   * dialog can name the plans that include it. Absent when the condition is on
+   * the plan itself (`tenant.plan`, `bridge:billing.plan`).
+   */
+  feature?: string;
+}
+
+// ── Why a feature is off (TBP-756) ─────────────────────────────────────────
+
+/**
+ * Why a flag served its off value:
+ *   - `plan`       — an upgrade alone would turn it on (the failing conditions
+ *                    are all about the plan: `tenant.plan`, `bridge:billing.*`)
+ *   - `permission` — this person's role or privileges keep it off (a condition
+ *                    on `user.role` or `privileges` failed; also when the plan
+ *                    failed too, since an upgrade alone would not help)
+ *   - `off`        — the flag is switched off for everyone
+ *   - `rule`       — some other condition keeps it off
+ *   - `rollout`    — the person is outside the rollout percentage
+ */
+export type FlagOffReason = 'plan' | 'permission' | 'off' | 'rule' | 'rollout';
+
+/** The family a rule attribute belongs to, for {@link FlagOffReason}. */
+export type AttributeFamily = 'plan' | 'permission' | 'other';
+
+const BILLING_PREFIX = 'bridge:billing.';
+const ENTITLEMENT_PREFIX = 'bridge:billing.entitlement.';
+
+/**
+ * The family table: `tenant.plan` and every `bridge:billing.*` attribute are
+ * the plan; `user.role` and `privileges` are permission; everything else is
+ * other. bridge-api keeps a copy of this table for its server-side evaluate;
+ * the two must stay identical.
+ */
+export function attributeFamily(attribute: string): AttributeFamily {
+  if (attribute === 'tenant.plan' || attribute.startsWith(BILLING_PREFIX)) return 'plan';
+  if (attribute === 'user.role' || attribute === 'privileges') return 'permission';
+  return 'other';
+}
+
+/** True for a served value that means "the feature is off". */
+export function isOffValue(value: unknown): boolean {
+  return value === false || value === null || value === undefined;
+}
+
+function reasonForFamilies(families: ReadonlySet<AttributeFamily>): FlagOffReason {
+  if (families.size === 0) return 'rule';
+  if (families.has('other')) return 'rule';
+  if (families.has('permission')) return 'permission';
+  return 'plan';
+}
+
+function entitlementFeature(conditions: ReadonlyArray<Condition>): string | undefined {
+  for (const c of conditions) {
+    if (c.attribute.startsWith(ENTITLEMENT_PREFIX)) {
+      const key = c.attribute.slice(ENTITLEMENT_PREFIX.length);
+      if (key) return key;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Explain an off result of a rule. `matchedIndex` is the branch that fired
+ * (it returned an off value), or -1 when the otherwise value was served.
+ *
+ *   - A branch that fired: its own conditions decide the family (a
+ *     `plan eq free → false` branch is a plan reason).
+ *   - Nothing fired: every branch that would have turned the feature on is
+ *     asked which of its conditions failed. If any of them failed only on the
+ *     plan, an upgrade alone unlocks it → `plan`. Otherwise, if any failed only
+ *     on plan and permission → `permission`. Otherwise `rule`.
+ */
+function explainOff(
+  rule: Rule,
+  ctx: EvalContext,
+  matchedIndex: number,
+): { reason: FlagOffReason; feature?: string } {
+  const branches = rule.branches ?? [];
+  if (matchedIndex >= 0) {
+    const conditions = branches[matchedIndex]?.conditions ?? [];
+    const families = new Set(conditions.map((c) => attributeFamily(c.attribute)));
+    const reason = reasonForFamilies(families);
+    return reason === 'plan' ? withFeature(reason, conditions) : { reason };
+  }
+
+  let best: { reason: FlagOffReason; failed: Condition[] } | undefined;
+  const rank: Record<FlagOffReason, number> = { plan: 0, permission: 1, rule: 2, off: 3, rollout: 4 };
+  for (const branch of branches) {
+    if (isOffValue(branch.returnValue)) continue;
+    const conditions = branch.conditions ?? [];
+    if (conditions.length === 0) continue;
+    const failed = conditions.filter(
+      (c) => !evaluateCondition(c, resolveAttribute(ctx, c.attribute)),
+    );
+    if (failed.length === 0) continue;
+    const reason = reasonForFamilies(new Set(failed.map((c) => attributeFamily(c.attribute))));
+    if (!best || rank[reason] < rank[best.reason]) best = { reason, failed };
+  }
+  if (!best) return { reason: 'rule' };
+  return best.reason === 'plan' ? withFeature(best.reason, best.failed) : { reason: best.reason };
+}
+
+function withFeature(
+  reason: FlagOffReason,
+  conditions: ReadonlyArray<Condition>,
+): { reason: FlagOffReason; feature?: string } {
+  const feature = entitlementFeature(conditions);
+  return feature ? { reason, feature } : { reason };
 }
 
 // ── Attribute resolution ────────────────────────────────────────────────────
@@ -109,26 +226,37 @@ export function evaluateRule(rule: Rule, flagKey: string, ctx: EvalContext): Eva
   const rolloutPct = clampPct(rule.rolloutPct ?? 100);
 
   if (rolloutPct < 100) {
-    if (!ctx.identity) {
-      return { value: rule.otherwiseValue, variantIndex: -1, matched: false, excludedByRollout: true };
-    }
-    if (bucket(flagKey, ctx.identity) >= rolloutPct) {
-      return { value: rule.otherwiseValue, variantIndex: -1, matched: false, excludedByRollout: true };
+    if (!ctx.identity || bucket(flagKey, ctx.identity) >= rolloutPct) {
+      return {
+        value: rule.otherwiseValue,
+        variantIndex: -1,
+        matched: false,
+        excludedByRollout: true,
+        ...(isOffValue(rule.otherwiseValue) ? { reason: 'rollout' as const } : {}),
+      };
     }
   }
 
   const branches = rule.branches ?? [];
   for (let i = 0; i < branches.length; i++) {
     if (evaluateBranch(branches[i], ctx)) {
+      const value = branches[i].returnValue;
       return {
-        value: branches[i].returnValue,
+        value,
         variantIndex: i,
         matched: true,
         excludedByRollout: false,
+        ...(isOffValue(value) ? explainOff(rule, ctx, i) : {}),
       };
     }
   }
-  return { value: rule.otherwiseValue, variantIndex: -1, matched: false, excludedByRollout: false };
+  return {
+    value: rule.otherwiseValue,
+    variantIndex: -1,
+    matched: false,
+    excludedByRollout: false,
+    ...(isOffValue(rule.otherwiseValue) ? explainOff(rule, ctx, -1) : {}),
+  };
 }
 
 function clampPct(p: number): number {

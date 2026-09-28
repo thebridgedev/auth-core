@@ -24,6 +24,8 @@ export {
   evaluateRule,
   resolveAttribute,
   validateRule,
+  attributeFamily,
+  isOffValue,
 } from './evaluator.js';
 
 export type {
@@ -33,6 +35,8 @@ export type {
   EvalContext,
   EvalResult,
   RuleValidationError,
+  FlagOffReason,
+  AttributeFamily,
 } from './evaluator.js';
 
 // SDK API: bridge.flag(key, default) with type inference (TBP-160)
@@ -67,6 +71,8 @@ export {
   AttributeProviderRegistry,
   AuthAttributeProvider,
   BillingAttributeProvider,
+  claimsToAttributes,
+  flattenBillingSnapshot,
 } from './attribute-providers.js';
 export type {
   AttributeProvider,
@@ -75,6 +81,9 @@ export type {
   BillingSnapshot,
   BillingProviderConfig,
   BillingProviderStores,
+  BillingSnapshotInput,
+  BillingSubscriptionInput,
+  BillingQuotaInput,
 } from './attribute-providers.js';
 
 // Phase 5 (TBP-328/329/330) — dev-managed AttributeProvider backing the

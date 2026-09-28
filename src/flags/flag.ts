@@ -21,6 +21,7 @@ import {
   type EvalResult,
   type Rule,
   type FlagState,
+  type FlagOffReason,
 } from './evaluator.js';
 import {
   AttributeProviderRegistry,
@@ -118,6 +119,16 @@ export interface BridgeFlagsHooks {
 export interface FlagEvalResult<T> {
   passed: boolean;
   value: T;
+  /**
+   * TBP-756 — why the feature is off, when Bridge decided it is: `plan` (an
+   * upgrade alone would turn it on), `permission` (this person's role or
+   * privileges), `off` (switched off for everyone), `rule` (another condition)
+   * or `rollout`. Absent when the flag is on, or when the flag is not known
+   * yet and the default was served.
+   */
+  reason?: FlagOffReason;
+  /** TBP-756 — with `reason: 'plan'`, the plan feature the rule asks for. */
+  feature?: string;
 }
 
 // ── Core API ────────────────────────────────────────────────────────────────
@@ -385,6 +396,14 @@ export class BridgeFlags {
     if (!typeMatches(value, observedType)) {
       return { passed: false, value: defaultValue };
     }
+    if (result.reason) {
+      return {
+        passed: result.matched,
+        value,
+        reason: result.reason,
+        ...(result.feature ? { feature: result.feature } : {}),
+      };
+    }
     return { passed: result.matched, value };
   }
 
@@ -394,7 +413,7 @@ export class BridgeFlags {
   private evaluateCached(cached: CachedFlag, ctx: EvalContext): EvalResult {
     switch (cached.state) {
       case 'off':
-        return { value: cached.offValue, variantIndex: -1, matched: false, excludedByRollout: false };
+        return { value: cached.offValue, variantIndex: -1, matched: false, excludedByRollout: false, reason: 'off' };
       case 'on':
         return { value: cached.onValue, variantIndex: 0, matched: true, excludedByRollout: false };
       case 'on-with-rule': {

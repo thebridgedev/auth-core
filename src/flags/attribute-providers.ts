@@ -213,31 +213,133 @@ export class AuthAttributeProvider implements AttributeProvider {
     } catch {
       return {};
     }
-    if (!claims || typeof claims !== 'object') return {};
-
-    const out: Record<string, unknown> = {};
-    if (typeof claims.sub === 'string' && claims.sub.length > 0) {
-      out['user.id'] = claims.sub;
-    }
-    if (typeof claims.role === 'string') {
-      out['user.role'] = claims.role;
-    }
-    if (typeof claims.email === 'string') {
-      out['user.email'] = claims.email;
-    }
-    if (typeof claims.tid === 'string') {
-      out['tenant.id'] = claims.tid;
-    }
-    if (typeof claims.plan === 'string') {
-      out['tenant.plan'] = claims.plan;
-    }
-    if (Array.isArray(claims.privileges)) {
-      out['privileges'] = claims.privileges;
-    } else if (typeof claims.privileges === 'string') {
-      out['privileges'] = claims.privileges;
-    }
-    return out;
+    return claimsToAttributes(claims);
   }
+}
+
+/** Namespace of the billing-derived attributes. */
+const BILLING_NS_PREFIX = 'bridge:billing.';
+
+/**
+ * The auth-derived targeting attributes for a set of decoded JWT claims — the
+ * one mapping every SDK uses, so a rule on `user.role` means the same thing in
+ * the browser (`AuthAttributeProvider`) and on a server (bridge-nestjs builds
+ * its request context with this, from claims it verified itself; TBP-757):
+ *   - `user.id`        ← `sub`
+ *   - `user.role`      ← `role`
+ *   - `user.email`     ← `email`
+ *   - `tenant.id`      ← `tid`
+ *   - `tenant.plan`    ← `plan`
+ *   - `privileges`     ← `privileges` (array or string)
+ *
+ * Pure: an attribute is emitted only when its claim is present and well-typed.
+ * The caller is responsible for the claims being trustworthy.
+ */
+export function claimsToAttributes(
+  claims: AuthJwtClaims | undefined | null,
+): Record<string, unknown> {
+  if (!claims || typeof claims !== 'object') return {};
+
+  const out: Record<string, unknown> = {};
+  if (typeof claims.sub === 'string' && claims.sub.length > 0) {
+    out['user.id'] = claims.sub;
+  }
+  if (typeof claims.role === 'string') {
+    out['user.role'] = claims.role;
+  }
+  if (typeof claims.email === 'string') {
+    out['user.email'] = claims.email;
+  }
+  if (typeof claims.tid === 'string') {
+    out['tenant.id'] = claims.tid;
+  }
+  if (typeof claims.plan === 'string') {
+    out['tenant.plan'] = claims.plan;
+  }
+  if (Array.isArray(claims.privileges)) {
+    out['privileges'] = claims.privileges;
+  } else if (typeof claims.privileges === 'string') {
+    out['privileges'] = claims.privileges;
+  }
+  return out;
+}
+
+/** Subscription fields `flattenBillingSnapshot` reads (the `/session/init` + store shape). */
+export interface BillingSubscriptionInput {
+  plan?: { slug?: unknown } | null;
+  status?: unknown;
+}
+
+/** Per-metric quota fields `flattenBillingSnapshot` reads. */
+export interface BillingQuotaInput {
+  used?: unknown;
+  limit?: unknown;
+  remaining?: unknown;
+  percent_used?: unknown;
+}
+
+/** Input to {@link flattenBillingSnapshot}. Every part is optional. */
+export interface BillingSnapshotInput {
+  /** The workspace's subscription: plan slug + status. */
+  subscription?: BillingSubscriptionInput | null;
+  /** Entitlement name → granted. Non-boolean values are skipped. */
+  entitlements?: Record<string, unknown> | null;
+  /** Metric → quota snapshot. A `Map` (QuotaStore.getAll()) or a plain object. */
+  quotas?: Map<string, BillingQuotaInput | null | undefined> | Record<string, BillingQuotaInput | null | undefined> | null;
+}
+
+/**
+ * The billing targeting attributes, `bridge:billing.*`, for a billing
+ * snapshot — the one mapping `BillingAttributeProvider` uses in the browser and
+ * bridge-nestjs uses on the server from `/session/init` (TBP-757):
+ *   - `bridge:billing.plan`                        string (plan slug)
+ *   - `bridge:billing.subscription.status`         string
+ *   - `bridge:billing.trial`                       boolean (status === 'trial')
+ *   - `bridge:billing.quota.<metric>.used|limit|remaining|percent_used` number
+ *   - `bridge:billing.entitlement.<name>`          boolean
+ *
+ * Pure and defensive: missing or mistyped parts contribute no keys.
+ */
+export function flattenBillingSnapshot(
+  input: BillingSnapshotInput | undefined | null,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!input || typeof input !== 'object') return out;
+
+  const sub = input.subscription;
+  if (sub && typeof sub === 'object') {
+    if (sub.plan && typeof sub.plan.slug === 'string') {
+      out[`${BILLING_NS_PREFIX}plan`] = sub.plan.slug;
+    }
+    if (typeof sub.status === 'string') {
+      out[`${BILLING_NS_PREFIX}subscription.status`] = sub.status;
+      out[`${BILLING_NS_PREFIX}trial`] = sub.status === 'trial';
+    }
+  }
+
+  const quotas = input.quotas;
+  if (quotas && typeof quotas === 'object') {
+    const entries = quotas instanceof Map ? quotas.entries() : Object.entries(quotas);
+    for (const [metric, snap] of entries) {
+      if (!snap || typeof snap !== 'object') continue;
+      const base = `${BILLING_NS_PREFIX}quota.${metric}`;
+      if (typeof snap.used === 'number') out[`${base}.used`] = snap.used;
+      if (typeof snap.limit === 'number') out[`${base}.limit`] = snap.limit;
+      if (typeof snap.remaining === 'number') out[`${base}.remaining`] = snap.remaining;
+      if (typeof snap.percent_used === 'number') out[`${base}.percent_used`] = snap.percent_used;
+    }
+  }
+
+  const ent = input.entitlements;
+  if (ent && typeof ent === 'object') {
+    for (const [name, value] of Object.entries(ent)) {
+      if (typeof value === 'boolean') {
+        out[`${BILLING_NS_PREFIX}entitlement.${name}`] = value;
+      }
+    }
+  }
+
+  return out;
 }
 
 // ── BillingAttributeProvider (TBP-202 / US-13 TBP-265) ─────────────────────
@@ -321,7 +423,6 @@ export interface BillingProviderStores {
   entitlements?: EntitlementsStore;
 }
 
-const BILLING_NS_PREFIX = 'bridge:billing.';
 
 export class BillingAttributeProvider implements AttributeProvider {
   readonly name = 'bridge:billing';
@@ -428,66 +529,32 @@ export class BillingAttributeProvider implements AttributeProvider {
    * reserved for a future story — no live source today, so it's left empty.
    */
   private flattenStores(): Record<string, unknown> {
-    const out: Record<string, unknown> = {};
+    // Each store is read in isolation so one misbehaving store can't hide the
+    // others; the flattening itself is the shared pure `flattenBillingSnapshot`.
+    const input: BillingSnapshotInput = {};
 
-    // Subscription — plan slug, trial flag, status string.
     try {
-      const sub = this.stores.subscription;
-      if (sub) {
-        const snap = sub.snapshot();
-        const state = snap.state;
-        if (state) {
-          if (state.plan && typeof state.plan.slug === 'string') {
-            out[`${BILLING_NS_PREFIX}plan`] = state.plan.slug;
-          }
-          if (typeof state.status === 'string') {
-            out[`${BILLING_NS_PREFIX}subscription.status`] = state.status;
-            out[`${BILLING_NS_PREFIX}trial`] = state.status === 'trial';
-          }
-        }
-      }
+      const state = this.stores.subscription?.snapshot().state;
+      if (state) input.subscription = state;
     } catch (err) {
       this.warnOnce(err);
     }
 
-    // Quotas — per-metric used / limit / remaining / percent_used.
     try {
       const quotas = this.stores.quotas;
-      if (quotas) {
-        const all = quotas.getAll();
-        for (const [metric, snap] of all.entries()) {
-          if (!snap) continue;
-          const base = `${BILLING_NS_PREFIX}quota.${metric}`;
-          if (typeof snap.used === 'number') out[`${base}.used`] = snap.used;
-          if (typeof snap.limit === 'number') out[`${base}.limit`] = snap.limit;
-          if (typeof snap.remaining === 'number') {
-            out[`${base}.remaining`] = snap.remaining;
-          }
-          if (typeof snap.percent_used === 'number') {
-            out[`${base}.percent_used`] = snap.percent_used;
-          }
-        }
-      }
+      if (quotas) input.quotas = quotas.getAll();
     } catch (err) {
       this.warnOnce(err);
     }
 
-    // Entitlements — boolean per name (incl. `app_active`).
     try {
       const ent = this.stores.entitlements;
-      if (ent && ent.isHydrated()) {
-        const all = ent.all();
-        for (const [name, value] of Object.entries(all)) {
-          if (typeof value === 'boolean') {
-            out[`${BILLING_NS_PREFIX}entitlement.${name}`] = value;
-          }
-        }
-      }
+      if (ent && ent.isHydrated()) input.entitlements = ent.all();
     } catch (err) {
       this.warnOnce(err);
     }
 
-    return out;
+    return flattenBillingSnapshot(input);
   }
 
   private flatten(snapshot: BillingSnapshot | undefined): Record<string, unknown> {

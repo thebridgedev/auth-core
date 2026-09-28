@@ -130,8 +130,11 @@ function fold(value: unknown): unknown {
  *   eq            attributeValue === values[0]
  *   neq           attributeValue !== values[0]
  *   contains      String(attributeValue).includes(String(values[0]))
+ *                 — for a list attribute (e.g. `privileges`): the list has an
+ *                 element exactly equal to values[0] (TBP-757)
  *   not_contains  ! contains
  *   in            values.includes(attributeValue)
+ *                 — for a list attribute: some element is in values
  *   not_in        ! in
  *   gt            Number(attributeValue) > Number(values[0])
  *   lt            Number(attributeValue) < Number(values[0])
@@ -169,6 +172,28 @@ export function evaluateCondition(condition: Condition, attributeValue: unknown)
   // For every other operator: a missing attribute is always a non-match
   if (attributeValue === undefined || attributeValue === null) {
     return false;
+  }
+
+  // List attributes (TBP-757). `privileges` is an array; a list operator on it
+  // means exact element membership. Before this, `contains` joined the array
+  // into "A,B" and substring-matched, so a rule on REPORTS_VIEW also granted
+  // REPORTS_VIEW_ALL. Plain string values keep substring behaviour below.
+  if (Array.isArray(attributeValue)) {
+    const list = attributeValue as ReadonlyArray<unknown>;
+    switch (operator) {
+      case 'contains':
+        return values.length > 0 && list.includes(values[0]);
+      case 'not_contains':
+        return values.length > 0 && !list.includes(values[0]);
+      case 'in':
+        if (values.length === 0 || values.length > IN_LIST_MAX) return false;
+        return list.some((el) => values.includes(el as ConditionValue));
+      case 'not_in':
+        if (values.length > IN_LIST_MAX) return false;
+        return !list.some((el) => values.includes(el as ConditionValue));
+      default:
+        break;
+    }
   }
 
   switch (operator) {

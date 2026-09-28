@@ -32,6 +32,7 @@ export type {
   MagicLinkResult,
   MfaResult,
   NavigationDecision,
+  RouteRestriction,
   PasskeyAuthOptions,
   PasskeyRegistrationOptions,
   PasskeyVerificationResult,
@@ -115,7 +116,7 @@ export type {
   // Branding
   BrandingResponse, UpdateBrandingRequest, CssFileResponse, UpdateCssFileRequest,
   // Plan
-  PlanResponse, CreatePlanRequest, UpdatePlanRequest, PlanPrice,
+  PlanResponse, CreatePlanRequest, UpdatePlanRequest, PlanPrice, PlanFeature, PlanFeatureInput,
   // Token
   TokenRecord, CreateTokenRequest, CreateTokenResponse,
   // Event
@@ -158,6 +159,8 @@ export {
   evaluateRule,
   resolveAttribute,
   validateRule,
+  attributeFamily,
+  isOffValue,
   BridgeFlags,
   BridgeIdentity,
   MemoryIdentityStorage,
@@ -166,6 +169,8 @@ export {
   AttributeProviderRegistry,
   AuthAttributeProvider,
   BillingAttributeProvider,
+  claimsToAttributes,
+  flattenBillingSnapshot,
   DevAttributeProvider,
   BridgePullCache,
   TelemetryBatcher,
@@ -189,6 +194,8 @@ export type {
   EvalContext,
   EvalResult,
   RuleValidationError,
+  FlagOffReason,
+  AttributeFamily,
   CachedFlag,
   FlagEvalResult,
   FlagValueType,
@@ -207,6 +214,9 @@ export type {
   BillingSnapshot,
   BillingProviderConfig,
   BillingProviderStores,
+  BillingSnapshotInput,
+  BillingSubscriptionInput,
+  BillingQuotaInput,
   AttributeGetter,
   AttributeBulkGetter,
   AttributesSetOptions,
