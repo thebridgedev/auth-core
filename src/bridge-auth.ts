@@ -790,6 +790,16 @@ export class BridgeAuth {
     return this.teamService;
   }
 
+  /**
+   * TBP-762 — the handler to pass as `onTokenStale` to a billing or quota
+   * read made outside this class (`fetchBillingState`, `subscription.mount`,
+   * `quota.configure`): on `401 TOKEN_VERSION_STALE` it mints a fresh token
+   * and the read is retried once, instead of failing until a reload.
+   */
+  tokenStaleHandler(): () => Promise<string | null> {
+    return this._onTokenStale();
+  }
+
   // Returns the onTokenStale callback for authenticated httpFetch calls.
   // When a REST 401 TOKEN_VERSION_STALE is detected, httpFetch calls this to
   // get a fresh token and retry once. `fresh: true` (TBP-747): the server has

@@ -64,6 +64,13 @@ export interface MountOptions {
   apiBaseUrl: string;
   accessToken: string;
   appId: string;
+  /**
+   * TBP-762 — renews an out-of-date sign-in. When Bridge answers
+   * `401 TOKEN_VERSION_STALE` (a checkout just changed the plan), the request
+   * is retried once with the token this returns. Pass
+   * `bridgeAuth.tokenStaleHandler()`.
+   */
+  onTokenStale?: () => Promise<string | null>;
 }
 
 /**
