@@ -126,6 +126,22 @@ describe('QuotaStore', () => {
       expect(snap!.percent_used).toBeCloseTo(0.8);
     });
 
+    it('carries source membership (seats, TBP-763), and a later push keeps it', () => {
+      const store = new QuotaStore();
+      store.applyInitialSnapshot('seats', {
+        metric: 'seats', used: 2, limit: 2, remaining: 0, warningLevel: 'critical', policy: 'hard',
+        kind: 'gauge', source: 'membership',
+      });
+      expect(store.get('seats')!.source).toBe('membership');
+      store.applyQuotaUpdated(makeMsg({ metric: 'seats', used: 1, limit: 2, remaining: 1, quotaKind: 'gauge', policy: 'hard' }));
+      expect(store.get('seats')).toMatchObject({ used: 1, source: 'membership' });
+
+      store.applyInitialSnapshot('projects', {
+        metric: 'projects', used: 1, limit: 5, remaining: 4, warningLevel: null, policy: 'hard', kind: 'gauge',
+      });
+      expect(store.get('projects')!.source).toBeUndefined();
+    });
+
     it("carries the hydration payload's kind (TBP-699), defaulting to 'counter'", () => {
       const store = new QuotaStore();
       store.applyInitialSnapshot('projects', {

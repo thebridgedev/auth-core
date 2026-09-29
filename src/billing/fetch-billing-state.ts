@@ -26,6 +26,7 @@ export async function fetchBillingState(
         Authorization: `Bearer ${opts.accessToken}`,
         'x-app-id': opts.appId,
       },
+      onTokenStale: opts.onTokenStale,
     },
     logger,
   );

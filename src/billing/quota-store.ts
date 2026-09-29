@@ -43,6 +43,11 @@ export interface QuotaSnapshot {
    * compile.
    */
   kind?: 'counter' | 'gauge';
+  /**
+   * TBP-763 — `membership`: a gauge Bridge counts itself from the workspace's
+   * active members (seats); the app never reports it.
+   */
+  source?: 'membership';
   warningLevel: null | 'approaching' | 'critical';
   /** Display label. US-11 uses the raw metric key; framework wrappers can override. */
   label: string;
@@ -75,6 +80,13 @@ interface MountOptions {
   /** Bearer access token. Null when unauthenticated — hydrate is skipped. */
   accessToken: string | null;
   appId: string;
+  /**
+   * TBP-762 — renews an out-of-date sign-in. When Bridge answers
+   * `401 TOKEN_VERSION_STALE` (a checkout just changed the plan), the request
+   * is retried once with the token this returns. Pass
+   * `bridgeAuth.tokenStaleHandler()`.
+   */
+  onTokenStale?: () => Promise<string | null>;
 }
 
 /**
@@ -169,6 +181,8 @@ export class QuotaStore {
       // visually identical.
       policy: msg.policy === 'hard' ? 'hard' : 'metered',
       kind: msg.quotaKind === 'gauge' ? 'gauge' : 'counter',
+      // A push does not repeat how the quota is counted; keep what the read said.
+      source: this._snapshots.get(msg.metric)?.source,
       warningLevel: msg.warningLevel ?? null,
       label: msg.metric,
       // TBP-275 — overage fields (server-authoritative; overcap falls back to a
@@ -215,6 +229,7 @@ export class QuotaStore {
       // for older bridge-api responses.
       policy: snapshot.policy === 'hard' ? 'hard' : 'metered',
       kind: snapshot.kind === 'gauge' ? 'gauge' : 'counter',
+      source: snapshot.source === 'membership' ? 'membership' : undefined,
       warningLevel: snapshot.warningLevel ?? null,
       label: metric,
       // TBP-275 — overage fields from the hydration response.
@@ -358,6 +373,8 @@ export class QuotaStore {
       policy?: 'hard' | 'metered';
       /** TBP-699 — optional; absent from servers that predate gauges. */
       kind?: 'counter' | 'gauge';
+      /** TBP-763 — present on a gauge counted from membership (seats). */
+      source?: 'membership';
       /** TBP-275 — optional overage fields for metered quotas. */
       unitAmount?: number;
       currency?: string;
@@ -371,6 +388,7 @@ export class QuotaStore {
           Authorization: `Bearer ${opts.accessToken}`,
           'x-app-id': opts.appId,
         },
+        onTokenStale: opts.onTokenStale,
       },
       this._logger,
     );
@@ -383,6 +401,7 @@ export class QuotaStore {
           warningLevel: body.warningLevel,
           policy: body.policy,
           kind: body.kind,
+          source: body.source,
           unitAmount: body.unitAmount,
           currency: body.currency,
           overageEstimate: body.overageEstimate,
