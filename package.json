@@ -1,7 +1,7 @@
 {
   "name": "@nebulr-group/bridge-auth-core",
   "version": "0.8.0",
-  "description": "Framework-agnostic auth core for Bridge platform",
+  "description": "The Bridge core client: sign-in flows, sessions and token refresh, feature flags, billing state and the management API for any JavaScript app.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -25,7 +25,9 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "LICENSE",
+    "README.md"
   ],
   "scripts": {
     "build": "tsc",
@@ -47,5 +49,30 @@
     "type": "git",
     "url": "https://github.com/thebridgedev/auth-core"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "homepage": "https://thebridge.dev/docs/getting-started/",
+  "keywords": [
+    "typescript",
+    "jwt",
+    "passkeys",
+    "magic-link",
+    "management-api",
+    "the-bridge",
+    "bridge",
+    "authentication",
+    "auth",
+    "login",
+    "sso",
+    "feature-flags",
+    "stripe",
+    "subscriptions",
+    "billing",
+    "plan-limits",
+    "multi-tenant",
+    "rbac",
+    "saas"
+  ],
+  "bugs": {
+    "url": "https://github.com/thebridgedev/auth-core/issues"
+  }
 }
