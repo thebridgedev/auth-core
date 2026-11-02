@@ -1,4 +1,5 @@
-import { createRemoteJWKSet, jwtVerify, errors as joseErrors } from 'jose';
+import { jwtVerify, errors as joseErrors, type JWTVerifyGetKey } from 'jose';
+import { BRIDGE_TOKEN_ALGORITHMS, createKeySetResolver } from '../verifier/key-set.js';
 import type { JwtClaims, ApiTokenClaims } from './types.js';
 
 /**
@@ -90,25 +91,15 @@ const DEFAULT_INTROSPECTION_CACHE_TTL_MS = 0; // disabled → instant revocation
  *    default; see `introspectionCacheTtlMs`).
  *
  * This is a plain class — NOT a DI provider. Framework plugins wrap it.
- */
-/**
- * The only algorithm Bridge signs user access tokens with.
  *
- * bridge-api signs every user token `PS256` (`microservices/auth/utils/jwt-util.ts`)
- * and pins the same value on its own verifier (TBP-218, citing
- * GHSA-hjrf-2m68-5959). bridge-nextjs pins it too
- * (`server/utils/verify-session.ts`). This verifier documented PS256 as its
- * contract but did not enforce it, so the pin is what makes the three agree.
- *
- * The pin matters because the live JWKS keys carry no `alg` of their own: left
- * unpinned, jose accepts any algorithm the key type supports, which is the
- * algorithm-confusion class the bridge-api comment names.
+ * @deprecated Use `createCredentialVerifier` from
+ * `@nebulr-group/bridge-auth-core/verifier`: one checker for people, jobs and
+ * keys, returning one Actor context. It shares this class's key set handling
+ * and algorithm pin.
  */
-const USER_TOKEN_ALGORITHMS = ['PS256'];
-
 export class JwksService {
-  private jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-  private jwksInitTime = 0;
+  /** The user-token key set, shared with the credential verifier (PS256 pinned). */
+  private readonly keySet: () => JWTVerifyGetKey;
 
   /** token → { result, expiresAt(ms) }. Only successful introspections are cached. */
   private readonly introspectionCache = new Map<
@@ -125,21 +116,7 @@ export class JwksService {
     this.introspectionCacheTtlMs =
       config.introspectionCacheTtlMs ?? DEFAULT_INTROSPECTION_CACHE_TTL_MS;
     this.log = config.log ?? (() => {});
-  }
-
-  /**
-   * Initialize or refresh the user-token JWKS client.
-   */
-  private ensureJwks(): ReturnType<typeof createRemoteJWKSet> {
-    const now = Date.now();
-
-    if (!this.jwks || now - this.jwksInitTime > this.cacheTtlMs) {
-      this.log('Initializing JWKS client', { url: this.config.jwksUrl });
-      this.jwks = createRemoteJWKSet(new URL(this.config.jwksUrl));
-      this.jwksInitTime = now;
-    }
-
-    return this.jwks;
+    this.keySet = createKeySetResolver({ url: config.jwksUrl, ttlMs: this.cacheTtlMs });
   }
 
   /**
@@ -148,13 +125,11 @@ export class JwksService {
    * @throws {TokenVerificationError} if the token is invalid or expired.
    */
   async verifyToken(token: string): Promise<JwtClaims> {
-    const jwks = this.ensureJwks();
-
     try {
-      const { payload } = await jwtVerify(token, jwks, {
+      const { payload } = await jwtVerify(token, this.keySet(), {
         issuer: this.config.issuer,
         audience: this.config.audience,
-        algorithms: USER_TOKEN_ALGORITHMS,
+        algorithms: [...BRIDGE_TOKEN_ALGORITHMS],
       });
 
       this.log('Token verified successfully', {

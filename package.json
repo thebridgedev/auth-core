@@ -15,12 +15,25 @@
       "types": "./dist/backend/index.d.ts",
       "import": "./dist/backend/index.js",
       "default": "./dist/backend/index.js"
+    },
+    "./verifier": {
+      "types": "./dist/verifier/index.d.ts",
+      "browser": "./dist/verifier/index.js",
+      "edge-light": "./dist/verifier/index.js",
+      "workerd": "./dist/verifier/index.js",
+      "worker": "./dist/verifier/index.js",
+      "node": "./dist/verifier/index.js",
+      "import": "./dist/verifier/index.js",
+      "default": "./dist/verifier/index.js"
     }
   },
   "typesVersions": {
     "*": {
       "backend": [
         "./dist/backend/index.d.ts"
+      ],
+      "verifier": [
+        "./dist/verifier/index.d.ts"
       ]
     }
   },
@@ -40,7 +53,9 @@
     "jose": "^6.2.3"
   },
   "devDependencies": {
+    "@edge-runtime/vm": "^5.0.0",
     "@types/node": "^20.11.0",
+    "esbuild": "^0.28.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   },
