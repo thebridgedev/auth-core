@@ -8,7 +8,7 @@ import {
 import { BRIDGE_TOKEN_ALGORITHMS, createKeySetResolver } from './key-set.js';
 import { CredentialRefusedError, refuse, type Refusal, type RefusalReason } from './refusal.js';
 import { readCredentials, type Credential, type HeadersLike } from './request.js';
-import { checkRevocation, type RevocationCheck } from './revocation.js';
+import { revocationCheckFrom, type RevocationOption } from './revocation.js';
 import { actorFromTokenClaims } from './token-claims.js';
 
 /** How a verifier is set up. One verifier checks credentials for one app. */
@@ -47,8 +47,16 @@ export interface CredentialVerifierOptions {
    */
   trustedServiceAppId?: string;
 
-  /** Replaces the default revocation check (which does nothing yet; see `checkRevocation`). */
-  revocationCheck?: RevocationCheck;
+  /**
+   * How this verifier learns that access was taken away before a credential
+   * expires. Required, so no verifier skips revocation without saying so:
+   *
+   * - a revocation check, usually a revocation puller's `check`, which
+   *   follows the app's revocation list (see `createRevocationPuller`);
+   * - `'none'`: follow no list. A token whose access was taken away keeps
+   *   working until it expires. Only for places no list reaches.
+   */
+  revocationCheck: RevocationOption;
   /** The fetch used for the key set and the introspection endpoint. @default the global fetch */
   fetch?: typeof fetch;
   /** Optional debug logger. Never receives a credential. */
@@ -142,7 +150,7 @@ export function createCredentialVerifier(options: CredentialVerifierOptions): Cr
   const appId = options.appId;
   const audience = options.audience ?? appId;
   const acceptPlainJwtType = options.acceptPlainJwtType ?? true;
-  const revocationCheck = options.revocationCheck ?? checkRevocation;
+  const revocationCheck = revocationCheckFrom(options.revocationCheck);
   const log = options.log ?? (() => {});
   const fetchImpl: typeof fetch | undefined = options.fetch;
 

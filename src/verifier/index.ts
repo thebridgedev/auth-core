@@ -27,7 +27,7 @@ export type { Refusal, RefusalReason } from './refusal.js';
 export { readCredentials } from './request.js';
 export type { Credential, HeadersLike } from './request.js';
 
-export { checkRevocation } from './revocation.js';
-export type { RevocationCheck, RevocationVerdict } from './revocation.js';
+export { NO_REVOCATION_CHECK } from './revocation.js';
+export type { RevocationCheck, RevocationOption, RevocationVerdict } from './revocation.js';
 
 export { BRIDGE_TOKEN_ALGORITHMS } from './key-set.js';

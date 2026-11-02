@@ -11,26 +11,32 @@ export type RevocationVerdict =
  * A revocation check. The verifier calls it once for every credential that
  * passed every other check, just before it hands out the Actor. A credential
  * whose access was taken away is refused with the reason `revoked`, even when
- * it has not expired yet.
+ * it has not expired yet. A check that throws makes the verifier refuse with
+ * `unavailable`, never accept.
+ *
+ * Usually a revocation puller's `check` (see `createRevocationPuller`).
  */
 export type RevocationCheck = (actor: Actor) => RevocationVerdict | Promise<RevocationVerdict>;
 
+/**
+ * The explicit opt-out from revocation, for the verifier's `revocationCheck`
+ * option: this verifier follows no revocation list, so a token whose access
+ * was taken away keeps working until it expires. Use it only where no list
+ * can reach, such as a tool that runs for one access-token lifetime at most.
+ */
+export const NO_REVOCATION_CHECK = 'none';
+
+/** What the verifier's `revocationCheck` option accepts. */
+export type RevocationOption = RevocationCheck | typeof NO_REVOCATION_CHECK;
+
 const NOT_REVOKED: RevocationVerdict = Object.freeze({ revoked: false });
 
-/**
- * ---------------------------------------------------------------------------
- * REVOCATION SEAM: this check does nothing yet.
- * ---------------------------------------------------------------------------
- *
- * The revocation list does not exist yet. When it does, its check plugs in
- * here, so a token that is still within its lifetime stops working within
- * seconds of access being taken away. Until then every credential that passed
- * the other checks is reported as not revoked.
- *
- * A caller that already has a revocation source can pass its own check as the
- * verifier's `revocationCheck` option; this default is used only when none is
- * given.
- */
-export function checkRevocation(_actor: Actor): RevocationVerdict {
-  return NOT_REVOKED;
+/** Turn the option into the check the verifier runs. A missing option is refused: it is never a silent no-op. */
+export function revocationCheckFrom(option: RevocationOption | undefined): RevocationCheck {
+  if (option === NO_REVOCATION_CHECK) return () => NOT_REVOKED;
+  if (typeof option === 'function') return option;
+  throw new TypeError(
+    "createCredentialVerifier: `revocationCheck` is required. Pass a revocation puller's `check` " +
+      "(see createRevocationPuller), or 'none' to rely on tokens expiring.",
+  );
 }
