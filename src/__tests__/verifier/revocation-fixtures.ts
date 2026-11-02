@@ -10,7 +10,7 @@ import { APP, decodeSegment, encodeSegment } from './fixtures.js';
 
 export const LIST_URL = 'https://auth.example.test/revocations';
 export const REVOCATION_JWKS_URL = 'https://auth.example.test/.well-known/jwks.json';
-export const LANES = ['identity-access', 'accounts', 'billing', 'app-registry'] as const;
+export const LANES = ['sessions', 'members', 'billing', 'apps'] as const;
 export type Lane = (typeof LANES)[number];
 
 export function laneUrls(lanes: readonly string[] = LANES): Record<string, string> {

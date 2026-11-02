@@ -202,7 +202,7 @@ function readLaneKeys(set: unknown): Map<string, LaneKey> {
  * const revocations = createRevocationPuller({
  *   appId,
  *   jwksUrl,
- *   lanes: { accounts: 'https://…/revocations/accounts', … },
+ *   lanes: { members: 'https://…/revocations/members', … },
  * }).start();
  * const verifier = createCredentialVerifier({ appId, issuer, jwksUrl, revocationCheck: revocations.check });
  * ```

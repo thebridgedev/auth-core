@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseRevocationEntry } from '../../verifier/revocation-entry.js';
 
-const base = { v: 1, app: 'app-acme', lane: 'accounts', seq: 1, at: 1_000 };
+const base = { v: 1, app: 'app-acme', lane: 'members', seq: 1, at: 1_000 };
 
 describe('revocation entry format', () => {
   it.each([
