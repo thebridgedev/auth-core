@@ -63,6 +63,30 @@ const tenants = await mgmt.tenants.list();
 const flags = await mgmt.flags.list();
 ```
 
+## Check who is calling your API
+
+`createCredentialVerifier` checks the access token or API key on a request and tells you who is calling: which person, key or job, for which app, in which workspace, with which privileges. It runs on Node, in edge runtimes such as Next.js middleware, and in the browser.
+
+```ts
+import { createCredentialVerifier } from '@nebulr-group/bridge-auth-core/verifier';
+
+const verifier = createCredentialVerifier({
+  appId: 'your-app-id',
+  issuer: 'https://api.thebridge.dev/auth',
+  jwksUrl: 'https://api.thebridge.dev/auth/.well-known/jwks.json',
+  introspectionUrl: 'https://api.thebridge.dev/account/api-token/introspect', // to accept API keys
+});
+
+const result = await verifier.verifyRequest(request); // reads only Authorization: Bearer and x-api-key
+if (!result.ok) {
+  // result.refusal.reason says why: 'expired', 'wrong_audience', 'unavailable', ...
+  return new Response(null, { status: result.refusal.reason === 'unavailable' ? 503 : 401 });
+}
+const { kind, id, workspaceId, privileges } = result.actor;
+```
+
+Who is calling always comes from the checked token or key, never from other headers or the request body. The `Actor` replaces `BridgeUser` and `ApiTokenClaims`, which still work but are deprecated; `actorToBridgeUser` and `actorToApiTokenClaims` in `/backend` convert while you move over.
+
 ## Using a framework?
 
 The framework packages below wrap this core with components, route guards and decorators. Start there if your framework is listed.
