@@ -152,6 +152,31 @@ export function defineRevocationSuite(runtime: string): void {
         expect(list.requests.length).toBe(count);
       });
 
+      it('stops for good when stopped, even after a restart while a fetch was running', async () => {
+        let calls = 0;
+        let release: () => void = () => {};
+        const revocations = createRevocationPuller({
+          appId: APP,
+          lanes: laneUrls(['accounts']),
+          jwksUrl: REVOCATION_JWKS_URL,
+          intervalMs: 5,
+          fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+            calls += 1;
+            await new Promise<void>((resolve) => (release = resolve));
+            return list.fetch(input, init);
+          }) as typeof fetch,
+        });
+        revocations.start();
+        revocations.stop();
+        revocations.start();
+        const running = revocations.sync();
+        release();
+        await running;
+        revocations.stop();
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        expect(calls).toBe(1);
+      });
+
       it('catches up in the background when checks find it behind, without start()', async () => {
         const revocations = puller({ intervalMs: 2000 });
         expect(await verifyToken(revocations)).toBe('accepted');

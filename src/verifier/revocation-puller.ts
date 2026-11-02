@@ -457,6 +457,8 @@ export function createRevocationPuller(options: RevocationPullerOptions): Revoca
 
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running = false;
+  // Each start() begins a new run; a fetch from an earlier run never schedules another.
+  let run = 0;
 
   const puller: RevocationPuller = {
     check: checkWithin(maxLagMs),
@@ -465,9 +467,10 @@ export function createRevocationPuller(options: RevocationPullerOptions): Revoca
     start() {
       if (running) return puller;
       running = true;
+      const current = ++run;
       const tick = () => {
         void sync().finally(() => {
-          if (!running) return;
+          if (!running || current !== run) return;
           timer = setTimeout(tick, intervalMs);
           // On Node, a puller must not keep the process alive by itself.
           (timer as { unref?: () => void }).unref?.();
