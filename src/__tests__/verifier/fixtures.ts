@@ -57,6 +57,8 @@ export interface MintOptions {
   expiresIn?: string | number | null;
   notBefore?: string | number;
   subject?: string | null;
+  /** When the token says it was issued, in seconds. `null` leaves `iat` out. @default now */
+  issuedAt?: number | null;
 }
 
 /** A person's access token, shaped like the ones The Bridge issues today. */
@@ -97,8 +99,8 @@ export async function mint(
   const jwt = new SignJWT(claims)
     .setProtectedHeader(header as { alg: string })
     .setIssuer(options.issuer ?? ISSUER)
-    .setAudience(options.audience ?? [APP, 'https://api.example.test'])
-    .setIssuedAt();
+    .setAudience(options.audience ?? [APP, 'https://api.example.test']);
+  if (options.issuedAt !== null) jwt.setIssuedAt(options.issuedAt);
   if (options.subject !== null) jwt.setSubject(options.subject ?? 'user-alice');
   if (options.expiresIn !== null) jwt.setExpirationTime(options.expiresIn ?? '5m');
   if (options.notBefore !== undefined) jwt.setNotBefore(options.notBefore);

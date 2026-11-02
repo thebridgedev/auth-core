@@ -7,6 +7,7 @@
 - **One checker for every token and key.** `createCredentialVerifier`, from the new `@nebulr-group/bridge-auth-core/verifier` entry, checks a person's access token, a background job's token or an API key, and returns one `Actor`: who is calling, for which app, in which workspace, with which privileges. A refused credential comes back with the reason, such as `expired`, `wrong_audience` or `revoked`. Tokens are checked by signature against your app's keys, with the algorithm pinned; keys are checked with The Bridge.
 - **Runs at the edge.** The verifier entry uses only `fetch` and Web Crypto, so it loads in Next.js middleware and other edge runtimes as well as on Node and in the browser.
 - **Who is calling comes only from the credential.** `verifyRequest` reads only the `Authorization: Bearer` and `x-api-key` headers. Other headers, the query string and the body never change who the caller is.
+- **Access taken away stops working within seconds.** `createRevocationPuller` follows your app's revocation list: signed, numbered entries for ended sessions, revoked tokens and keys, people removed from a workspace, changed roles and plans. It fetches only new entries, checks every signature, and refuses with `unavailable` instead of accepting when its copy is incomplete, out of step or too far behind. The verifier's `revocationCheck` option is required: pass the puller's `check`, or `'none'` to rely on tokens expiring.
 
 ### Deprecated
 

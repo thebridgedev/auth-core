@@ -48,7 +48,7 @@ function jwksServer(getBody: () => unknown) {
 describe('remote key set', () => {
   it('loads the key set from its URL once and reuses it', async () => {
     const server = jwksServer(() => ring.jwks);
-    const verifier = createCredentialVerifier({ appId: APP, issuer: ISSUER, jwksUrl: JWKS_URL, fetch: server.fetch });
+    const verifier = createCredentialVerifier({ appId: APP, issuer: ISSUER, jwksUrl: JWKS_URL, fetch: server.fetch, revocationCheck: 'none' });
     for (let i = 0; i < 3; i += 1) {
       const token = await mint(ring.app, personClaims());
       const result = await verifier.verify({ type: 'token', value: token });
@@ -59,16 +59,16 @@ describe('remote key set', () => {
 
   it('refuses with `unavailable` when the key set cannot be loaded', async () => {
     const server = jwksServer(() => new TypeError('fetch failed'));
-    const verifier = createCredentialVerifier({ appId: APP, issuer: ISSUER, jwksUrl: JWKS_URL, fetch: server.fetch });
+    const verifier = createCredentialVerifier({ appId: APP, issuer: ISSUER, jwksUrl: JWKS_URL, fetch: server.fetch, revocationCheck: 'none' });
     const token = await mint(ring.app, personClaims());
     const result = await verifier.verify({ type: 'token', value: token });
     expect(result.ok ? 'accepted' : result.refusal.reason).toBe('unavailable');
   });
 
   it('refuses to start without the app, the issuer or a key set', () => {
-    expect(() => createCredentialVerifier({ appId: '', issuer: ISSUER, jwks: ring.jwks })).toThrow(TypeError);
-    expect(() => createCredentialVerifier({ appId: APP, issuer: '', jwks: ring.jwks })).toThrow(TypeError);
-    expect(() => createCredentialVerifier({ appId: APP, issuer: ISSUER })).toThrow(TypeError);
+    expect(() => createCredentialVerifier({ appId: '', issuer: ISSUER, jwks: ring.jwks, revocationCheck: 'none' })).toThrow(TypeError);
+    expect(() => createCredentialVerifier({ appId: APP, issuer: '', jwks: ring.jwks, revocationCheck: 'none' })).toThrow(TypeError);
+    expect(() => createCredentialVerifier({ appId: APP, issuer: ISSUER, revocationCheck: 'none' })).toThrow(TypeError);
   });
 });
 
@@ -76,7 +76,7 @@ describe('key check caching', () => {
   it('asks the issuer every time by default, so a revoked key stops at once', async () => {
     const issuer = fakeIntrospection({ 'k-app': { body: KEYS.app } });
     const verifier = createCredentialVerifier({
-      appId: APP, issuer: ISSUER, jwks: ring.jwks, introspectionUrl: INTROSPECTION_URL, fetch: issuer.fetch,
+      appId: APP, issuer: ISSUER, jwks: ring.jwks, introspectionUrl: INTROSPECTION_URL, fetch: issuer.fetch, revocationCheck: 'none',
     });
     await verifier.verify({ type: 'key', value: 'k-app' });
     await verifier.verify({ type: 'key', value: 'k-app' });
@@ -86,7 +86,7 @@ describe('key check caching', () => {
   it('reuses an active answer for introspectionCacheTtlMs, and never caches a refusal', async () => {
     const issuer = fakeIntrospection({ 'k-app': { body: KEYS.app } });
     const verifier = createCredentialVerifier({
-      appId: APP, issuer: ISSUER, jwks: ring.jwks, introspectionUrl: INTROSPECTION_URL, fetch: issuer.fetch,
+      appId: APP, issuer: ISSUER, jwks: ring.jwks, introspectionUrl: INTROSPECTION_URL, fetch: issuer.fetch, revocationCheck: 'none',
       introspectionCacheTtlMs: 60_000,
     });
     await verifier.verify({ type: 'key', value: 'k-app' });
@@ -135,7 +135,7 @@ describe('the older caller shapes keep working', () => {
 
   it("actorToBridgeUser gives the same BridgeUser the old path built from the token's claims", async () => {
     const token = await mint(ring.app, personClaims({ name: 'Alice Doe', preferred_username: 'alice' }));
-    const verifier = createCredentialVerifier({ appId: APP, issuer: ISSUER, jwks: ring.jwks });
+    const verifier = createCredentialVerifier({ appId: APP, issuer: ISSUER, jwks: ring.jwks, revocationCheck: 'none' });
     const result = await verifier.verify({ type: 'token', value: token });
     if (!result.ok) throw new Error(result.refusal.reason);
 
@@ -147,7 +147,7 @@ describe('the older caller shapes keep working', () => {
   it('actorToApiTokenClaims gives the shape the old key check returned', async () => {
     const issuer = fakeIntrospection({ 'k-legacy-app': { body: KEYS.legacyAppWide } });
     const verifier = createCredentialVerifier({
-      appId: APP, issuer: ISSUER, jwks: ring.jwks, introspectionUrl: INTROSPECTION_URL, fetch: issuer.fetch,
+      appId: APP, issuer: ISSUER, jwks: ring.jwks, introspectionUrl: INTROSPECTION_URL, fetch: issuer.fetch, revocationCheck: 'none',
     });
     const result = await verifier.verify({ type: 'key', value: 'k-legacy-app' });
     if (!result.ok) throw new Error(result.refusal.reason);

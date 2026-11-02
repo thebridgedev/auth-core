@@ -100,6 +100,7 @@ describe('verifier entry in an edge runtime', () => {
         appId: input.appId,
         issuer: input.issuer,
         jwks: input.jwks,
+        revocationCheck: 'none',
       });
       const good = await verifier.verify({ type: 'token', value: input.token });
       const bad = await verifier.verify({ type: 'token', value: input.forged });

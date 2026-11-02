@@ -75,6 +75,7 @@ export function defineConformanceSuite(runtime: string): void {
         jwks: ring.jwks,
         introspectionUrl: INTROSPECTION_URL,
         fetch: introspection.fetch,
+        revocationCheck: 'none',
         ...overrides,
       });
     }
@@ -317,10 +318,20 @@ export function defineConformanceSuite(runtime: string): void {
       });
     });
 
-    describe('revocation seam', () => {
-      it('by default refuses nothing for revocation', async () => {
+    describe('revocation', () => {
+      it('refuses to start until it is told how revocation is checked: never a silent no-op', () => {
+        const options = { appId: APP, issuer: ISSUER, jwks: ring.jwks } as CredentialVerifierOptions;
+        expect(() => createCredentialVerifier(options)).toThrow(/revocationCheck/);
+        expect(() =>
+          createCredentialVerifier({ ...options, revocationCheck: 'off' as unknown as 'none' }),
+        ).toThrow(TypeError);
+      });
+
+      it("with 'none', refuses nothing for revocation", async () => {
         const token = await mint(ring.app, personClaims());
-        expect(actorOf(await verifier().verify({ type: 'token', value: token })).id).toBe('user-alice');
+        expect(actorOf(await verifier({ revocationCheck: 'none' }).verify({ type: 'token', value: token })).id).toBe(
+          'user-alice',
+        );
       });
 
       it('refuses with `revoked` when the revocation check says access was taken away', async () => {
