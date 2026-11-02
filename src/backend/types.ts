@@ -71,6 +71,10 @@ export interface JwtClaims {
 
 /**
  * Authenticated user extracted from a verified JWT access token.
+ *
+ * @deprecated Use the `Actor` from the credential verifier
+ * (`@nebulr-group/bridge-auth-core/verifier`): one caller context for people,
+ * jobs and keys. `actorToBridgeUser` converts while handlers move over.
  */
 export interface BridgeUser {
   /** User ID (sub claim) */
@@ -107,6 +111,10 @@ export interface BridgeUser {
 
 /**
  * Claims present in a Bridge API token JWT (the `x-api-key` machine credential).
+ *
+ * @deprecated Use the `Actor` from the credential verifier
+ * (`@nebulr-group/bridge-auth-core/verifier`): one caller context for people,
+ * jobs and keys. `actorToApiTokenClaims` converts while handlers move over.
  */
 export interface ApiTokenClaims extends JwtClaims {
   sub: string;
@@ -118,6 +126,8 @@ export interface ApiTokenClaims extends JwtClaims {
 
 /**
  * Transform raw JWT claims into a BridgeUser.
+ *
+ * @deprecated Use the `Actor` from the credential verifier.
  */
 export function transformJwtToBridgeUser(claims: JwtClaims): BridgeUser {
   return {
