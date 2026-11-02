@@ -1,5 +1,6 @@
 import type { Logger } from './logger.js';
 import type { ResolvedConfig, SsoOptions, SsoResult } from './types.js';
+import { carryAttribution } from './attribution.js';
 
 const DEFAULT_WIDTH = 500;
 const DEFAULT_HEIGHT = 600;
@@ -42,8 +43,12 @@ export class SsoPopupManager {
       url.searchParams.set('redirect_uri', redirectUri);
     }
 
-    this.logger.debug('SSO redirect kickoff', url.toString());
-    window.location.assign(url.toString());
+    // TBP-894 — a sign-up page reached by a tagged link (utm_*, ref) hands
+    // its tags to the kickoff, which signs them into the federation state.
+    // Without this an SSO sign-up kept only what a consent cookie held.
+    const kickoff = carryAttribution(url.toString());
+    this.logger.debug('SSO redirect kickoff', kickoff);
+    window.location.assign(kickoff);
 
     // Tab is navigating away — this promise intentionally never resolves.
     return new Promise<SsoResult>(() => { /* no-op */ });
@@ -62,7 +67,7 @@ export class SsoPopupManager {
       url.searchParams.set('targetOrigin', window.location.origin);
 
       this.popup = window.open(
-        url.toString(),
+        carryAttribution(url.toString()),
         'bridge-sso-popup',
         `width=${width},height=${height},left=${left},top=${top},popup=yes`,
       );

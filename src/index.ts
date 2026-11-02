@@ -14,6 +14,8 @@ export {
 
 // Main facade
 export { BridgeAuth } from './bridge-auth.js';
+export { ATTRIBUTION_PARAMS, carryAttribution, readAttributionParams } from './attribution.js';
+export type { AttributionParam } from './attribution.js';
 
 // Types
 export type {

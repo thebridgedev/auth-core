@@ -50,7 +50,7 @@ function createFakePopup(closed = false): Window {
   } as unknown as Window;
 }
 
-function setupWindowMocks(opts: { popupBlocked?: boolean } = {}) {
+function setupWindowMocks(opts: { popupBlocked?: boolean; search?: string } = {}) {
   const messageListeners: MessageListener[] = [];
   const fakePopup = opts.popupBlocked ? null : createFakePopup(false);
 
@@ -68,7 +68,7 @@ function setupWindowMocks(opts: { popupBlocked?: boolean } = {}) {
       open: windowOpenSpy,
       addEventListener: addEventListenerSpy,
       removeEventListener: removeEventListenerSpy,
-      location: { origin: 'https://myapp.com', assign: locationAssignSpy },
+      location: { origin: 'https://myapp.com', search: opts.search ?? '', assign: locationAssignSpy },
     },
     writable: true,
     configurable: true,
@@ -112,6 +112,39 @@ describe('SsoPopupManager', () => {
   // -------------------------------------------------------------------------
   // Redirect mode (default)
   // -------------------------------------------------------------------------
+
+  // TBP-894 — a sign-up page reached by a tagged link keeps its tags through SSO.
+  describe('attribution on the kickoff', () => {
+    it('redirect mode carries utm_*, ref and landing_path from the page, never the OAuth code', () => {
+      const { locationAssignSpy } = setupWindowMocks({
+        search: '?utm_source=tiktok&utm_medium=organic-social&ref=CODE8&landing_path=%2Fpricing&code=oauth-code',
+      });
+      new SsoPopupManager(CONFIG, logger).startSsoLogin('google', { mode: 'redirect' });
+      const url = new URL(locationAssignSpy.mock.calls[0][0] as string);
+      expect(url.searchParams.get('provider')).toBe('google');
+      expect(url.searchParams.get('utm_source')).toBe('tiktok');
+      expect(url.searchParams.get('utm_medium')).toBe('organic-social');
+      expect(url.searchParams.get('ref')).toBe('CODE8');
+      expect(url.searchParams.get('landing_path')).toBe('/pricing');
+      expect(url.searchParams.get('code')).toBeNull();
+    });
+
+    it('popup mode carries them too', () => {
+      const { windowOpenSpy } = setupWindowMocks({ search: '?utm_source=youtube&ref=CODE9' });
+      void new SsoPopupManager(CONFIG, logger).startSsoLogin('github', { mode: 'popup' }).catch(() => undefined);
+      const url = new URL(windowOpenSpy.mock.calls[0][0] as string);
+      expect(url.searchParams.get('mode')).toBe('popup');
+      expect(url.searchParams.get('utm_source')).toBe('youtube');
+      expect(url.searchParams.get('ref')).toBe('CODE9');
+    });
+
+    it('adds nothing when the page carries no tags', () => {
+      const { locationAssignSpy } = setupWindowMocks();
+      new SsoPopupManager(CONFIG, logger).startSsoLogin('google', { mode: 'redirect' });
+      const url = new URL(locationAssignSpy.mock.calls[0][0] as string);
+      expect([...url.searchParams.keys()].sort()).toEqual(['provider', 'redirect_uri']);
+    });
+  });
 
   describe('startSsoLogin — redirect mode (default)', () => {
     it.each(PROVIDERS)(
