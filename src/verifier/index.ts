@@ -3,7 +3,9 @@
  *
  * The credential verifier: one checker that turns a person's token, a job's
  * token or a key into one Actor context (who is calling, for which app, in
- * which workspace, with which privileges), or refuses it with a reason.
+ * which workspace, with which privileges), or refuses it with a reason. And
+ * the revocation puller, which follows the app's revocation list so access
+ * that was taken away stops working within seconds.
  *
  * Safe in every runtime: browsers, Node and edge runtimes. This entry imports
  * nothing but `jose` and its own files, and uses only `fetch` and Web Crypto.
@@ -29,5 +31,19 @@ export type { Credential, HeadersLike } from './request.js';
 
 export { NO_REVOCATION_CHECK } from './revocation.js';
 export type { RevocationCheck, RevocationOption, RevocationVerdict } from './revocation.js';
+
+export { createRevocationPuller, RevocationListUnavailableError } from './revocation-puller.js';
+export type {
+  RevocationLaneStatus,
+  RevocationListStatus,
+  RevocationPuller,
+  RevocationPullerOptions,
+} from './revocation-puller.js';
+export {
+  REVOCATION_ALGORITHMS,
+  REVOCATION_ENTRY_TYPE,
+  REVOCATION_FORMAT_VERSION,
+} from './revocation-entry.js';
+export type { RevocationEntry, RevocationKind } from './revocation-entry.js';
 
 export { BRIDGE_TOKEN_ALGORITHMS } from './key-set.js';
