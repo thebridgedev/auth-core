@@ -41,10 +41,11 @@ export type {
 } from './revocation-puller.js';
 export {
   REVOCATION_ALGORITHMS,
+  REVOCATION_CHECKPOINT_TYPE,
   REVOCATION_ENTRY_TYPE,
   REVOCATION_FORMAT_VERSION,
 } from './revocation-entry.js';
-export type { RevocationEntry, RevocationKind } from './revocation-entry.js';
+export type { RevocationCheckpoint, RevocationEntry, RevocationKind } from './revocation-entry.js';
 
 export { BRIDGE_TOKEN_ALGORITHMS, createKeySet } from './key-set.js';
 export type { KeySet, KeySetOptions } from './key-set.js';

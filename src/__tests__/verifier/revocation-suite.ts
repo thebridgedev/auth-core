@@ -7,7 +7,7 @@
  * everywhere.
  */
 import { CompactSign } from 'jose';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createCredentialVerifier,
   createRevocationPuller,
@@ -25,6 +25,7 @@ import {
   KEYS,
   OTHER_APP,
   decodeSegment,
+  encodeSegment,
   fakeIntrospection,
   jobClaims,
   keyTokenClaims,
@@ -35,15 +36,21 @@ import {
 } from './fixtures.js';
 import {
   LANES,
+  LIST_URL,
   REVOCATION_JWKS_URL,
   alterEntry,
   fakeRevocationList,
   laneUrls,
   makeLaneKey,
+  signCheckpoint,
   signEntry,
   unsignedEntry,
   type LaneKey,
 } from './revocation-fixtures.js';
+
+function encodeHeader(header: Record<string, unknown>): string {
+  return encodeSegment(header);
+}
 
 function outcome(result: Verification): string {
   return result.ok ? 'accepted' : result.refusal.reason;
@@ -65,8 +72,9 @@ export function defineRevocationSuite(runtime: string): void {
     beforeEach(async () => {
       ring ??= await makeKeyRing();
       keys ??= Object.fromEntries(await Promise.all(LANES.map(async (lane) => [lane, await makeLaneKey(lane)])));
-      list = fakeRevocationList(keys);
-      clock = 1_000_000;
+      // One clock for the copy and the list, starting now, so cutoffs compare with real token times.
+      clock = Date.now();
+      list = fakeRevocationList(keys, APP, () => clock);
     });
 
     function puller(overrides: Partial<RevocationPullerOptions> = {}): RevocationPuller {
@@ -164,8 +172,11 @@ export function defineRevocationSuite(runtime: string): void {
           jwksUrl: REVOCATION_JWKS_URL,
           intervalMs: 5,
           fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
-            calls += 1;
-            await new Promise<void>((resolve) => (release = resolve));
+            // Hold every fetch of the revocation list until released; the key set answers at once.
+            if (String(input).startsWith(LIST_URL)) {
+              calls += 1;
+              await new Promise<void>((resolve) => (release = resolve));
+            }
             return list.fetch(input, init);
           }) as typeof fetch,
         });
@@ -487,6 +498,256 @@ export function defineRevocationSuite(runtime: string): void {
         list.setKeys({ keys: [unbound] });
         await list.revoke('members', { kind: 'person', id: 'user-bob' });
         await expectRejected(puller(), /not published/);
+      });
+    });
+
+    describe("the revocation list's signed checkpoint", () => {
+      /** Serve the members lane's checkpoint through `change`; other lanes as they are. */
+      function checkpointOfMembers(change: (payload: Record<string, unknown>) => Promise<unknown> | unknown) {
+        list.state.checkpoint = async (lane, payload) => (lane === 'members' ? { jws: await change(payload) } : null);
+      }
+
+      async function expectMembersRefused(revocations: RevocationPuller, problem: RegExp) {
+        expect(await verifyToken(revocations)).toBe('unavailable');
+        expect(revocations.status().lanes.find((l) => l.lane === 'members')?.problem).toMatch(problem);
+      }
+
+      it('principle 6 (taking access away works within seconds, everywhere): a cached or replayed page of the revocation list cannot hide a new entry, because the copy counts how far behind it is from the signed checkpoint', async () => {
+        const revocations = puller();
+        expect(await verifyToken(revocations, personClaims(), { subject: 'user-bob' })).toBe('accepted');
+
+        // From here on, something between the copy and the list keeps answering with that first page.
+        const stale = list.lastBody('members');
+        list.state.body = (lane, fresh) => (lane === 'members' ? stale : fresh);
+        await list.revoke('members', { kind: 'person', id: 'user-bob' });
+
+        clock += 60_000;
+        // The copy cannot see the entry yet, but it knows it is a minute behind, not current.
+        expect(await verifyToken(revocations, personClaims(), { subject: 'user-bob' })).toBe('accepted');
+        expect(revocations.status().lagMs).toBeGreaterThanOrEqual(60_000);
+        // A write, held to 30 seconds, is refused already.
+        const strict = verifierWith(revocations, revocations.checkWithin(30_000));
+        const token = await mint(ring.app, personClaims(), { subject: 'user-bob' });
+        expect(outcome(await strict.verify({ type: 'token', value: token }))).toBe('unavailable');
+
+        // Past five minutes, everything is refused.
+        clock += 4 * 60_000 + 1_000;
+        expect(await verifyToken(revocations, personClaims(), { subject: 'user-bob' })).toBe('unavailable');
+        expect(await verifyToken(revocations)).toBe('unavailable');
+
+        // Once real pages come through again, the entry is applied.
+        list.state.body = null;
+        clock += 2_000;
+        expect(await verifyToken(revocations, personClaims(), { subject: 'user-bob' })).toBe('revoked');
+        expect(await verifyToken(revocations)).toBe('accepted');
+      });
+
+      it('principle 5 (only signed data is a fact): a page of the revocation list without a signed checkpoint is refused', async () => {
+        checkpointOfMembers(() => undefined);
+        await expectMembersRefused(puller(), /no signed checkpoint/);
+      });
+
+      it("principle 5 (only signed data is a fact): a checkpoint whose payload was changed is refused", async () => {
+        await list.revoke('members', { kind: 'person', id: 'user-bob' });
+        checkpointOfMembers(async (payload) => alterEntry(await signCheckpoint(keys.members, payload), (p) => (p.head = 0)));
+        await expectMembersRefused(puller(), /checkpoint's signature does not match/);
+      });
+
+      it('principle 5 (only signed data is a fact): an unsigned checkpoint is refused', async () => {
+        checkpointOfMembers((payload) => unsignedEntry(payload).replace(/^[^.]+/, encodeHeader({ alg: 'none', typ: 'revocation-checkpoint+jws' })));
+        await expectMembersRefused(puller(), /checkpoint is unsigned or signed with the wrong algorithm/);
+      });
+
+      it("principle 5 (only signed data is a fact): a checkpoint signed with another lane's key is refused", async () => {
+        checkpointOfMembers((payload) => signCheckpoint(keys.billing, payload));
+        await expectMembersRefused(puller(), /checkpoint is signed with another lane's key/);
+      });
+
+      it('principle 5 (only signed data is a fact): a signed entry passed off as a checkpoint is refused', async () => {
+        checkpointOfMembers((payload) => signEntry(keys.members, payload));
+        await expectMembersRefused(puller(), /checkpoint is not a revocation checkpoint/);
+      });
+
+      it('principle 5 (only signed data is a fact): a checkpoint for another lane or another app is refused', async () => {
+        checkpointOfMembers((payload) => signCheckpoint(keys.members, { ...payload, lane: 'billing' }));
+        await expectMembersRefused(puller(), /checkpoint belongs to another lane/);
+        checkpointOfMembers((payload) => signCheckpoint(keys.members, { ...payload, app: OTHER_APP }));
+        clock += 2_000;
+        await expectMembersRefused(puller(), /checkpoint belongs to another app/);
+      });
+
+      it('refuses a checkpoint dated in the future, so a replay cannot stay fresh for longer', async () => {
+        checkpointOfMembers((payload) => signCheckpoint(keys.members, { ...payload, at: clock + 60_000 }));
+        await expectMembersRefused(puller(), /dated in the future/);
+      });
+
+      it('refuses a checkpoint that does not read fully, such as a floor above the head', async () => {
+        checkpointOfMembers((payload) => signCheckpoint(keys.members, { ...payload, floor: 5, head: 2 }));
+        await expectMembersRefused(puller(), /checkpoint is not in a format this version reads/);
+      });
+
+      it('asks for every page of the revocation list with Cache-Control: no-store, whatever headers it is given', async () => {
+        await list.revoke('members', { kind: 'session', id: 's-1' });
+        const revocations = puller({ headers: { 'Cache-Control': 'max-age=600' } });
+        await revocations.sync();
+        expect(list.requests.length).toBeGreaterThan(0);
+        expect(list.requests.every((r) => r.cacheControl === 'no-store')).toBe(true);
+      });
+    });
+
+    describe("the revocation list's floor: the oldest entry it still keeps", () => {
+      const at = (ms: number) => Math.floor(ms / 1000);
+
+      it('principle 6 (taking access away works within seconds, everywhere): a new copy starts from the floor, applies every entry the revocation list keeps, and refuses credentials the dropped entries could have named', async () => {
+        const start = clock;
+        await list.revoke('members', { kind: 'person', id: 'user-carol' });
+        list.prune('members', 1);
+        clock += 10 * 60_000;
+        await list.revoke('members', { kind: 'person', id: 'user-bob' });
+
+        const revocations = puller();
+        const recent = { issuedAt: at(clock - 60_000) };
+        expect(await verifyToken(revocations, personClaims(), recent)).toBe('accepted');
+        expect(await verifyToken(revocations, personClaims(), { ...recent, subject: 'user-bob' })).toBe('revoked');
+        // Carol's entry is gone; a credential from before it stopped counting is refused all the same.
+        expect(await verifyToken(revocations, personClaims(), { issuedAt: at(start), subject: 'user-carol' })).toBe('revoked');
+
+        expect(list.requests.find((r) => r.lane === 'members')?.after).toBe(0);
+        expect(revocations.status()).toMatchObject({ ready: true, refusesIssuedBefore: start + 2_000 });
+        expect(revocations.status().lanes.find((l) => l.lane === 'members')).toMatchObject({ seq: 2, floor: 2, problem: null });
+      });
+
+      it('principle 6 (taking access away works within seconds, everywhere): a copy that fell below the floor refuses until it has reloaded from the floor', async () => {
+        const revocations = puller();
+        expect(await verifyToken(revocations)).toBe('accepted');
+
+        // While the copy was away, three entries were written and dropped again, then Bob's.
+        const start = clock;
+        for (const id of ['user-carol', 'user-dave', 'user-erin']) await list.revoke('members', { kind: 'person', id });
+        list.prune('members', 3);
+        clock += 10 * 60_000;
+        await list.revoke('members', { kind: 'person', id: 'user-bob' });
+
+        // The reload does not get through: the copy refuses rather than answer from what it had.
+        list.state.serve = (lane, _page, head) => (lane === 'members' ? { entries: [], head } : null);
+        const recent = { issuedAt: at(clock - 60_000) };
+        expect(await verifyToken(revocations, personClaims(), recent)).toBe('unavailable');
+
+        list.state.serve = null;
+        clock += 2_000;
+        expect(await verifyToken(revocations, personClaims(), recent)).toBe('accepted');
+        expect(await verifyToken(revocations, personClaims(), { ...recent, subject: 'user-bob' })).toBe('revoked');
+        expect(await verifyToken(revocations, personClaims(), { issuedAt: at(start), subject: 'user-erin' })).toBe('revoked');
+        expect(revocations.status().lanes.find((l) => l.lane === 'members')).toMatchObject({ seq: 4, floor: 4, problem: null });
+      });
+
+      it('principle 6 (taking access away works within seconds, everywhere): a copy that fell below the floor refuses until it has reloaded every entry from the floor, even when the revocation list dropped them early', async () => {
+        let failReload = false;
+        const revocations = puller({
+          pageSize: 1,
+          fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = new URL(String(input));
+            if (failReload && url.pathname.endsWith('/members') && url.searchParams.get('after') === '4') {
+              throw new TypeError('fetch failed');
+            }
+            return list.fetch(input, init);
+          }) as typeof fetch,
+        });
+        expect(await verifyToken(revocations)).toBe('accepted');
+
+        // Within seconds, three entries are written and dropped, then Bob's and Frank's are written.
+        for (const id of ['user-carol', 'user-dave', 'user-erin']) await list.revoke('members', { kind: 'person', id });
+        list.prune('members', 3);
+        await list.revoke('members', { kind: 'person', id: 'user-bob' });
+        await list.revoke('members', { kind: 'person', id: 'user-frank' });
+        clock += 10_000;
+
+        // The reload gets Bob's entry but not Frank's: the copy refuses rather than answer half reloaded.
+        failReload = true;
+        expect(await verifyToken(revocations, personClaims(), { subject: 'user-frank' })).toBe('unavailable');
+        expect(revocations.status().lanes.find((l) => l.lane === 'members')?.problem).toMatch(/fell below the oldest entry/);
+
+        failReload = false;
+        clock += 2_000;
+        expect(await verifyToken(revocations, personClaims(), { subject: 'user-frank' })).toBe('revoked');
+        expect(revocations.status().lanes.find((l) => l.lane === 'members')).toMatchObject({ seq: 5, problem: null });
+      });
+
+      it('a key checked by the issuer is not refused for being older than the floor: the issuer answers for it live', async () => {
+        await list.revoke('members', { kind: 'person', id: 'user-carol' });
+        list.prune('members', 1);
+        const revocations = puller();
+        // The personal key was made an hour ago.
+        expect(outcome(await verifierWith(revocations).verify({ type: 'key', value: 'k-personal' }))).toBe('accepted');
+      });
+    });
+
+    describe('a process that wakes from a freeze', () => {
+      it('principle 6 (taking access away works within seconds, everywhere): a process frozen for minutes refreshes its copy of the revocation list before it decides', async () => {
+        vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+        try {
+          // A list on the wall clock; the puller follows it on the wall clock too.
+          const wall = fakeRevocationList(keys, APP, () => Date.now());
+          const revocations = createRevocationPuller({
+            appId: APP,
+            lanes: laneUrls(),
+            jwksUrl: REVOCATION_JWKS_URL,
+            fetch: wall.fetch,
+          }).start();
+          await revocations.sync();
+          const token = await mint(ring.app, personClaims(), { subject: 'user-bob' });
+          const verifier = verifierWith(revocations);
+          expect(outcome(await verifier.verify({ type: 'token', value: token }))).toBe('accepted');
+
+          // Frozen: no timer runs. Meanwhile Bob is removed, and the wall clock moves on three minutes.
+          vi.setSystemTime(Date.now() + 60_000);
+          await wall.revoke('members', { kind: 'person', id: 'user-bob' });
+          vi.setSystemTime(Date.now() + 2 * 60_000);
+          const fetchedBefore = wall.requests.length;
+
+          // Woken by a request: the copy is refreshed before the decision, so Bob is refused.
+          expect(outcome(await verifier.verify({ type: 'token', value: token }))).toBe('revoked');
+          expect(wall.requests.length).toBeGreaterThan(fetchedBefore);
+          expect(revocations.status().lagMs).toBeLessThan(1_000);
+          revocations.stop();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it('principle 6 (taking access away works within seconds, everywhere): a process frozen for minutes that cannot refresh is held to the limits: writes refuse after 30 seconds, everything after 5 minutes', async () => {
+        const revocations = puller();
+        expect(await verifyToken(revocations)).toBe('accepted');
+        list.setDown(true);
+        const strict = () => verifierWith(revocations, revocations.checkWithin(30_000));
+
+        clock += 2 * 60_000;
+        const token = await mint(ring.app, personClaims());
+        expect(outcome(await strict().verify({ type: 'token', value: token }))).toBe('unavailable');
+        expect(await verifyToken(revocations)).toBe('accepted');
+        // It did try to refresh first.
+        expect(list.attempts).toBeGreaterThan(LANES.length);
+        expect(revocations.status().lanes.every((l) => /fetch failed/.test(l.error ?? ''))).toBe(true);
+
+        clock += 3 * 60_000 + 1_000;
+        expect(await verifyToken(revocations)).toBe('unavailable');
+      });
+
+      it('does not hold every request while the revocation list is not answering: once a refresh has failed, the copy answers within its limit', async () => {
+        const revocations = puller({ maxLagMs: 60_000, timeoutMs: 300 });
+        expect(await verifyToken(revocations)).toBe('accepted');
+        list.setDown('hang');
+        clock += 10_000;
+        // The first check finds out, waiting for its refresh to time out.
+        expect(await verifyToken(revocations)).toBe('accepted');
+        expect(revocations.status().lanes.every((l) => /timed out/.test(l.error ?? ''))).toBe(true);
+        // The checks after it answer from the copy at once.
+        for (let i = 0; i < 5; i += 1) {
+          clock += 500;
+          const started = Date.now();
+          expect(await verifyToken(revocations)).toBe('accepted');
+          expect(Date.now() - started).toBeLessThan(200);
+        }
       });
     });
 
