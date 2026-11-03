@@ -35,7 +35,11 @@ export type ActorKind =
   | 'app_key'
   | 'service';
 
-/** The kinds of key. A key is checked by the introspection endpoint. */
+/**
+ * The kinds of key. A key is checked by the introspection endpoint, or comes
+ * as a short-lived token the issuer gave in exchange for it, checked by
+ * signature like any other token. Either way it becomes the same Actor.
+ */
 export const KEY_KINDS: readonly ActorKind[] = Object.freeze([
   'personal_key',
   'service_account_key',
@@ -43,12 +47,15 @@ export const KEY_KINDS: readonly ActorKind[] = Object.freeze([
   'service',
 ] as const);
 
-/** The kinds of token the verifier checks itself, by signature. */
+/** The kinds of caller that only ever come with a token of their own, never with a key. */
 export const TOKEN_KINDS: readonly ActorKind[] = Object.freeze(['person', 'job'] as const);
 
 /** How the credential behind an Actor was checked, and when it stops working. */
 export interface ActorCredential {
-  /** `token` for a signed token, `key` for a key. */
+  /**
+   * `token` for a signed token (including a token issued for a key), `key`
+   * for a key presented as it is.
+   */
   readonly type: 'token' | 'key';
   /** `signature` when the verifier checked the signature itself, `introspection` when the issuer was asked. */
   readonly checkedBy: 'signature' | 'introspection';

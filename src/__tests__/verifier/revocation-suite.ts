@@ -27,6 +27,7 @@ import {
   decodeSegment,
   fakeIntrospection,
   jobClaims,
+  keyTokenClaims,
   makeKeyRing,
   mint,
   personClaims,
@@ -212,6 +213,22 @@ export function defineRevocationSuite(runtime: string): void {
         const v = verifierWith(revocations);
         expect(outcome(await v.verify({ type: 'key', value: 'k-app' }))).toBe('revoked');
         expect(outcome(await v.verify({ type: 'key', value: 'k-personal' }))).toBe('accepted');
+      });
+
+      it("a token issued for a key, when that key is revoked", async () => {
+        await list.revoke('sessions', { kind: 'key', id: KEYS.app.sub });
+        const revocations = puller();
+        expect(await verifyToken(revocations, keyTokenClaims('app_key'), { subject: KEYS.app.sub })).toBe('revoked');
+        expect(await verifyToken(revocations, keyTokenClaims('app_key'), { subject: 'key-acme-other' })).toBe('accepted');
+      });
+
+      it("a token issued for a personal key, when the user the key acts for is removed", async () => {
+        await list.revoke('members', { kind: 'person', id: 'user-bob', workspace: 'ws-alpha' });
+        const revocations = puller();
+        expect(await verifyToken(revocations, keyTokenClaims('personal_key'), { subject: KEYS.personal.sub })).toBe('revoked');
+        expect(
+          await verifyToken(revocations, keyTokenClaims('service_account_key'), { subject: KEYS.serviceAccount.sub }),
+        ).toBe('accepted');
       });
 
       it('tokens issued to a client', async () => {

@@ -77,6 +77,23 @@ export function personClaims(overrides: JWTPayload = {}): JWTPayload {
   };
 }
 
+/**
+ * A token the issuer gave in exchange for a key, so the key itself is
+ * presented only once. Its subject is the key's id.
+ */
+export function keyTokenClaims(
+  kind: 'personal_key' | 'service_account_key' | 'app_key',
+  overrides: JWTPayload = {},
+): JWTPayload {
+  const base: JWTPayload =
+    kind === 'personal_key'
+      ? { kind, aid: APP, tid: 'ws-alpha', uid: 'user-bob', privileges: ['reports:read'] }
+      : kind === 'service_account_key'
+        ? { kind, aid: APP, tid: 'ws-alpha', privileges: ['invoices:read'] }
+        : { kind, aid: APP, privileges: ['members:write', 'workspaces:read'] };
+  return { ...base, jti: `tok-${kind}`, ...overrides };
+}
+
 /** A background job's token: one workspace, no person. */
 export function jobClaims(overrides: JWTPayload = {}): JWTPayload {
   return {

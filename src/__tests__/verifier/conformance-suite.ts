@@ -26,6 +26,7 @@ import {
   fakeIntrospection,
   hmacWithPublicKey,
   jobClaims,
+  keyTokenClaims,
   makeKeyRing,
   mint,
   personClaims,
@@ -191,6 +192,78 @@ export function defineConformanceSuite(runtime: string): void {
       it('accepts a token that names the configured audience among others', async () => {
         const token = await mint(ring.app, personClaims(), { audience: ['https://other-api.example.test', AUDIENCE] });
         expect(actorOf(await verifier().verify({ type: 'token', value: token })).id).toBe('user-alice');
+      });
+    });
+
+    describe('tokens issued for keys', () => {
+      it("turns a personal key's token into the same personal_key Actor the key itself gives", async () => {
+        const token = await mint(ring.app, keyTokenClaims('personal_key'), { subject: KEYS.personal.sub });
+        const fromToken = actorOf(await verifier().verify({ type: 'token', value: token }));
+        const fromKey = actorOf(await verifier().verify({ type: 'key', value: 'k-personal' }));
+
+        for (const actor of [fromToken, fromKey]) {
+          expect(actor).toMatchObject({
+            kind: 'personal_key',
+            id: 'key-bob-reports',
+            appId: APP,
+            workspaceId: 'ws-alpha',
+            personId: 'user-bob',
+            jobId: null,
+            role: null,
+            privileges: ['reports:read'],
+          });
+        }
+        expect(fromToken.credential).toMatchObject({ type: 'token', checkedBy: 'signature', tokenId: 'tok-personal_key' });
+      });
+
+      it("turns a token for a personal key made for one job into an Actor narrowed to that job", async () => {
+        const token = await mint(ring.app, keyTokenClaims('personal_key', { uid: 'user-alice', jid: 'export-42' }), {
+          subject: 'key-alice-export-42',
+        });
+        const actor = actorOf(await verifier().verify({ type: 'token', value: token }));
+        expect(actor).toMatchObject({ kind: 'personal_key', personId: 'user-alice', jobId: 'export-42', workspaceId: 'ws-alpha' });
+      });
+
+      it("turns a service account key's token into a service_account_key Actor bound to its workspace", async () => {
+        const token = await mint(ring.app, keyTokenClaims('service_account_key'), { subject: KEYS.serviceAccount.sub });
+        const actor = actorOf(await verifier().verify({ type: 'token', value: token }));
+        expect(actor).toMatchObject({
+          kind: 'service_account_key',
+          id: 'key-invoice-export',
+          workspaceId: 'ws-alpha',
+          personId: null,
+          jobId: null,
+          privileges: ['invoices:read'],
+        });
+      });
+
+      it("turns an app key's token into an app_key Actor that reaches the whole app", async () => {
+        const token = await mint(ring.app, keyTokenClaims('app_key'), { subject: KEYS.app.sub });
+        const actor = actorOf(await verifier().verify({ type: 'token', value: token }));
+        expect(actor).toMatchObject({ kind: 'app_key', id: 'key-acme-backend', appId: APP, workspaceId: null, personId: null });
+      });
+
+      it("refuses a key's token whose claims do not describe that kind of key", async () => {
+        const cases: Array<[string, Record<string, unknown>, string]> = [
+          ['a personal key without its user', keyTokenClaims('personal_key', { uid: undefined }), 'invalid_claims'],
+          ['a personal key without a workspace', keyTokenClaims('personal_key', { tid: undefined }), 'invalid_claims'],
+          ['a personal key naming its job malformed', keyTokenClaims('personal_key', { jid: 42 }), 'invalid_claims'],
+          ['a service account key without a workspace', keyTokenClaims('service_account_key', { tid: undefined }), 'invalid_claims'],
+          ['a service account key made for one job', keyTokenClaims('service_account_key', { jid: 'export-42' }), 'invalid_claims'],
+          ['an app key bound to a workspace', keyTokenClaims('app_key', { tid: 'ws-alpha' }), 'invalid_claims'],
+          ['an app key made for one job', keyTokenClaims('app_key', { jid: 'export-42' }), 'invalid_claims'],
+          ['a service\'s token', { ...keyTokenClaims('app_key'), kind: 'service' }, 'wrong_type'],
+          ['a key of another app', keyTokenClaims('app_key', { aid: OTHER_APP }), 'wrong_app'],
+        ];
+        for (const [name, claims, reason] of cases) {
+          const token = await mint(ring.app, claims, { subject: 'key-x' });
+          expect([name, refusalOf(await verifier().verify({ type: 'token', value: token }))]).toEqual([name, reason]);
+        }
+      });
+
+      it("refuses a key's token that is not typed as an access token", async () => {
+        const token = await mint(ring.app, keyTokenClaims('app_key'), { subject: KEYS.app.sub, typ: 'JWT' });
+        expect(refusalOf(await verifier().verify({ type: 'token', value: token }))).toBe('wrong_type');
       });
     });
 
