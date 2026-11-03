@@ -73,9 +73,10 @@ import { createCredentialVerifier } from '@nebulr-group/bridge-auth-core/verifie
 const verifier = createCredentialVerifier({
   appId: 'your-app-id',
   issuer: 'https://api.thebridge.dev/auth',
+  audience: 'https://api.your-app.example', // the audience your API's access tokens are issued for
   jwksUrl: 'https://api.thebridge.dev/auth/.well-known/jwks.json',
   introspectionUrl: 'https://api.thebridge.dev/account/api-token/introspect', // to accept API keys
-  revocationCheck: revocations.check, // or 'none'; see below
+  revocationCheck: 'none', // a token stays valid until it expires
 });
 
 const result = await verifier.verifyRequest(request); // reads only Authorization: Bearer and x-api-key
@@ -86,27 +87,11 @@ if (!result.ok) {
 const { kind, id, workspaceId, privileges } = result.actor;
 ```
 
-Who is calling always comes from the checked token or key, never from other headers or the request body. The `Actor` replaces `BridgeUser` and `ApiTokenClaims`, which still work but are deprecated; `actorToBridgeUser` and `actorToApiTokenClaims` in `/backend` convert while you move over.
+Who is calling always comes from the checked token or key, never from other headers or the request body. Only access tokens are accepted: a token must be typed `at+jwt` and name your `audience`, which you always set yourself; an ID token is refused even though it is signed with your app's key. A short-lived token issued in exchange for an API key gives the same `Actor` as the key itself.
 
-### Taking access away within seconds
+`revocationCheck` is required, so no verifier skips revocation by accident. With `'none'`, a token whose access was taken away keeps working until it expires.
 
-An access token is checked by its signature, so on its own it keeps working until it expires. The revocation list stops it sooner: when someone is removed, a session ends or a key is revoked, The Bridge adds a signed, numbered entry to your app's list. `createRevocationPuller` keeps a copy of that list in memory, fetches only the entries it has not seen every few seconds, and checks each entry's signature against your app's published keys.
-
-```ts
-import { createCredentialVerifier, createRevocationPuller } from '@nebulr-group/bridge-auth-core/verifier';
-
-const revocations = createRevocationPuller({
-  appId: 'your-app-id',
-  jwksUrl: 'https://api.thebridge.dev/auth/.well-known/jwks.json',
-  lanes: { /* each lane of the list and the URL it is served from */ },
-}).start();
-
-const verifier = createCredentialVerifier({ /* as above */ revocationCheck: revocations.check });
-```
-
-The puller fails closed. Until every lane has loaded, while an entry is missing or fails its signature check, and once its copy is more than `maxLagMs` behind (5 minutes by default), its check throws and the verifier refuses with `unavailable`. `revocations.checkWithin(30_000)` gives a stricter check, for writes and other sensitive actions. It uses only `fetch` and Web Crypto, so it also runs at the edge; without `start()`, checks fetch new entries themselves.
-
-`revocationCheck` is required, so no verifier skips revocation by accident. Pass `'none'` only where no list can reach: a token whose access was taken away then works until it expires.
+The `Actor` replaces `BridgeUser` and `ApiTokenClaims`, which still work but are deprecated; `actorToBridgeUser` and `actorToApiTokenClaims` in `/backend` convert while you move over.
 
 ## Using a framework?
 
