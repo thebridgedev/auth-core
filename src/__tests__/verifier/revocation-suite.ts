@@ -2,9 +2,12 @@
  * The revocation puller's conformance suite, run on Node and in an edge
  * runtime (`revocation.node.test.ts`, `revocation.edge.test.ts`).
  *
- * Tests named `principle N: …` prove one of the architecture's principles:
- * 5, only signed data is a fact; 6, taking access away works within seconds,
- * everywhere.
+ * Tests named `principle N (its name): …` prove one of the architecture's
+ * principles. Principle 5, only signed data is a fact: an entry or a
+ * checkpoint of the revocation list that is not signed by its lane is never
+ * applied. Principle 6, taking access away works within seconds, everywhere:
+ * a verifier refuses what the revocation list names within seconds, and
+ * refuses everything rather than answer from a copy it cannot trust.
  */
 import { CompactSign } from 'jose';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -325,8 +328,8 @@ export function defineRevocationSuite(runtime: string): void {
       });
     });
 
-    describe('principle 6: taking access away works within seconds, everywhere', () => {
-      it('principle 6: a revocation written after the copy loaded is refused on the next fetch', async () => {
+    describe('principle 6 (taking access away works within seconds, everywhere)', () => {
+      it('principle 6 (taking access away works within seconds, everywhere): a revocation entry written after the copy of the revocation list loaded is refused on the next fetch', async () => {
         const revocations = puller();
         expect(await verifyToken(revocations, personClaims(), { subject: 'user-bob' })).toBe('accepted');
         await list.revoke('members', { kind: 'person', id: 'user-bob', workspace: 'ws-alpha' });
@@ -334,7 +337,7 @@ export function defineRevocationSuite(runtime: string): void {
         expect(await verifyToken(revocations, personClaims(), { subject: 'user-bob' })).toBe('revoked');
       });
 
-      it('principle 6: a copy that falls too far behind refuses instead of allowing, and recovers when it catches up', async () => {
+      it('principle 6 (taking access away works within seconds, everywhere): a copy of the revocation list that falls too far behind refuses instead of allowing, and recovers when it catches up', async () => {
         const revocations = puller({ maxLagMs: 60_000 });
         expect(await verifyToken(revocations)).toBe('accepted');
 
@@ -351,7 +354,7 @@ export function defineRevocationSuite(runtime: string): void {
         expect(await verifyToken(revocations)).toBe('accepted');
       });
 
-      it('principle 6: a stricter limit, for writes and sensitive actions, refuses sooner', async () => {
+      it('principle 6 (taking access away works within seconds, everywhere): a stricter limit on how far behind the copy of the revocation list may be, for writes and sensitive actions, refuses sooner', async () => {
         const revocations = puller();
         await revocations.sync();
         list.setDown(true);
@@ -362,7 +365,7 @@ export function defineRevocationSuite(runtime: string): void {
         expect(outcome(await strict.verify({ type: 'token', value: token }))).toBe('unavailable');
       });
 
-      it('principle 6: a copy that misses an entry refuses instead of allowing, until the entry arrives', async () => {
+      it('principle 6 (taking access away works within seconds, everywhere): a copy of the revocation list that misses an entry refuses instead of allowing, until the entry arrives', async () => {
         const revocations = puller();
         await list.revoke('members', { kind: 'person', id: 'user-carol' });
         await list.revoke('members', { kind: 'person', id: 'user-bob' });
@@ -384,14 +387,14 @@ export function defineRevocationSuite(runtime: string): void {
         expect(await verifyToken(revocations)).toBe('accepted');
       });
 
-      it('principle 6: a list that says it holds entries but sends none is refused', async () => {
+      it('principle 6 (taking access away works within seconds, everywhere): a revocation list that says it holds entries but sends none is refused', async () => {
         const revocations = puller();
         await list.revoke('members', { kind: 'person', id: 'user-bob' });
         list.state.serve = (lane, _page, head) => (lane === 'members' ? { entries: [], head } : null);
         expect(await verifyToken(revocations)).toBe('unavailable');
       });
 
-      it('principle 6: a list that goes backwards is refused', async () => {
+      it('principle 6 (taking access away works within seconds, everywhere): a revocation list that goes backwards is refused', async () => {
         const revocations = puller();
         await list.revoke('members', { kind: 'person', id: 'user-carol' });
         await list.revoke('members', { kind: 'person', id: 'user-dave' });
@@ -403,7 +406,7 @@ export function defineRevocationSuite(runtime: string): void {
       });
     });
 
-    describe('principle 5: only signed data is a fact', () => {
+    describe('principle 5 (only signed data is a fact)', () => {
       /** Serve `replace(entries)` in place of the members lane's real entries. */
       function serveMembers(replace: (jws: string[]) => Promise<unknown[]> | unknown[]) {
         let served: unknown[] | null = null;
@@ -422,14 +425,14 @@ export function defineRevocationSuite(runtime: string): void {
         expect(lane?.problem).toMatch(problem);
       }
 
-      it('principle 5: an entry whose payload was altered is rejected, and what it says is not applied', async () => {
+      it('principle 5 (only signed data is a fact): a revocation entry whose payload was altered is rejected, and what it says is not applied', async () => {
         await list.revoke('members', { kind: 'person', id: 'user-bob', workspace: 'ws-alpha' });
         const load = serveMembers((jws) => [alterEntry(jws[0], (p) => (p.id = 'user-alice'))]);
         await load();
         await expectRejected(puller(), /signature does not match/);
       });
 
-      it('principle 5: an unsigned entry is rejected', async () => {
+      it('principle 5 (only signed data is a fact): an unsigned revocation entry is rejected', async () => {
         await list.revoke('members', { kind: 'person', id: 'user-bob' });
         const load = serveMembers(() => [
           unsignedEntry({ v: 1, app: APP, lane: 'members', seq: 1, at: Date.now(), kind: 'person', id: 'user-bob', before: Date.now() }),
@@ -438,24 +441,24 @@ export function defineRevocationSuite(runtime: string): void {
         await expectRejected(puller(), /unsigned or signed with the wrong algorithm/);
       });
 
-      it("principle 5: an entry signed with another lane's key is rejected", async () => {
+      it("principle 5 (only signed data is a fact): a revocation entry signed with another lane's key is rejected", async () => {
         await list.revoke('members', { kind: 'person', id: 'user-bob' }, keys.billing);
         await expectRejected(puller(), /another lane's key/);
       });
 
-      it('principle 5: an entry signed with a key that is not published is rejected', async () => {
+      it('principle 5 (only signed data is a fact): a revocation entry signed with a key that is not published is rejected', async () => {
         const stranger = await makeLaneKey('members', 'members-key-unpublished');
         await list.revoke('members', { kind: 'person', id: 'user-bob' }, stranger);
         await expectRejected(puller(), /not published/);
       });
 
-      it("principle 5: an entry signed with a published key's id but another key is rejected", async () => {
+      it("principle 5 (only signed data is a fact): a revocation entry signed with a published key's id but another key is rejected", async () => {
         const impostor = await makeLaneKey('members', keys.members.kid);
         await list.revoke('members', { kind: 'person', id: 'user-bob' }, impostor);
         await expectRejected(puller(), /signature does not match/);
       });
 
-      it('principle 5: an entry signed with HMAC, using the published key as the secret, is rejected', async () => {
+      it('principle 5 (only signed data is a fact): a revocation entry signed with HMAC, using the published key as the secret, is rejected', async () => {
         await list.revoke('members', { kind: 'person', id: 'user-bob' });
         const load = serveMembers(async (jws) => {
           const [, payload] = jws[0].split('.');
@@ -469,7 +472,7 @@ export function defineRevocationSuite(runtime: string): void {
         await expectRejected(puller(), /unsigned or signed with the wrong algorithm/);
       });
 
-      it('principle 5: a signed entry for another app is rejected', async () => {
+      it('principle 5 (only signed data is a fact): a signed revocation entry for another app is rejected', async () => {
         const otherApp = fakeRevocationList(keys, OTHER_APP);
         const theirs = await otherApp.revoke('members', { kind: 'person', id: 'user-bob' });
         await list.revoke('members', { kind: 'person', id: 'user-bob' });
@@ -478,7 +481,7 @@ export function defineRevocationSuite(runtime: string): void {
         await expectRejected(puller(), /another app/);
       });
 
-      it('principle 5: a signed entry that is not a revocation entry is rejected', async () => {
+      it('principle 5 (only signed data is a fact): a signed item that is not a revocation entry is rejected', async () => {
         await list.revoke('members', { kind: 'person', id: 'user-bob' });
         const load = serveMembers(async () => [
           await signEntry(keys.members, { v: 1, app: APP, lane: 'members', seq: 1, at: 1, kind: 'person', id: 'user-bob', before: 1 }, { typ: 'JWT' }),
@@ -487,12 +490,12 @@ export function defineRevocationSuite(runtime: string): void {
         await expectRejected(puller(), /not a revocation entry/);
       });
 
-      it('principle 5: a signed entry in a shape this version does not read is rejected, not skipped', async () => {
+      it('principle 5 (only signed data is a fact): a signed revocation entry in a shape this version does not read is rejected, not skipped', async () => {
         await list.revoke('members', { kind: 'everything', id: 'user-bob' });
         await expectRejected(puller(), /format this version reads/);
       });
 
-      it('principle 5: a key published without a lane cannot sign entries', async () => {
+      it('principle 5 (only signed data is a fact): a key published without a lane cannot sign revocation entries', async () => {
         const unbound = { ...keys.members.publicJwk };
         delete unbound.lane;
         list.setKeys({ keys: [unbound] });
@@ -512,7 +515,7 @@ export function defineRevocationSuite(runtime: string): void {
         expect(revocations.status().lanes.find((l) => l.lane === 'members')?.problem).toMatch(problem);
       }
 
-      it('principle 6 (taking access away works within seconds, everywhere): a cached or replayed page of the revocation list cannot hide a new entry, because the copy counts how far behind it is from the signed checkpoint', async () => {
+      it('principle 6 (taking access away works within seconds, everywhere): a cached or replayed page of the revocation list cannot hide a new revocation entry, because the copy of the revocation list counts how far behind it is from the signed checkpoint on each page', async () => {
         const revocations = puller();
         expect(await verifyToken(revocations, personClaims(), { subject: 'user-bob' })).toBe('accepted');
 
@@ -598,7 +601,7 @@ export function defineRevocationSuite(runtime: string): void {
     describe("the revocation list's floor: the oldest entry it still keeps", () => {
       const at = (ms: number) => Math.floor(ms / 1000);
 
-      it('principle 6 (taking access away works within seconds, everywhere): a new copy starts from the floor, applies every entry the revocation list keeps, and refuses credentials the dropped entries could have named', async () => {
+      it('principle 6 (taking access away works within seconds, everywhere): a new copy of the revocation list starts from its floor, applies every entry the revocation list keeps, and refuses credentials the dropped entries could have named', async () => {
         const start = clock;
         await list.revoke('members', { kind: 'person', id: 'user-carol' });
         list.prune('members', 1);
@@ -617,7 +620,7 @@ export function defineRevocationSuite(runtime: string): void {
         expect(revocations.status().lanes.find((l) => l.lane === 'members')).toMatchObject({ seq: 2, floor: 2, problem: null });
       });
 
-      it('principle 6 (taking access away works within seconds, everywhere): a copy that fell below the floor refuses until it has reloaded from the floor', async () => {
+      it('principle 6 (taking access away works within seconds, everywhere): a copy of the revocation list that fell below its floor refuses until it has reloaded from the floor', async () => {
         const revocations = puller();
         expect(await verifyToken(revocations)).toBe('accepted');
 
@@ -641,7 +644,7 @@ export function defineRevocationSuite(runtime: string): void {
         expect(revocations.status().lanes.find((l) => l.lane === 'members')).toMatchObject({ seq: 4, floor: 4, problem: null });
       });
 
-      it('principle 6 (taking access away works within seconds, everywhere): a copy that fell below the floor refuses until it has reloaded every entry from the floor, even when the revocation list dropped them early', async () => {
+      it('principle 6 (taking access away works within seconds, everywhere): a copy of the revocation list that fell below its floor refuses until it has reloaded every entry from the floor, even when the revocation list dropped them early', async () => {
         let failReload = false;
         const revocations = puller({
           pageSize: 1,
@@ -673,7 +676,7 @@ export function defineRevocationSuite(runtime: string): void {
         expect(revocations.status().lanes.find((l) => l.lane === 'members')).toMatchObject({ seq: 5, problem: null });
       });
 
-      it('a key checked by the issuer is not refused for being older than the floor: the issuer answers for it live', async () => {
+      it('a key checked by the issuer is not refused for being older than the revocation list\'s floor: the issuer answers for it live', async () => {
         await list.revoke('members', { kind: 'person', id: 'user-carol' });
         list.prune('members', 1);
         const revocations = puller();
@@ -715,7 +718,7 @@ export function defineRevocationSuite(runtime: string): void {
         }
       });
 
-      it('principle 6 (taking access away works within seconds, everywhere): a process frozen for minutes that cannot refresh is held to the limits: writes refuse after 30 seconds, everything after 5 minutes', async () => {
+      it('principle 6 (taking access away works within seconds, everywhere): a process frozen for minutes that cannot refresh its copy of the revocation list is held to the limits: writes refuse after 30 seconds, everything after 5 minutes', async () => {
         const revocations = puller();
         expect(await verifyToken(revocations)).toBe('accepted');
         list.setDown(true);

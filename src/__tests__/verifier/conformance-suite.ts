@@ -5,8 +5,11 @@
  * runs all of it: `conformance.node.test.ts` on Node, `conformance.edge.test.ts`
  * in an edge runtime. A runtime is supported when every case passes.
  *
- * Tests named `principle N: …` prove one of the architecture's principles and
- * are counted by name.
+ * Tests named `principle N (its name): …` prove one of the architecture's
+ * principles and are counted by name. This file proves two: principle 1, who
+ * is calling comes only from the token, never from anything else in the
+ * request; and principle 5, only signed data is a fact, so a token that was
+ * changed, unsigned or signed for someone else is refused.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -462,8 +465,8 @@ export function defineConformanceSuite(runtime: string): void {
       });
     });
 
-    describe('principle 1: who is calling comes only from the token', () => {
-      it('principle 1: a request whose headers name another person, app or workspace still gets the token\'s identity', async () => {
+    describe('principle 1 (who is calling comes only from the token)', () => {
+      it('principle 1 (who is calling comes only from the token): a request whose headers name another person, app or workspace still gets the token\'s identity', async () => {
         const token = await mint(ring.app, personClaims());
         const result = await verifier().verifyRequest({
           headers: {
@@ -484,7 +487,7 @@ export function defineConformanceSuite(runtime: string): void {
         expect(actor.privileges).toEqual(['invoices:read', 'invoices:write']);
       });
 
-      it("principle 1: a request whose body names another person, app or workspace still gets the token's identity, and the body is never read", async () => {
+      it("principle 1 (who is calling comes only from the token): a request whose body names another person, app or workspace still gets the token's identity, and the body is never read", async () => {
         const token = await mint(ring.app, personClaims());
         const request = new Request('https://api.acme.test/invoices?workspaceId=ws-beta&userId=user-mallory', {
           method: 'POST',
@@ -499,7 +502,7 @@ export function defineConformanceSuite(runtime: string): void {
         expect(request.bodyUsed).toBe(false);
       });
 
-      it("principle 1: a key's caller context comes from the key, whatever workspace the request names", async () => {
+      it("principle 1 (who is calling comes only from the token): a key's caller context comes from the key, whatever workspace the request names", async () => {
         const actor = actorOf(
           await verifier().verifyRequest({
             headers: { 'x-api-key': 'k-service-account', 'x-tenant-id': 'ws-beta', 'x-app-id': OTHER_APP },
@@ -510,7 +513,7 @@ export function defineConformanceSuite(runtime: string): void {
         expect(actor.appId).toBe(APP);
       });
 
-      it('principle 1: a person signed in without a workspace does not pick one up from the request', async () => {
+      it('principle 1 (who is calling comes only from the token): a person signed in without a workspace does not pick one up from the request', async () => {
         const token = await mint(ring.app, personClaims({ tid: undefined }));
         const actor = actorOf(
           await verifier().verifyRequest({ headers: { authorization: `Bearer ${token}`, 'x-tenant-id': 'ws-beta' } }),
@@ -518,14 +521,14 @@ export function defineConformanceSuite(runtime: string): void {
         expect(actor.workspaceId).toBeNull();
       });
 
-      it('principle 1: a request that names a caller but carries no credential gets no Actor', async () => {
+      it('principle 1 (who is calling comes only from the token): a request that names a caller but carries no credential gets no Actor', async () => {
         const result = await verifier().verifyRequest({
           headers: { 'x-user-id': 'user-alice', 'x-tenant-id': 'ws-alpha', 'x-app-id': APP },
         });
         expect(refusalOf(result)).toBe('missing');
       });
 
-      it('principle 1: the Actor cannot be changed after it is built', async () => {
+      it('principle 1 (who is calling comes only from the token): the Actor cannot be changed after it is built', async () => {
         const token = await mint(ring.app, personClaims());
         const actor = actorOf(await verifier().verify({ type: 'token', value: token }));
         expect(Object.isFrozen(actor)).toBe(true);
@@ -542,8 +545,8 @@ export function defineConformanceSuite(runtime: string): void {
       });
     });
 
-    describe('principle 5: only signed data is a fact', () => {
-      it('principle 5: a token with a changed payload is refused', async () => {
+    describe('principle 5 (only signed data is a fact)', () => {
+      it('principle 5 (only signed data is a fact): a token with a changed payload is refused', async () => {
         const token = await mint(ring.app, personClaims());
         const otherWorkspace = tamper(token, (c) => {
           c.tid = 'ws-beta';
@@ -559,7 +562,7 @@ export function defineConformanceSuite(runtime: string): void {
         }
       });
 
-      it('principle 5: a token with no signature (alg: none) is refused', async () => {
+      it('principle 5 (only signed data is a fact): a token with no signature (alg: none) is refused', async () => {
         const forged = unsigned({
           ...personClaims(),
           iss: ISSUER,
@@ -570,19 +573,19 @@ export function defineConformanceSuite(runtime: string): void {
         expect(refusalOf(await verifier().verify({ type: 'token', value: forged }))).toBe('wrong_algorithm');
       });
 
-      it('principle 5: a token signed with a wrong algorithm is refused, even by the right key', async () => {
+      it('principle 5 (only signed data is a fact): a token signed with a wrong algorithm is refused, even by the right key', async () => {
         const rs256 = await mint(ring.app, personClaims(), { alg: 'RS256' });
         expect(refusalOf(await verifier().verify({ type: 'token', value: rs256 }))).toBe('wrong_algorithm');
         const hs256 = await hmacWithPublicKey(ring.app, personClaims());
         expect(refusalOf(await verifier().verify({ type: 'token', value: hs256 }))).toBe('wrong_algorithm');
       });
 
-      it('principle 5: a token for the wrong audience is refused', async () => {
+      it('principle 5 (only signed data is a fact): a token for the wrong audience is refused', async () => {
         const token = await mint(ring.app, personClaims(), { audience: 'https://other-api.example.test' });
         expect(refusalOf(await verifier().verify({ type: 'token', value: token }))).toBe('wrong_audience');
       });
 
-      it("principle 5: a token signed with another app's key is refused", async () => {
+      it("principle 5 (only signed data is a fact): a token signed with another app's key is refused", async () => {
         const otherKid = await mint(ring.otherApp, personClaims());
         expect(refusalOf(await verifier().verify({ type: 'token', value: otherKid }))).toBe('unknown_key');
         // Another app's key that claims the app's own key id still fails the signature.
@@ -590,12 +593,12 @@ export function defineConformanceSuite(runtime: string): void {
         expect(refusalOf(await verifier().verify({ type: 'token', value: sameKid }))).toBe('bad_signature');
       });
 
-      it('principle 5: a token issued for another app is refused, even when it names this API as its audience', async () => {
+      it('principle 5 (only signed data is a fact): a token issued for another app is refused, even when it names this API as its audience', async () => {
         const token = await mint(ring.app, personClaims({ aid: OTHER_APP }), { audience: [AUDIENCE, OTHER_APP] });
         expect(refusalOf(await verifier().verify({ type: 'token', value: token }))).toBe('wrong_app');
       });
 
-      it('principle 5: a key issued for another app is refused', async () => {
+      it('principle 5 (only signed data is a fact): a key issued for another app is refused', async () => {
         expect(refusalOf(await verifier().verify({ type: 'key', value: 'k-other-app' }))).toBe('wrong_app');
       });
     });
