@@ -14,6 +14,17 @@
  */
 
 export { createCredentialVerifier } from './verifier.js';
+export { createAppVerifiers } from './app-verifiers.js';
+export type {
+  AppRevocationOptions,
+  AppSettings,
+  AppSettingsResolver,
+  AppStatus,
+  AppVerifiers,
+  AppVerifiersOptions,
+  AppVerifiersStatus,
+  AppVerifyOptions,
+} from './app-verifiers.js';
 export type {
   CredentialVerifier,
   CredentialVerifierOptions,

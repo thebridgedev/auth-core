@@ -84,7 +84,12 @@ export interface ListRequest {
  * signed with that key. `state` lets a test change what is served, to drop,
  * alter or add entries, or to tamper with or leave out the checkpoint.
  */
-export function fakeRevocationList(keys: Record<string, LaneKey>, app = APP, now: () => number = () => Date.now()) {
+export function fakeRevocationList(
+  keys: Record<string, LaneKey>,
+  app = APP,
+  now: () => number = () => Date.now(),
+  urls: { list: string; jwks: string } = { list: LIST_URL, jwks: REVOCATION_JWKS_URL },
+) {
   const lanes = new Map<string, Stored[]>();
   const floors = new Map<string, { floor: number; floorAt: number }>();
   const requests: ListRequest[] = [];
@@ -141,11 +146,11 @@ export function fakeRevocationList(keys: Record<string, LaneKey>, app = APP, now
 
   const fetchImpl = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
-    if (url.href === REVOCATION_JWKS_URL) {
+    if (url.href === urls.jwks) {
       keySetFetches += 1;
       return Response.json(jwks);
     }
-    if (!url.href.startsWith(`${LIST_URL}/`)) return new Response('not found', { status: 404 });
+    if (!url.href.startsWith(`${urls.list}/`)) return new Response('not found', { status: 404 });
     attempts += 1;
     if (down === 'hang') {
       // Never answers: the fetch ends only when the caller gives up on it.
