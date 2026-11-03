@@ -1,6 +1,6 @@
 {
   "name": "@nebulr-group/bridge-auth-core",
-  "version": "0.8.0",
+  "version": "0.8.1-m59.1",
   "description": "The Bridge core client: sign-in flows, sessions and token refresh, feature flags, billing state and the management API for any JavaScript app.",
   "type": "module",
   "main": "./dist/index.js",

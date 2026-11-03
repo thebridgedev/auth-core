@@ -1,11 +1,15 @@
 import { compactVerify, importJWK, type JSONWebKeySet, type JWK } from 'jose';
 import type { Actor } from './actor.js';
+import { createKeySet, type KeySet } from './key-set.js';
 import {
   REVOCATION_ALGORITHMS,
+  REVOCATION_CHECKPOINT_TYPE,
   REVOCATION_ENTRY_TYPE,
   REVOCATION_FORMAT_VERSION,
   RevocationIndex,
+  parseRevocationCheckpoint,
   parseRevocationEntry,
+  type RevocationCheckpoint,
   type RevocationEntry,
 } from './revocation-entry.js';
 import type { RevocationCheck, RevocationVerdict } from './revocation.js';
@@ -21,12 +25,19 @@ import type { RevocationCheck, RevocationVerdict } from './revocation.js';
  *
  * The puller keeps a copy in memory and, every few seconds, fetches only the
  * entries it has not seen yet. It checks every entry's signature against the
- * app's published keys and never accepts an unsigned or altered one. It fails
- * closed: until its copy has loaded every lane, while any lane is out of step
- * (a gap in the numbering, an entry that fails its check, a list that went
- * backwards), and when its copy falls further behind than the limit, its
- * check throws, so the verifier refuses with `unavailable` instead of
- * accepting.
+ * app's published keys and never accepts an unsigned or altered one. Each
+ * page of the list carries a checkpoint signed with the lane's key, saying
+ * how far the lane goes and when; how far behind the copy is counts from that
+ * signed time, so a cached, withheld or replayed page cannot make a stale
+ * copy look current.
+ *
+ * It fails closed: until its copy has loaded every lane, while any lane is
+ * out of step (a gap in the numbering, an entry or checkpoint that fails its
+ * check, a list that went backwards), and once its copy is further behind
+ * than the limit, its check throws, so the verifier refuses with
+ * `unavailable` instead of accepting. A copy that has not been refreshed for
+ * a while (a process that was frozen between invocations, for example)
+ * fetches before it decides.
  *
  * Uses only `fetch` and Web Crypto, so it runs on servers and at the edge.
  */
@@ -52,14 +63,33 @@ export interface RevocationPullerOptions {
   jwksUrl?: string;
   /** The published keys themselves, instead of `jwksUrl`. */
   jwks?: JSONWebKeySet;
+  /**
+   * The app's key set, made with `createKeySet`, instead of `jwksUrl` or
+   * `jwks`. Pass the same one to the verifier so the keys are fetched once.
+   */
+  keySet?: KeySet;
   /** How often to fetch new entries. @default 2000 */
   intervalMs?: number;
   /**
+   * How long after a fetch that reached the end of every lane the copy is
+   * trusted without fetching again. A check on an older copy fetches first
+   * and decides after, so a process that was frozen, or a puller without
+   * `start()`, never answers from what it knew before.
+   * @default twice `intervalMs`
+   */
+  freshForMs?: number;
+  /**
    * How far behind the copy may fall before every check refuses. Measured
-   * from the last fetch that reached the end of every lane.
+   * from the time the lanes' signed checkpoints vouch for.
    * @default 300000 (5 minutes, one access-token lifetime)
    */
   maxLagMs?: number;
+  /**
+   * How far ahead of this clock a checkpoint may be dated. A checkpoint dated
+   * further ahead is refused.
+   * @default 5000
+   */
+  clockToleranceMs?: number;
   /** How long to wait for one fetch. @default 5000 */
   timeoutMs?: number;
   /** How many entries to ask for per fetch. @default 500 */
@@ -82,12 +112,16 @@ export interface RevocationPullerOptions {
 
 export interface RevocationLaneStatus {
   readonly lane: string;
-  /** The number of the last entry accepted. 0 before any. */
+  /** The number of the last entry accepted, or of the entry before the floor it started from. 0 before any. */
   readonly seq: number;
   /** The last entry the list said it had. */
   readonly head: number;
-  /** When a fetch that reached the end of the lane was sent, in ms. Null before the first. */
+  /** The oldest entry the list said it still keeps. */
+  readonly floor: number;
+  /** The time, in ms, the lane's signed checkpoint vouches the copy is complete up to. Null before the first. */
   readonly caughtUpAt: number | null;
+  /** When the last fetch that reached the end of the lane was sent, in ms. Null before the first. */
+  readonly syncedAt: number | null;
   /** Why the lane cannot be trusted right now, or null. */
   readonly problem: string | null;
   /** Why the last fetch failed, or null. The copy only falls behind while this lasts. */
@@ -99,6 +133,12 @@ export interface RevocationListStatus {
   readonly ready: boolean;
   /** How far behind the copy is, in ms. Infinity until it is ready. */
   readonly lagMs: number;
+  /**
+   * Credentials checked by signature and issued before this time (ms) are
+   * refused: the list no longer keeps entries this copy has not seen that
+   * could name them. Null when the copy holds every entry that matters.
+   */
+  readonly refusesIssuedBefore: number | null;
   readonly lanes: readonly RevocationLaneStatus[];
 }
 
@@ -125,17 +165,21 @@ export interface RevocationPuller {
 const DEFAULT_INTERVAL_MS = 2000;
 const DEFAULT_MAX_LAG_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 5000;
+const DEFAULT_CLOCK_TOLERANCE_MS = 5000;
 const DEFAULT_PAGE_SIZE = 500;
 const MAX_PAGES_PER_SYNC = 1000;
-const KEY_SET_TTL_MS = 60 * 60 * 1000;
-const KEY_SET_COOLDOWN_MS = 30 * 1000;
 
 interface LaneState {
   readonly lane: string;
   readonly url: string;
   seq: number;
   head: number;
-  caughtUpAt: number | null;
+  floor: number;
+  /** Credentials issued before this time (ms) are refused: entries this copy skipped could name them. */
+  horizon: number;
+  knownAt: number | null;
+  syncedAt: number | null;
+  loaded: boolean;
   problem: string | null;
   error: string | null;
 }
@@ -146,10 +190,10 @@ interface LaneKey {
   key?: CryptoKey | Uint8Array;
 }
 
-/** An entry that is refused, with the reason. */
-class EntryRefused extends Error {}
+/** A signed item that is refused, with the reason. */
+class SignedRefused extends Error {}
 
-/** The published keys could not be loaded, so no entry can be checked yet. */
+/** The published keys could not be loaded, so nothing can be checked yet. */
 class KeySetUnavailable extends Error {}
 
 function isText(value: unknown): value is string {
@@ -166,7 +210,7 @@ function timeoutSignal(ms: number): AbortSignal | undefined {
  * The lanes' public keys, from the app's key set. A lane key is an EC P-256
  * key with a `kid` and a `lane` member naming the lane it signs for; every
  * other key in the set (such as the token signing keys) is ignored. A key id
- * used twice is ignored too, so an entry signed with it is refused.
+ * used twice is ignored too, so anything signed with it is refused.
  */
 function readLaneKeys(set: unknown): Map<string, LaneKey> {
   const found = new Map<string, LaneKey>();
@@ -199,12 +243,9 @@ function readLaneKeys(set: unknown): Map<string, LaneKey> {
  * Create a revocation puller for one app.
  *
  * ```ts
- * const revocations = createRevocationPuller({
- *   appId,
- *   jwksUrl,
- *   lanes: { members: 'https://…/revocations/members', … },
- * }).start();
- * const verifier = createCredentialVerifier({ appId, issuer, jwksUrl, revocationCheck: revocations.check });
+ * const keySet = createKeySet({ url: jwksUrl });
+ * const revocations = createRevocationPuller({ appId, keySet, lanes: { … } }).start();
+ * const verifier = createCredentialVerifier({ appId, issuer, audience, keySet, revocationCheck: revocations.check });
  * ```
  */
 export function createRevocationPuller(options: RevocationPullerOptions): RevocationPuller {
@@ -220,26 +261,40 @@ export function createRevocationPuller(options: RevocationPullerOptions): Revoca
       throw new TypeError('createRevocationPuller: every lane needs a name and a URL.');
     }
   }
-  if (!options.jwks && !options.jwksUrl) {
-    throw new TypeError('createRevocationPuller: `jwksUrl` or `jwks` is required to check the entries.');
+  if (!options.keySet && !options.jwks && !options.jwksUrl) {
+    throw new TypeError('createRevocationPuller: `jwksUrl`, `jwks` or `keySet` is required to check the entries.');
   }
 
   const appId = options.appId;
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
+  const freshForMs = options.freshForMs ?? 2 * intervalMs;
   const maxLagMs = options.maxLagMs ?? DEFAULT_MAX_LAG_MS;
+  const clockToleranceMs = options.clockToleranceMs ?? DEFAULT_CLOCK_TOLERANCE_MS;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const pageSize = options.pageSize ?? DEFAULT_PAGE_SIZE;
   const clock = options.now ?? (() => Date.now());
   const log = options.log ?? (() => {});
   const fetchImpl: typeof fetch = options.fetch ?? ((input, init) => fetch(input, init));
-  const headers: Record<string, string> = { Accept: 'application/json', ...(options.headers ?? {}) };
+  // The list must never come from a cache: a stale page is a stale copy.
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    ...(options.headers ?? {}),
+    'Cache-Control': 'no-store',
+  };
+  const keySet: KeySet =
+    options.keySet ??
+    createKeySet({ url: options.jwksUrl, keys: options.jwks, fetch: fetchImpl, timeoutMs, now: clock });
 
   const lanes: LaneState[] = laneEntries.map(([lane, url]) => ({
     lane,
     url,
     seq: 0,
     head: 0,
-    caughtUpAt: null,
+    floor: 1,
+    horizon: -Infinity,
+    knownAt: null,
+    syncedAt: null,
+    loaded: false,
     problem: null,
     error: null,
   }));
@@ -247,84 +302,81 @@ export function createRevocationPuller(options: RevocationPullerOptions): Revoca
 
   // ---- the lanes' public keys ---------------------------------------------
 
-  let laneKeys: Map<string, LaneKey> | null = options.jwks ? readLaneKeys(options.jwks) : null;
-  let keysLoadedAt = options.jwks ? Infinity : -Infinity;
-  let keysAttemptedAt = -Infinity;
-  let keysLoading: Promise<void> | null = null;
-
-  async function loadKeys(): Promise<void> {
-    if (!options.jwksUrl) return;
-    if (keysLoading) return keysLoading;
-    keysAttemptedAt = clock();
-    keysLoading = (async () => {
-      try {
-        const response = await fetchImpl(options.jwksUrl as string, {
-          headers: { Accept: 'application/json' },
-          signal: timeoutSignal(timeoutMs),
-        });
-        if (!response.ok) throw new Error(`the key set answered ${response.status}`);
-        laneKeys = readLaneKeys(await response.json());
-        keysLoadedAt = clock();
-      } finally {
-        keysLoading = null;
-      }
-    })();
-    return keysLoading;
-  }
+  const laneKeysOf = new WeakMap<object, Map<string, LaneKey>>();
 
   async function laneKey(kid: unknown, lane: string): Promise<CryptoKey | Uint8Array> {
-    if (!isText(kid)) throw new EntryRefused('an entry names no key');
-    // Fetch the key set again when it is old, or for a key id it does not
-    // hold (a rotated key), but at most once per cooldown.
-    const stale = clock() - keysLoadedAt > KEY_SET_TTL_MS;
-    const unknown = !laneKeys?.has(kid);
-    const due = clock() - keysAttemptedAt > KEY_SET_COOLDOWN_MS;
-    if (laneKeys === null || ((stale || unknown) && due)) {
-      try {
-        await loadKeys();
-      } catch {
-        // Keep checking with the keys already loaded; without any, the copy only falls behind.
-        if (laneKeys === null) throw new KeySetUnavailable();
-      }
+    if (!isText(kid)) throw new SignedRefused('names no key');
+    let set: JSONWebKeySet;
+    try {
+      // Fetches the key set again for a key id it does not hold (a rotated key), at most once per cooldown.
+      set = await keySet.keys(kid);
+    } catch {
+      throw new KeySetUnavailable();
     }
-    const found = laneKeys?.get(kid);
-    if (!found) throw new EntryRefused('an entry is signed with a key that is not published');
-    if (found.lane !== lane) throw new EntryRefused("an entry is signed with another lane's key");
+    let keys = laneKeysOf.get(set);
+    if (!keys) {
+      keys = readLaneKeys(set);
+      laneKeysOf.set(set, keys);
+    }
+    const found = keys.get(kid);
+    if (!found) throw new SignedRefused('is signed with a key that is not published');
+    if (found.lane !== lane) throw new SignedRefused("is signed with another lane's key");
     if (!found.key) found.key = await importJWK(found.jwk, 'ES256');
     return found.key;
   }
 
-  // ---- reading one entry --------------------------------------------------
-
-  /** An accepted entry, the reason it was refused, or `null` when the keys to check it could not be loaded. */
-  async function readEntry(jws: unknown, lane: string): Promise<RevocationEntry | string | null> {
-    if (typeof jws !== 'string') return 'an entry is not a signed entry';
+  /**
+   * Check one signed item of a lane (an entry or a checkpoint): its signature
+   * with the lane's key, its type, and that it reads as JSON. Returns the
+   * payload, the reason it is refused, or `null` when the keys to check it
+   * could not be loaded.
+   */
+  async function readSigned(jws: unknown, lane: string, typ: string, what: string, isA: string): Promise<unknown> {
+    if (typeof jws !== 'string') return `${what} is not signed`;
     let payload: Uint8Array;
     try {
       const verified = await compactVerify(jws, (header) => laneKey(header.kid, lane), {
         algorithms: [...REVOCATION_ALGORITHMS],
       });
-      if (verified.protectedHeader.typ !== REVOCATION_ENTRY_TYPE) return 'an entry is not a revocation entry';
+      if (verified.protectedHeader.typ !== typ) return `${what} is not ${isA}`;
       payload = verified.payload;
     } catch (error) {
       if (error instanceof KeySetUnavailable) return null;
-      if (error instanceof EntryRefused) return error.message;
+      if (error instanceof SignedRefused) return `${what} ${error.message}`;
       const code = (error as { code?: unknown } | null)?.code;
-      if (code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') return "an entry's signature does not match";
-      if (code === 'ERR_JOSE_ALG_NOT_ALLOWED') return 'an entry is unsigned or signed with the wrong algorithm';
-      return 'an entry failed its signature check';
+      if (code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') return `${what}'s signature does not match`;
+      if (code === 'ERR_JOSE_ALG_NOT_ALLOWED') return `${what} is unsigned or signed with the wrong algorithm`;
+      return `${what} failed its signature check`;
     }
-    let parsed: unknown;
     try {
-      parsed = JSON.parse(new TextDecoder().decode(payload));
+      return { payload: JSON.parse(new TextDecoder().decode(payload)) as unknown };
     } catch {
-      return 'an entry is not readable';
+      return `${what} is not readable`;
     }
-    const entry = parseRevocationEntry(parsed);
+  }
+
+  /** An accepted entry, the reason it was refused, or `null` when the keys to check it could not be loaded. */
+  async function readEntry(jws: unknown, lane: string): Promise<RevocationEntry | string | null> {
+    const read = await readSigned(jws, lane, REVOCATION_ENTRY_TYPE, 'an entry', 'a revocation entry');
+    if (read === null || typeof read === 'string') return read;
+    const entry = parseRevocationEntry((read as { payload: unknown }).payload);
     if (!entry) return 'an entry is not in a format this version reads';
     if (entry.app !== appId) return 'an entry belongs to another app';
     if (entry.lane !== lane) return 'an entry belongs to another lane';
     return entry;
+  }
+
+  /** The lane's accepted checkpoint, the reason it was refused, or `null` when the keys could not be loaded. */
+  async function readCheckpoint(jws: unknown, lane: string): Promise<RevocationCheckpoint | string | null> {
+    if (jws === undefined || jws === null) return 'the list sent no signed checkpoint';
+    const read = await readSigned(jws, lane, REVOCATION_CHECKPOINT_TYPE, 'the checkpoint', 'a revocation checkpoint');
+    if (read === null || typeof read === 'string') return read;
+    const checkpoint = parseRevocationCheckpoint((read as { payload: unknown }).payload);
+    if (!checkpoint) return 'the checkpoint is not in a format this version reads';
+    if (checkpoint.app !== appId) return 'the checkpoint belongs to another app';
+    if (checkpoint.lane !== lane) return 'the checkpoint belongs to another lane';
+    if (checkpoint.at > clock() + clockToleranceMs) return 'the checkpoint is dated in the future';
+    return checkpoint;
   }
 
   // ---- fetching a lane ----------------------------------------------------
@@ -360,10 +412,26 @@ export function createRevocationPuller(options: RevocationPullerOptions): Revoca
       if (b.v !== REVOCATION_FORMAT_VERSION) return fail(state, 'the list answered in another format version');
       if (b.app !== appId) return fail(state, 'the list answered for another app');
       if (b.lane !== state.lane) return fail(state, 'the list answered for another lane');
-      if (typeof b.head !== 'number' || !Number.isSafeInteger(b.head) || b.head < 0) {
-        return fail(state, 'the list did not say how far it goes');
+
+      const checkpoint = await readCheckpoint(b.checkpoint, state.lane);
+      if (checkpoint === null) {
+        state.error = "the app's published keys could not be loaded";
+        return;
       }
-      if (b.head < state.seq) return fail(state, 'the list went backwards');
+      if (typeof checkpoint === 'string') return fail(state, checkpoint);
+      if (checkpoint.head < state.seq) return fail(state, 'the list went backwards');
+      state.floor = checkpoint.floor;
+
+      if (checkpoint.floor > state.seq + 1) {
+        // The list no longer keeps entries this copy has not seen. Start again
+        // from the oldest entry it keeps. Credentials issued before the dropped
+        // entries stop counting are refused from now on, since one of them
+        // could have named it; a copy that had loaded refuses everything until
+        // it has caught up again.
+        if (state.loaded) fail(state, 'the copy fell below the oldest entry the list keeps and is reloading from there');
+        state.horizon = Math.max(state.horizon, checkpoint.floorAt);
+        state.seq = checkpoint.floor - 1;
+      }
 
       for (const jws of b.entries) {
         const entry = await readEntry(jws, state.lane);
@@ -384,9 +452,14 @@ export function createRevocationPuller(options: RevocationPullerOptions): Revoca
         }
       }
 
-      state.head = Math.max(b.head, state.seq);
+      state.head = Math.max(checkpoint.head, state.seq);
       if (state.seq >= state.head) {
-        state.caughtUpAt = startedAt;
+        // Complete as of the earlier of when this fetch was sent and when the
+        // checkpoint was signed; a replayed checkpoint never moves it back.
+        const vouched = Math.min(startedAt, checkpoint.at);
+        state.knownAt = state.knownAt === null ? vouched : Math.max(state.knownAt, vouched);
+        state.syncedAt = startedAt;
+        state.loaded = true;
         state.problem = null;
         return;
       }
@@ -397,50 +470,95 @@ export function createRevocationPuller(options: RevocationPullerOptions): Revoca
   // ---- syncing every lane -------------------------------------------------
 
   let inFlight: Promise<void> | null = null;
+  let inFlightStartedAt = -Infinity;
   let lastAttemptAt = -Infinity;
+  let lastFailureAt = -Infinity;
 
   function sync(): Promise<void> {
     if (!inFlight) {
+      inFlightStartedAt = clock();
       inFlight = Promise.all(lanes.map((state) => syncLane(state).catch(() => undefined)))
         .then(() => undefined)
         .finally(() => {
           inFlight = null;
           lastAttemptAt = clock();
+          if (lanes.some((state) => state.error !== null || state.problem !== null)) lastFailureAt = lastAttemptAt;
         });
     }
     return inFlight;
   }
 
+  /** Wait for a sync that was sent at or after `since`: join one, or start one once an older one ends. */
+  async function syncSentSince(since: number): Promise<void> {
+    if (inFlight && inFlightStartedAt >= since) return inFlight;
+    if (inFlight) await inFlight;
+    return sync();
+  }
+
   function ready(): boolean {
-    return lanes.every((state) => state.caughtUpAt !== null);
+    return lanes.every((state) => state.knownAt !== null);
   }
 
   function lagAt(now: number): number {
     let oldest = Infinity;
     for (const state of lanes) {
-      if (state.caughtUpAt === null) return Infinity;
-      oldest = Math.min(oldest, state.caughtUpAt);
+      if (state.knownAt === null) return Infinity;
+      oldest = Math.min(oldest, state.knownAt);
     }
     return now - oldest;
+  }
+
+  /** When the oldest lane last reached its end, by this clock. -Infinity before every lane has. */
+  function syncedAt(): number {
+    let oldest = Infinity;
+    for (const state of lanes) {
+      if (state.syncedAt === null) return -Infinity;
+      oldest = Math.min(oldest, state.syncedAt);
+    }
+    return oldest;
+  }
+
+  /**
+   * Whether the list is known to be failing right now: a sync failed within
+   * the last interval and timeout, or a retry after a failure is under way.
+   * Checks then answer from the copy, within its limit, instead of each
+   * waiting for the list.
+   */
+  function listFailing(now: number): boolean {
+    if (lastFailureAt === -Infinity) return false;
+    if (now - lastFailureAt < intervalMs + timeoutMs) return true;
+    return inFlight !== null && inFlightStartedAt >= lastFailureAt && now - inFlightStartedAt < intervalMs + timeoutMs;
+  }
+
+  function horizon(): number {
+    return lanes.reduce((latest, state) => Math.max(latest, state.horizon), -Infinity);
   }
 
   function checkWithin(limitMs: number): RevocationCheck {
     if (typeof limitMs !== 'number' || !(limitMs > 0)) {
       throw new TypeError('checkWithin: the limit must be a positive number of milliseconds.');
     }
+    const refreshAfterMs = Math.min(freshForMs, limitMs);
     return async (actor: Actor): Promise<RevocationVerdict> => {
-      const behind = () => lanes.some((state) => state.problem !== null) || lagAt(clock()) > limitMs;
-      // Catch up before deciding, but never ask the list more than once per interval.
-      if (behind() && (inFlight || clock() - lastAttemptAt >= Math.min(intervalMs, limitMs))) {
-        await sync();
+      const now = clock();
+      const broken = () => lanes.find((state) => state.problem !== null);
+      if (broken() || lagAt(now) > limitMs) {
+        // About to refuse: catch up first, but never ask the list more than once per interval.
+        if (inFlight || now - lastAttemptAt >= Math.min(intervalMs, limitMs)) await syncSentSince(now - refreshAfterMs);
+      } else if (now - syncedAt() > refreshAfterMs && !listFailing(now)) {
+        // Not refreshed lately, though nothing says the list is down: a process
+        // that was frozen, or a puller without a timer. Refresh before deciding.
+        await syncSentSince(now - refreshAfterMs);
       }
-      const broken = lanes.find((state) => state.problem !== null);
-      if (broken) {
+
+      const problem = broken();
+      if (problem) {
         throw new RevocationListUnavailableError(
-          `The revocation list cannot be trusted right now: in lane ${broken.lane}, ${broken.problem}.`,
+          `The revocation list cannot be trusted right now: in lane ${problem.lane}, ${problem.problem}.`,
         );
       }
-      const lag = lagAt(clock());
+      const after = clock();
+      const lag = lagAt(after);
       if (lag > limitMs) {
         throw new RevocationListUnavailableError(
           ready()
@@ -448,7 +566,19 @@ export function createRevocationPuller(options: RevocationPullerOptions): Revoca
             : 'The revocation list has not loaded yet.',
         );
       }
-      if (lag > intervalMs && !inFlight) void sync();
+      // Top up in the background, at most once per interval.
+      if (after - syncedAt() > intervalMs && !inFlight && after - lastAttemptAt >= intervalMs) void sync();
+
+      const issuedBefore = horizon();
+      if (issuedBefore > -Infinity && actor.credential.checkedBy === 'signature') {
+        const issuedAt = actor.credential.issuedAt;
+        if (issuedAt === null || issuedAt * 1000 < issuedBefore) {
+          return Object.freeze({
+            revoked: true,
+            message: 'The credential was issued before the oldest entry the revocation list still keeps; a new one is needed.',
+          });
+        }
+      }
       return index.check(actor);
     };
   }
@@ -486,14 +616,18 @@ export function createRevocationPuller(options: RevocationPullerOptions): Revoca
     },
     status() {
       const now = clock();
+      const issuedBefore = horizon();
       return {
         ready: ready(),
         lagMs: lagAt(now),
+        refusesIssuedBefore: issuedBefore > -Infinity ? issuedBefore : null,
         lanes: lanes.map((state) => ({
           lane: state.lane,
           seq: state.seq,
           head: state.head,
-          caughtUpAt: state.caughtUpAt,
+          floor: state.floor,
+          caughtUpAt: state.knownAt,
+          syncedAt: state.syncedAt,
           problem: state.problem,
           error: state.error,
         })),

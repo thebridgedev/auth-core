@@ -5,8 +5,11 @@
  * runs all of it: `conformance.node.test.ts` on Node, `conformance.edge.test.ts`
  * in an edge runtime. A runtime is supported when every case passes.
  *
- * Tests named `principle N: …` prove one of the architecture's principles and
- * are counted by name.
+ * Tests named `principle N (its name): …` prove one of the architecture's
+ * principles and are counted by name. This file proves two: principle 1, who
+ * is calling comes only from the token, never from anything else in the
+ * request; and principle 5, only signed data is a fact, so a token that was
+ * changed, unsigned or signed for someone else is refused.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -17,6 +20,7 @@ import {
 } from '../../verifier/index.js';
 import {
   APP,
+  AUDIENCE,
   BRIDGE_APP,
   INTROSPECTION_URL,
   ISSUER,
@@ -25,6 +29,7 @@ import {
   fakeIntrospection,
   hmacWithPublicKey,
   jobClaims,
+  keyTokenClaims,
   makeKeyRing,
   mint,
   personClaims,
@@ -72,6 +77,7 @@ export function defineConformanceSuite(runtime: string): void {
       return createCredentialVerifier({
         appId: APP,
         issuer: ISSUER,
+        audience: AUDIENCE,
         jwks: ring.jwks,
         introspectionUrl: INTROSPECTION_URL,
         fetch: introspection.fetch,
@@ -114,11 +120,11 @@ export function defineConformanceSuite(runtime: string): void {
         expect(actor.workspaceId).toBeNull();
       });
 
-      it('accepts the token type The Bridge issues today (JWT) as well as at+jwt', async () => {
-        const plain = await mint(ring.app, personClaims(), { typ: 'JWT' });
-        const untyped = await mint(ring.app, personClaims(), { typ: null });
-        expect(actorOf(await verifier().verify({ type: 'token', value: plain })).id).toBe('user-alice');
-        expect(actorOf(await verifier().verify({ type: 'token', value: untyped })).id).toBe('user-alice');
+      it('accepts an access token typed at+jwt, in either spelling', async () => {
+        for (const typ of ['at+jwt', 'application/at+jwt', 'AT+JWT']) {
+          const token = await mint(ring.app, personClaims(), { typ });
+          expect([typ, actorOf(await verifier().verify({ type: 'token', value: token })).id]).toEqual([typ, 'user-alice']);
+        }
       });
 
       it("turns a job's token into a job Actor bound to one workspace", async () => {
@@ -148,12 +154,17 @@ export function defineConformanceSuite(runtime: string): void {
         expect(refusalOf(await verifier().verify({ type: 'token', value: protoKind }))).toBe('wrong_type');
       });
 
-      it('refuses a token typed as something other than an access token', async () => {
-        const idToken = await mint(ring.app, personClaims(), { typ: 'id+jwt' });
-        expect(refusalOf(await verifier().verify({ type: 'token', value: idToken }))).toBe('wrong_type');
-        const plain = await mint(ring.app, personClaims(), { typ: 'JWT' });
-        const strict = verifier({ acceptPlainJwtType: false });
-        expect(refusalOf(await strict.verify({ type: 'token', value: plain }))).toBe('wrong_type');
+      it('refuses a plain JWT, an untyped token or an ID token as an access token, even signed with the app\'s key', async () => {
+        const cases: Array<[string, string | null]> = [
+          ['a plain JWT', 'JWT'],
+          ['an untyped token', null],
+          ['an ID token', 'id+jwt'],
+          ['a logout token', 'logout+jwt'],
+        ];
+        for (const [name, typ] of cases) {
+          const token = await mint(ring.app, personClaims(), { typ });
+          expect([name, refusalOf(await verifier().verify({ type: 'token', value: token }))]).toEqual([name, 'wrong_type']);
+        }
       });
 
       it('refuses a token that does not name its app (an ID or refresh token, for example)', async () => {
@@ -166,6 +177,96 @@ export function defineConformanceSuite(runtime: string): void {
           const token = await mint(ring.app, personClaims(bad));
           expect(refusalOf(await verifier().verify({ type: 'token', value: token }))).toBe('invalid_claims');
         }
+      });
+    });
+
+    describe('the audience', () => {
+      it('must be configured: a verifier without one refuses to start, and never falls back to the app id', () => {
+        const options = { appId: APP, issuer: ISSUER, jwks: ring.jwks, revocationCheck: 'none' } as CredentialVerifierOptions;
+        expect(() => createCredentialVerifier(options)).toThrow(/audience/);
+        expect(() => createCredentialVerifier({ ...options, audience: '' })).toThrow(/audience/);
+      });
+
+      it('refuses a token whose only audience is the app id when the API is the audience', async () => {
+        const token = await mint(ring.app, personClaims(), { audience: APP });
+        expect(refusalOf(await verifier().verify({ type: 'token', value: token }))).toBe('wrong_audience');
+      });
+
+      it('accepts a token that names the configured audience among others', async () => {
+        const token = await mint(ring.app, personClaims(), { audience: ['https://other-api.example.test', AUDIENCE] });
+        expect(actorOf(await verifier().verify({ type: 'token', value: token })).id).toBe('user-alice');
+      });
+    });
+
+    describe('tokens issued for keys', () => {
+      it("turns a personal key's token into the same personal_key Actor the key itself gives", async () => {
+        const token = await mint(ring.app, keyTokenClaims('personal_key'), { subject: KEYS.personal.sub });
+        const fromToken = actorOf(await verifier().verify({ type: 'token', value: token }));
+        const fromKey = actorOf(await verifier().verify({ type: 'key', value: 'k-personal' }));
+
+        for (const actor of [fromToken, fromKey]) {
+          expect(actor).toMatchObject({
+            kind: 'personal_key',
+            id: 'key-bob-reports',
+            appId: APP,
+            workspaceId: 'ws-alpha',
+            personId: 'user-bob',
+            jobId: null,
+            role: null,
+            privileges: ['reports:read'],
+          });
+        }
+        expect(fromToken.credential).toMatchObject({ type: 'token', checkedBy: 'signature', tokenId: 'tok-personal_key' });
+      });
+
+      it("turns a token for a personal key made for one job into an Actor narrowed to that job", async () => {
+        const token = await mint(ring.app, keyTokenClaims('personal_key', { uid: 'user-alice', jid: 'export-42' }), {
+          subject: 'key-alice-export-42',
+        });
+        const actor = actorOf(await verifier().verify({ type: 'token', value: token }));
+        expect(actor).toMatchObject({ kind: 'personal_key', personId: 'user-alice', jobId: 'export-42', workspaceId: 'ws-alpha' });
+      });
+
+      it("turns a service account key's token into a service_account_key Actor bound to its workspace", async () => {
+        const token = await mint(ring.app, keyTokenClaims('service_account_key'), { subject: KEYS.serviceAccount.sub });
+        const actor = actorOf(await verifier().verify({ type: 'token', value: token }));
+        expect(actor).toMatchObject({
+          kind: 'service_account_key',
+          id: 'key-invoice-export',
+          workspaceId: 'ws-alpha',
+          personId: null,
+          jobId: null,
+          privileges: ['invoices:read'],
+        });
+      });
+
+      it("turns an app key's token into an app_key Actor that reaches the whole app", async () => {
+        const token = await mint(ring.app, keyTokenClaims('app_key'), { subject: KEYS.app.sub });
+        const actor = actorOf(await verifier().verify({ type: 'token', value: token }));
+        expect(actor).toMatchObject({ kind: 'app_key', id: 'key-acme-backend', appId: APP, workspaceId: null, personId: null });
+      });
+
+      it("refuses a key's token whose claims do not describe that kind of key", async () => {
+        const cases: Array<[string, Record<string, unknown>, string]> = [
+          ['a personal key without its user', keyTokenClaims('personal_key', { uid: undefined }), 'invalid_claims'],
+          ['a personal key without a workspace', keyTokenClaims('personal_key', { tid: undefined }), 'invalid_claims'],
+          ['a personal key naming its job malformed', keyTokenClaims('personal_key', { jid: 42 }), 'invalid_claims'],
+          ['a service account key without a workspace', keyTokenClaims('service_account_key', { tid: undefined }), 'invalid_claims'],
+          ['a service account key made for one job', keyTokenClaims('service_account_key', { jid: 'export-42' }), 'invalid_claims'],
+          ['an app key bound to a workspace', keyTokenClaims('app_key', { tid: 'ws-alpha' }), 'invalid_claims'],
+          ['an app key made for one job', keyTokenClaims('app_key', { jid: 'export-42' }), 'invalid_claims'],
+          ['a service\'s token', { ...keyTokenClaims('app_key'), kind: 'service' }, 'wrong_type'],
+          ['a key of another app', keyTokenClaims('app_key', { aid: OTHER_APP }), 'wrong_app'],
+        ];
+        for (const [name, claims, reason] of cases) {
+          const token = await mint(ring.app, claims, { subject: 'key-x' });
+          expect([name, refusalOf(await verifier().verify({ type: 'token', value: token }))]).toEqual([name, reason]);
+        }
+      });
+
+      it("refuses a key's token that is not typed as an access token", async () => {
+        const token = await mint(ring.app, keyTokenClaims('app_key'), { subject: KEYS.app.sub, typ: 'JWT' });
+        expect(refusalOf(await verifier().verify({ type: 'token', value: token }))).toBe('wrong_type');
       });
     });
 
@@ -320,7 +421,7 @@ export function defineConformanceSuite(runtime: string): void {
 
     describe('revocation', () => {
       it('refuses to start until it is told how revocation is checked: never a silent no-op', () => {
-        const options = { appId: APP, issuer: ISSUER, jwks: ring.jwks } as CredentialVerifierOptions;
+        const options = { appId: APP, issuer: ISSUER, audience: AUDIENCE, jwks: ring.jwks } as CredentialVerifierOptions;
         expect(() => createCredentialVerifier(options)).toThrow(/revocationCheck/);
         expect(() =>
           createCredentialVerifier({ ...options, revocationCheck: 'off' as unknown as 'none' }),
@@ -364,8 +465,8 @@ export function defineConformanceSuite(runtime: string): void {
       });
     });
 
-    describe('principle 1: who is calling comes only from the token', () => {
-      it('principle 1: a request whose headers name another person, app or workspace still gets the token\'s identity', async () => {
+    describe('principle 1 (who is calling comes only from the token)', () => {
+      it('principle 1 (who is calling comes only from the token): a request whose headers name another person, app or workspace still gets the token\'s identity', async () => {
         const token = await mint(ring.app, personClaims());
         const result = await verifier().verifyRequest({
           headers: {
@@ -386,7 +487,7 @@ export function defineConformanceSuite(runtime: string): void {
         expect(actor.privileges).toEqual(['invoices:read', 'invoices:write']);
       });
 
-      it("principle 1: a request whose body names another person, app or workspace still gets the token's identity, and the body is never read", async () => {
+      it("principle 1 (who is calling comes only from the token): a request whose body names another person, app or workspace still gets the token's identity, and the body is never read", async () => {
         const token = await mint(ring.app, personClaims());
         const request = new Request('https://api.acme.test/invoices?workspaceId=ws-beta&userId=user-mallory', {
           method: 'POST',
@@ -401,7 +502,7 @@ export function defineConformanceSuite(runtime: string): void {
         expect(request.bodyUsed).toBe(false);
       });
 
-      it("principle 1: a key's caller context comes from the key, whatever workspace the request names", async () => {
+      it("principle 1 (who is calling comes only from the token): a key's caller context comes from the key, whatever workspace the request names", async () => {
         const actor = actorOf(
           await verifier().verifyRequest({
             headers: { 'x-api-key': 'k-service-account', 'x-tenant-id': 'ws-beta', 'x-app-id': OTHER_APP },
@@ -412,7 +513,7 @@ export function defineConformanceSuite(runtime: string): void {
         expect(actor.appId).toBe(APP);
       });
 
-      it('principle 1: a person signed in without a workspace does not pick one up from the request', async () => {
+      it('principle 1 (who is calling comes only from the token): a person signed in without a workspace does not pick one up from the request', async () => {
         const token = await mint(ring.app, personClaims({ tid: undefined }));
         const actor = actorOf(
           await verifier().verifyRequest({ headers: { authorization: `Bearer ${token}`, 'x-tenant-id': 'ws-beta' } }),
@@ -420,14 +521,14 @@ export function defineConformanceSuite(runtime: string): void {
         expect(actor.workspaceId).toBeNull();
       });
 
-      it('principle 1: a request that names a caller but carries no credential gets no Actor', async () => {
+      it('principle 1 (who is calling comes only from the token): a request that names a caller but carries no credential gets no Actor', async () => {
         const result = await verifier().verifyRequest({
           headers: { 'x-user-id': 'user-alice', 'x-tenant-id': 'ws-alpha', 'x-app-id': APP },
         });
         expect(refusalOf(result)).toBe('missing');
       });
 
-      it('principle 1: the Actor cannot be changed after it is built', async () => {
+      it('principle 1 (who is calling comes only from the token): the Actor cannot be changed after it is built', async () => {
         const token = await mint(ring.app, personClaims());
         const actor = actorOf(await verifier().verify({ type: 'token', value: token }));
         expect(Object.isFrozen(actor)).toBe(true);
@@ -444,8 +545,8 @@ export function defineConformanceSuite(runtime: string): void {
       });
     });
 
-    describe('principle 5: only signed data is a fact', () => {
-      it('principle 5: a token with a changed payload is refused', async () => {
+    describe('principle 5 (only signed data is a fact)', () => {
+      it('principle 5 (only signed data is a fact): a token with a changed payload is refused', async () => {
         const token = await mint(ring.app, personClaims());
         const otherWorkspace = tamper(token, (c) => {
           c.tid = 'ws-beta';
@@ -461,7 +562,7 @@ export function defineConformanceSuite(runtime: string): void {
         }
       });
 
-      it('principle 5: a token with no signature (alg: none) is refused', async () => {
+      it('principle 5 (only signed data is a fact): a token with no signature (alg: none) is refused', async () => {
         const forged = unsigned({
           ...personClaims(),
           iss: ISSUER,
@@ -472,19 +573,19 @@ export function defineConformanceSuite(runtime: string): void {
         expect(refusalOf(await verifier().verify({ type: 'token', value: forged }))).toBe('wrong_algorithm');
       });
 
-      it('principle 5: a token signed with a wrong algorithm is refused, even by the right key', async () => {
+      it('principle 5 (only signed data is a fact): a token signed with a wrong algorithm is refused, even by the right key', async () => {
         const rs256 = await mint(ring.app, personClaims(), { alg: 'RS256' });
         expect(refusalOf(await verifier().verify({ type: 'token', value: rs256 }))).toBe('wrong_algorithm');
         const hs256 = await hmacWithPublicKey(ring.app, personClaims());
         expect(refusalOf(await verifier().verify({ type: 'token', value: hs256 }))).toBe('wrong_algorithm');
       });
 
-      it('principle 5: a token for the wrong audience is refused', async () => {
-        const token = await mint(ring.app, personClaims(), { audience: OTHER_APP });
+      it('principle 5 (only signed data is a fact): a token for the wrong audience is refused', async () => {
+        const token = await mint(ring.app, personClaims(), { audience: 'https://other-api.example.test' });
         expect(refusalOf(await verifier().verify({ type: 'token', value: token }))).toBe('wrong_audience');
       });
 
-      it("principle 5: a token signed with another app's key is refused", async () => {
+      it("principle 5 (only signed data is a fact): a token signed with another app's key is refused", async () => {
         const otherKid = await mint(ring.otherApp, personClaims());
         expect(refusalOf(await verifier().verify({ type: 'token', value: otherKid }))).toBe('unknown_key');
         // Another app's key that claims the app's own key id still fails the signature.
@@ -492,12 +593,12 @@ export function defineConformanceSuite(runtime: string): void {
         expect(refusalOf(await verifier().verify({ type: 'token', value: sameKid }))).toBe('bad_signature');
       });
 
-      it('principle 5: a token issued for another app is refused, even when it names this app as an audience', async () => {
-        const token = await mint(ring.app, personClaims({ aid: OTHER_APP }), { audience: [APP, OTHER_APP] });
+      it('principle 5 (only signed data is a fact): a token issued for another app is refused, even when it names this API as its audience', async () => {
+        const token = await mint(ring.app, personClaims({ aid: OTHER_APP }), { audience: [AUDIENCE, OTHER_APP] });
         expect(refusalOf(await verifier().verify({ type: 'token', value: token }))).toBe('wrong_app');
       });
 
-      it('principle 5: a key issued for another app is refused', async () => {
+      it('principle 5 (only signed data is a fact): a key issued for another app is refused', async () => {
         expect(refusalOf(await verifier().verify({ type: 'key', value: 'k-other-app' }))).toBe('wrong_app');
       });
     });

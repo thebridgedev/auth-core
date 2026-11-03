@@ -3,7 +3,7 @@
 // The revocation entry format: every field is checked, and anything this
 // version does not read fully is refused rather than half understood.
 import { describe, expect, it } from 'vitest';
-import { parseRevocationEntry } from '../../verifier/revocation-entry.js';
+import { parseRevocationCheckpoint, parseRevocationEntry } from '../../verifier/revocation-entry.js';
 
 const base = { v: 1, app: 'app-acme', lane: 'members', seq: 1, at: 1_000 };
 
@@ -47,5 +47,32 @@ describe('revocation entry format', () => {
 
   it('refuses what is not an object', () => {
     for (const value of [null, 'entry', 1, [base]]) expect(parseRevocationEntry(value)).toBeNull();
+  });
+});
+
+describe('revocation checkpoint format', () => {
+  const checkpoint = { v: 1, app: 'app-acme', lane: 'members', head: 12, floor: 5, floorAt: 2_000, at: 9_000 };
+
+  it.each([
+    ['a lane that dropped its oldest entries', checkpoint],
+    ['a lane that never dropped one', { ...checkpoint, floor: 1, floorAt: 0 }],
+    ['an empty lane', { ...checkpoint, head: 0, floor: 1, floorAt: 0 }],
+    ['a lane that keeps no entry any more', { ...checkpoint, head: 12, floor: 13 }],
+  ])('reads %s', (_name, fields) => {
+    expect(parseRevocationCheckpoint(fields)).toEqual(fields);
+  });
+
+  it.each([
+    ['another format version', { v: 2 }],
+    ['no lane', { lane: '' }],
+    ['a negative head', { head: -1 }],
+    ['a floor of 0', { floor: 0 }],
+    ['a floor above the head plus one', { floor: 14 }],
+    ['a fractional floor', { floor: 1.5 }],
+    ['no floor time', { floorAt: undefined }],
+    ['no signing time', { at: undefined }],
+    ['a head that is text', { head: '12' }],
+  ])('refuses %s', (_name, fields) => {
+    expect(parseRevocationCheckpoint({ ...checkpoint, ...fields })).toBeNull();
   });
 });

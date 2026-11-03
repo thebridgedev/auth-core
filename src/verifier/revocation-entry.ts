@@ -47,6 +47,9 @@ export const REVOCATION_FORMAT_VERSION = 1;
 /** The JWS `typ` every entry carries. */
 export const REVOCATION_ENTRY_TYPE = 'revocation+jws';
 
+/** The JWS `typ` every lane's checkpoint carries. */
+export const REVOCATION_CHECKPOINT_TYPE = 'revocation-checkpoint+jws';
+
 /** The one algorithm entries are signed with. */
 export const REVOCATION_ALGORITHMS: readonly string[] = Object.freeze(['ES256']);
 
@@ -152,6 +155,43 @@ export function parseRevocationEntry(payload: unknown): RevocationEntry | null {
     version,
     before: before as number | null,
   });
+}
+
+/**
+ * A lane's checkpoint: what the list says about the lane at one moment,
+ * signed with the lane's key like its entries, so a page that was cached,
+ * withheld or replayed cannot pass for a fresh one.
+ *
+ * | Field     | Means                                                                   |
+ * |-----------|-------------------------------------------------------------------------|
+ * | `v`       | The format version: `1`                                                 |
+ * | `app`     | The app                                                                 |
+ * | `lane`    | The lane                                                                |
+ * | `head`    | The number of the lane's latest entry; 0 before the first               |
+ * | `floor`   | The number of the oldest entry the list still keeps; `head + 1` when it keeps none, 1 when it never dropped one |
+ * | `floorAt` | In ms: no entry below the floor was written, or cuts off credentials issued, after this time. 0 when the floor is 1 |
+ * | `at`      | When the checkpoint was signed, in ms; `head` was the latest entry then |
+ */
+export interface RevocationCheckpoint {
+  readonly v: 1;
+  readonly app: string;
+  readonly lane: string;
+  readonly head: number;
+  readonly floor: number;
+  readonly floorAt: number;
+  readonly at: number;
+}
+
+/** Read a checkpoint's payload. Anything this version does not read fully is refused (null). */
+export function parseRevocationCheckpoint(payload: unknown): RevocationCheckpoint | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const p = payload as Record<string, unknown>;
+  if (p.v !== REVOCATION_FORMAT_VERSION) return null;
+  if (!isText(p.app) || !isText(p.lane)) return null;
+  if (!isWholeNumber(p.head, 0) || !isWholeNumber(p.floor, 1) || !isWholeNumber(p.floorAt, 0)) return null;
+  if (!isWholeNumber(p.at, 0)) return null;
+  if (p.floor > p.head + 1) return null;
+  return Object.freeze({ v: 1, app: p.app, lane: p.lane, head: p.head, floor: p.floor, floorAt: p.floorAt, at: p.at });
 }
 
 const NOT_REVOKED: RevocationVerdict = Object.freeze({ revoked: false });

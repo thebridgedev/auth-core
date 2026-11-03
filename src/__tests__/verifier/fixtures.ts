@@ -11,6 +11,8 @@ export const ISSUER = 'https://auth.example.test';
 export const APP = 'app-acme';
 export const OTHER_APP = 'app-globex';
 export const BRIDGE_APP = 'app-bridge';
+/** The API the tokens are issued for: the audience a verifier is configured with. Never the app id. */
+export const AUDIENCE = 'https://api.example.test';
 export const INTROSPECTION_URL = 'https://auth.example.test/keys/introspect';
 export const JWKS_URL = 'https://auth.example.test/.well-known/jwks.json';
 
@@ -75,6 +77,23 @@ export function personClaims(overrides: JWTPayload = {}): JWTPayload {
   };
 }
 
+/**
+ * A token the issuer gave in exchange for a key, so the key itself is
+ * presented only once. Its subject is the key's id.
+ */
+export function keyTokenClaims(
+  kind: 'personal_key' | 'service_account_key' | 'app_key',
+  overrides: JWTPayload = {},
+): JWTPayload {
+  const base: JWTPayload =
+    kind === 'personal_key'
+      ? { kind, aid: APP, tid: 'ws-alpha', uid: 'user-bob', privileges: ['reports:read'] }
+      : kind === 'service_account_key'
+        ? { kind, aid: APP, tid: 'ws-alpha', privileges: ['invoices:read'] }
+        : { kind, aid: APP, privileges: ['members:write', 'workspaces:read'] };
+  return { ...base, jti: `tok-${kind}`, ...overrides };
+}
+
 /** A background job's token: one workspace, no person. */
 export function jobClaims(overrides: JWTPayload = {}): JWTPayload {
   return {
@@ -99,7 +118,7 @@ export async function mint(
   const jwt = new SignJWT(claims)
     .setProtectedHeader(header as { alg: string })
     .setIssuer(options.issuer ?? ISSUER)
-    .setAudience(options.audience ?? [APP, 'https://api.example.test']);
+    .setAudience(options.audience ?? AUDIENCE);
   if (options.issuedAt !== null) jwt.setIssuedAt(options.issuedAt);
   if (options.subject !== null) jwt.setSubject(options.subject ?? 'user-alice');
   if (options.expiresIn !== null) jwt.setExpirationTime(options.expiresIn ?? '5m');
@@ -137,7 +156,7 @@ export async function hmacWithPublicKey(key: TestKey, claims: JWTPayload): Promi
   return new SignJWT(claims)
     .setProtectedHeader({ alg: 'HS256', kid: key.kid, typ: 'at+jwt' })
     .setIssuer(ISSUER)
-    .setAudience(APP)
+    .setAudience(AUDIENCE)
     .setSubject('user-alice')
     .setIssuedAt()
     .setExpirationTime('5m')
