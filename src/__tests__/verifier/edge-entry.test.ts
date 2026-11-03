@@ -19,7 +19,7 @@ import { dirname, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { build, type BuildOptions } from 'esbuild';
 import { EdgeVM } from '@edge-runtime/vm';
-import { APP, ISSUER, makeKeyRing, mint, personClaims } from './fixtures.js';
+import { APP, AUDIENCE, ISSUER, makeKeyRing, mint, personClaims } from './fixtures.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const entry = resolve(root, 'src/verifier/index.ts');
@@ -92,13 +92,14 @@ describe('verifier entry in an edge runtime', () => {
     const [header, payload, signature] = token.split('.');
     const flipped = signature[10] === 'A' ? 'B' : 'A';
     const forged = `${header}.${payload}.${signature.slice(0, 10)}${flipped}${signature.slice(11)}`;
-    vm.context.__input = JSON.stringify({ jwks: ring.jwks, token, forged, appId: APP, issuer: ISSUER });
+    vm.context.__input = JSON.stringify({ jwks: ring.jwks, token, forged, appId: APP, issuer: ISSUER, audience: AUDIENCE });
 
     const output = await vm.evaluate(`(async () => {
       const input = JSON.parse(__input);
       const verifier = BridgeVerifier.createCredentialVerifier({
         appId: input.appId,
         issuer: input.issuer,
+        audience: input.audience,
         jwks: input.jwks,
         revocationCheck: 'none',
       });

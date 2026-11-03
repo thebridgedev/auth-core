@@ -18,6 +18,9 @@
  * - `wrong_issuer`: issued by someone else.
  * - `wrong_audience`: issued for a different audience.
  * - `wrong_app`: issued for a different app.
+ * - `unknown_app`: names an app this verifier does not know, or whose issuer
+ *   does not know it. A credential refusal like any other, never
+ *   `unavailable`.
  * - `wrong_type`: the wrong kind of token or key for this use, such as an ID
  *   token presented as an access token.
  * - `invalid_claims`: a claim the verifier needs is missing or malformed.
@@ -27,8 +30,8 @@
  * - `not_accepted`: this verifier is not set up to accept this kind of
  *   credential.
  * - `unavailable`: the verifier could not reach what it needs to decide (the
- *   key set or the introspection endpoint). The credential is refused, never
- *   accepted, while this lasts.
+ *   key set, the introspection endpoint or the revocation list). The
+ *   credential is refused, never accepted, while this lasts.
  */
 export type RefusalReason =
   | 'missing'
@@ -41,6 +44,7 @@ export type RefusalReason =
   | 'wrong_issuer'
   | 'wrong_audience'
   | 'wrong_app'
+  | 'unknown_app'
   | 'wrong_type'
   | 'invalid_claims'
   | 'inactive'

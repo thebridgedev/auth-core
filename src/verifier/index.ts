@@ -2,7 +2,7 @@
  * @nebulr-group/bridge-auth-core/verifier
  *
  * The credential verifier: one checker that turns a person's token, a job's
- * token or a key into one Actor context (who is calling, for which app, in
+ * token, a key or a token issued for a key into one Actor context (who is calling, for which app, in
  * which workspace, with which privileges), or refuses it with a reason. And
  * the revocation puller, which follows the app's revocation list so access
  * that was taken away stops working within seconds.
@@ -46,4 +46,5 @@ export {
 } from './revocation-entry.js';
 export type { RevocationEntry, RevocationKind } from './revocation-entry.js';
 
-export { BRIDGE_TOKEN_ALGORITHMS } from './key-set.js';
+export { BRIDGE_TOKEN_ALGORITHMS, createKeySet } from './key-set.js';
+export type { KeySet, KeySetOptions } from './key-set.js';

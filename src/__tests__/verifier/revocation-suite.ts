@@ -19,6 +19,7 @@ import {
 } from '../../verifier/index.js';
 import {
   APP,
+  AUDIENCE,
   INTROSPECTION_URL,
   ISSUER,
   KEYS,
@@ -82,6 +83,7 @@ export function defineRevocationSuite(runtime: string): void {
       return createCredentialVerifier({
         appId: APP,
         issuer: ISSUER,
+        audience: AUDIENCE,
         jwks: ring.jwks,
         introspectionUrl: INTROSPECTION_URL,
         fetch: introspection.fetch,

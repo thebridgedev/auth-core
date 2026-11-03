@@ -17,6 +17,7 @@ import {
 } from '../../verifier/index.js';
 import {
   APP,
+  AUDIENCE,
   BRIDGE_APP,
   INTROSPECTION_URL,
   ISSUER,
@@ -72,6 +73,7 @@ export function defineConformanceSuite(runtime: string): void {
       return createCredentialVerifier({
         appId: APP,
         issuer: ISSUER,
+        audience: AUDIENCE,
         jwks: ring.jwks,
         introspectionUrl: INTROSPECTION_URL,
         fetch: introspection.fetch,
@@ -114,11 +116,11 @@ export function defineConformanceSuite(runtime: string): void {
         expect(actor.workspaceId).toBeNull();
       });
 
-      it('accepts the token type The Bridge issues today (JWT) as well as at+jwt', async () => {
-        const plain = await mint(ring.app, personClaims(), { typ: 'JWT' });
-        const untyped = await mint(ring.app, personClaims(), { typ: null });
-        expect(actorOf(await verifier().verify({ type: 'token', value: plain })).id).toBe('user-alice');
-        expect(actorOf(await verifier().verify({ type: 'token', value: untyped })).id).toBe('user-alice');
+      it('accepts an access token typed at+jwt, in either spelling', async () => {
+        for (const typ of ['at+jwt', 'application/at+jwt', 'AT+JWT']) {
+          const token = await mint(ring.app, personClaims(), { typ });
+          expect([typ, actorOf(await verifier().verify({ type: 'token', value: token })).id]).toEqual([typ, 'user-alice']);
+        }
       });
 
       it("turns a job's token into a job Actor bound to one workspace", async () => {
@@ -148,12 +150,17 @@ export function defineConformanceSuite(runtime: string): void {
         expect(refusalOf(await verifier().verify({ type: 'token', value: protoKind }))).toBe('wrong_type');
       });
 
-      it('refuses a token typed as something other than an access token', async () => {
-        const idToken = await mint(ring.app, personClaims(), { typ: 'id+jwt' });
-        expect(refusalOf(await verifier().verify({ type: 'token', value: idToken }))).toBe('wrong_type');
-        const plain = await mint(ring.app, personClaims(), { typ: 'JWT' });
-        const strict = verifier({ acceptPlainJwtType: false });
-        expect(refusalOf(await strict.verify({ type: 'token', value: plain }))).toBe('wrong_type');
+      it('refuses a plain JWT, an untyped token or an ID token as an access token, even signed with the app\'s key', async () => {
+        const cases: Array<[string, string | null]> = [
+          ['a plain JWT', 'JWT'],
+          ['an untyped token', null],
+          ['an ID token', 'id+jwt'],
+          ['a logout token', 'logout+jwt'],
+        ];
+        for (const [name, typ] of cases) {
+          const token = await mint(ring.app, personClaims(), { typ });
+          expect([name, refusalOf(await verifier().verify({ type: 'token', value: token }))]).toEqual([name, 'wrong_type']);
+        }
       });
 
       it('refuses a token that does not name its app (an ID or refresh token, for example)', async () => {
@@ -166,6 +173,24 @@ export function defineConformanceSuite(runtime: string): void {
           const token = await mint(ring.app, personClaims(bad));
           expect(refusalOf(await verifier().verify({ type: 'token', value: token }))).toBe('invalid_claims');
         }
+      });
+    });
+
+    describe('the audience', () => {
+      it('must be configured: a verifier without one refuses to start, and never falls back to the app id', () => {
+        const options = { appId: APP, issuer: ISSUER, jwks: ring.jwks, revocationCheck: 'none' } as CredentialVerifierOptions;
+        expect(() => createCredentialVerifier(options)).toThrow(/audience/);
+        expect(() => createCredentialVerifier({ ...options, audience: '' })).toThrow(/audience/);
+      });
+
+      it('refuses a token whose only audience is the app id when the API is the audience', async () => {
+        const token = await mint(ring.app, personClaims(), { audience: APP });
+        expect(refusalOf(await verifier().verify({ type: 'token', value: token }))).toBe('wrong_audience');
+      });
+
+      it('accepts a token that names the configured audience among others', async () => {
+        const token = await mint(ring.app, personClaims(), { audience: ['https://other-api.example.test', AUDIENCE] });
+        expect(actorOf(await verifier().verify({ type: 'token', value: token })).id).toBe('user-alice');
       });
     });
 
@@ -320,7 +345,7 @@ export function defineConformanceSuite(runtime: string): void {
 
     describe('revocation', () => {
       it('refuses to start until it is told how revocation is checked: never a silent no-op', () => {
-        const options = { appId: APP, issuer: ISSUER, jwks: ring.jwks } as CredentialVerifierOptions;
+        const options = { appId: APP, issuer: ISSUER, audience: AUDIENCE, jwks: ring.jwks } as CredentialVerifierOptions;
         expect(() => createCredentialVerifier(options)).toThrow(/revocationCheck/);
         expect(() =>
           createCredentialVerifier({ ...options, revocationCheck: 'off' as unknown as 'none' }),
@@ -480,7 +505,7 @@ export function defineConformanceSuite(runtime: string): void {
       });
 
       it('principle 5: a token for the wrong audience is refused', async () => {
-        const token = await mint(ring.app, personClaims(), { audience: OTHER_APP });
+        const token = await mint(ring.app, personClaims(), { audience: 'https://other-api.example.test' });
         expect(refusalOf(await verifier().verify({ type: 'token', value: token }))).toBe('wrong_audience');
       });
 
@@ -492,8 +517,8 @@ export function defineConformanceSuite(runtime: string): void {
         expect(refusalOf(await verifier().verify({ type: 'token', value: sameKid }))).toBe('bad_signature');
       });
 
-      it('principle 5: a token issued for another app is refused, even when it names this app as an audience', async () => {
-        const token = await mint(ring.app, personClaims({ aid: OTHER_APP }), { audience: [APP, OTHER_APP] });
+      it('principle 5: a token issued for another app is refused, even when it names this API as its audience', async () => {
+        const token = await mint(ring.app, personClaims({ aid: OTHER_APP }), { audience: [AUDIENCE, OTHER_APP] });
         expect(refusalOf(await verifier().verify({ type: 'token', value: token }))).toBe('wrong_app');
       });
 
