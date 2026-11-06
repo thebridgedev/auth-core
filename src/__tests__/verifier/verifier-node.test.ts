@@ -2,17 +2,8 @@
 //
 // Node-side behaviour of the credential verifier that the shared conformance
 // suite does not cover: loading the key set over HTTP, caching key checks,
-// reading credentials from Node-style headers, and the migration helpers that
-// keep the older caller shapes working.
+// and reading credentials from Node-style headers.
 import { beforeAll, describe, expect, it } from 'vitest';
-import * as backend from '../../backend/index.js';
-import {
-  actorToApiTokenClaims,
-  actorToBridgeUser,
-  JwksService,
-  transformJwtToBridgeUser,
-  type JwtClaims,
-} from '../../backend/index.js';
 import { createCredentialVerifier, createKeySet, readCredentials } from '../../verifier/index.js';
 import {
   APP,
@@ -140,7 +131,9 @@ describe('remote key set', () => {
 
   it('refuses to start without the app, the issuer or a key set', () => {
     expect(() => createCredentialVerifier({ appId: '', issuer: ISSUER, audience: AUDIENCE, jwks: ring.jwks, revocationCheck: 'none' })).toThrow(TypeError);
+    // @ts-expect-error: a required setting is left out on purpose
     expect(() => createCredentialVerifier({ appId: APP, issuer: '', jwks: ring.jwks, revocationCheck: 'none' })).toThrow(TypeError);
+    // @ts-expect-error: a required setting is left out on purpose
     expect(() => createCredentialVerifier({ appId: APP, issuer: ISSUER, revocationCheck: 'none' })).toThrow(TypeError);
   });
 });
@@ -191,48 +184,5 @@ describe('reading credentials from a request', () => {
 
   it('reads Fetch API headers too', () => {
     expect(readCredentials(new Headers({ Authorization: 'Bearer t' }))).toEqual([{ type: 'token', value: 't' }]);
-  });
-});
-
-describe('the older caller shapes keep working', () => {
-  it('still exports JwksService, BridgeUser helpers and the token utilities from ./backend', () => {
-    expect(typeof backend.JwksService).toBe('function');
-    expect(typeof backend.TokenVerificationError).toBe('function');
-    expect(typeof backend.transformJwtToBridgeUser).toBe('function');
-    expect(typeof backend.decodeJwtPayload).toBe('function');
-    expect(typeof backend.createCredentialVerifier).toBe('function');
-    expect(new JwksService({
-      jwksUrl: JWKS_URL, introspectionUrl: INTROSPECTION_URL, issuer: ISSUER, audience: APP,
-    })).toBeInstanceOf(JwksService);
-  });
-
-  it("actorToBridgeUser gives the same BridgeUser the old path built from the token's claims", async () => {
-    const token = await mint(ring.app, personClaims({ name: 'Alice Doe', preferred_username: 'alice' }));
-    const verifier = createCredentialVerifier({ appId: APP, issuer: ISSUER, audience: AUDIENCE, jwks: ring.jwks, revocationCheck: 'none' });
-    const result = await verifier.verify({ type: 'token', value: token });
-    if (!result.ok) throw new Error(result.refusal.reason);
-
-    const claims = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))) as JwtClaims;
-    expect(actorToBridgeUser(result.actor)).toEqual(transformJwtToBridgeUser(claims));
-    expect(actorToApiTokenClaims(result.actor)).toBeNull();
-  });
-
-  it('actorToApiTokenClaims gives the shape the old key check returned', async () => {
-    const issuer = fakeIntrospection({ 'k-legacy-app': { body: KEYS.legacyAppWide } });
-    const verifier = createCredentialVerifier({
-      appId: APP, issuer: ISSUER, audience: AUDIENCE, jwks: ring.jwks, introspectionUrl: INTROSPECTION_URL, fetch: issuer.fetch, revocationCheck: 'none',
-    });
-    const result = await verifier.verify({ type: 'key', value: 'k-legacy-app' });
-    if (!result.ok) throw new Error(result.refusal.reason);
-
-    expect(actorToApiTokenClaims(result.actor)).toEqual({
-      sub: 'key-legacy-app',
-      appId: APP,
-      tenantId: null,
-      type: 'api',
-      privileges: ['USER_READ'],
-      exp: 4102444800,
-    });
-    expect(actorToBridgeUser(result.actor)).toBeNull();
   });
 });

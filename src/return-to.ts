@@ -1,5 +1,5 @@
 /**
- * Return-to handling for the SDK-mode route guard (TBP-629).
+ * Return-to handling for the SDK-mode route guard.
  *
  * When the guard turns an unauthenticated visitor away from a protected route,
  * the path they asked for has to survive the trip through the login page or the
@@ -136,13 +136,13 @@ export function readReturnTo(
 export const RETURN_TO_STORAGE_KEY = 'bridge_return_to';
 
 /**
- * Hosted mode carries the return target in sessionStorage, NOT in the URL
- * (TBP-629).
+ * A redirect sign-in carries the return target in sessionStorage, NOT in the
+ * URL.
  *
- * This is not a stylistic difference from SDK mode — it is forced. Hosted login
- * hands `redirectUri` to the OAuth authorize call, and bridge-api validates it
- * with `appConfig.allowedRedirectUris.includes(redirect_uri)`: an exact string
- * match. Appending `?redirectUri=/deep/link` to the callback URL would fail that
+ * This is not a stylistic difference from in-page sign-in — it is forced. A
+ * redirect sign-in hands its return address to the authorization request, which
+ * the issuer checks as an exact string match against the app's registered
+ * addresses. Appending `?redirectUri=/deep/link` to the callback URL would fail that
  * check and break login outright, so the OAuth contract has to stay byte-for-byte
  * what it is today.
  *
