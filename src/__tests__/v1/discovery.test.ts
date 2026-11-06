@@ -1,6 +1,7 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { discover, endpointsFrom, metadataUrl, readMetadata } from '../../core/discovery.js';
-import { ROUTES } from '../../core/routes.js';
+import { Discovery, discover, endpointsFrom, metadataUrl, readMetadata } from '../../core/discovery.js';
+import { CONTRACT_PATHS, REVOCATION_LANES, ROUTES } from '../../core/routes.js';
 import { createFakeIssuer } from '../../testing/index.js';
 
 const ISSUER = 'https://bridge.test/identity-access/apps/app-1';
@@ -85,5 +86,124 @@ describe('discovery: the issuer is the only setting', () => {
       const fake = createFakeIssuer({ metadata: 'standard' });
       expect((await discover(fake.issuer, fake.fetch)).metadata.derived).toBe(true);
     });
+  });
+});
+
+describe("discovery: Bridge's own discovery document", () => {
+  const pinned = JSON.parse(readFileSync(new URL('../../../contract/discovery.v2.json', import.meta.url), 'utf8')) as {
+    source: { commit: string };
+    document: Record<string, unknown> & { issuer: string; bridge_endpoints: Record<string, Record<string, string>> };
+  };
+  const doc = pinned.document;
+
+  it('names the commit it came from', () => {
+    expect(pinned.source.commit).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('is read as it is: the app, the audience and all four lanes', () => {
+    const metadata = readMetadata(doc.issuer, doc);
+    expect(metadata.derived).toBe(false);
+    expect(metadata.appId).toBe(doc['bridge_app']);
+    expect(metadata.audience).toBe(doc['bridge_access_token_audience']);
+    expect(Object.keys(metadata.revocationLanes).sort()).toEqual([...REVOCATION_LANES].sort());
+  });
+
+  it('gets the five standard endpoints from the standard fields', () => {
+    const { endpoints } = readMetadata(doc.issuer, doc);
+    expect([endpoints.sign_in, endpoints.token, endpoints.revoke, endpoints.introspect, endpoints.jwks]).toEqual([
+      doc['authorization_challenge_endpoint'],
+      doc['token_endpoint'],
+      doc['revocation_endpoint'],
+      doc['introspection_endpoint'],
+      doc['jwks_uri'],
+    ]);
+  });
+
+  it('every name Bridge lists is one the SDK reads, so a renamed key fails here', () => {
+    for (const name of Object.keys(doc.bridge_endpoints['2'] ?? {})) expect(Object.keys(CONTRACT_PATHS)).toContain(name);
+  });
+
+  it('offers every route the SDK calls, except the invites Bridge does not list yet', () => {
+    const endpoints = endpointsFrom(readMetadata(doc.issuer, doc));
+    const missing = Object.entries(ROUTES).filter(([, route]) => !endpoints.offers(route)).map(([name]) => name);
+    expect(missing.sort()).toEqual(['inviteAccept', 'invitePreview']);
+  });
+
+  it('the addresses it gives are the contract\'s paths', () => {
+    const endpoints = endpointsFrom(readMetadata(doc.issuer, doc));
+    for (const route of Object.values(ROUTES)) {
+      if (!endpoints.offers(route)) continue;
+      const path = new URL(endpoints.url(route, { memberId: 'm', inviteId: 'i', session: 's', sessionId: 's', key: 'k', token: 't' })).pathname;
+      const expected = (CONTRACT_PATHS[route.at] + route.path).replace('{appId}', String(doc['bridge_app'])).replace(/\{[a-zA-Z]+\}/g, (name) => ({ '{memberId}': 'm', '{inviteId}': 'i', '{session}': 's', '{sessionId}': 's', '{key}': 'k', '{token}': 't' })[name] ?? name);
+      expect(path).toBe(expected);
+    }
+  });
+});
+
+describe('discovery: credentials travel only over TLS', () => {
+  it.each([
+    ['https://bridge.test/identity-access/apps/app-1', true],
+    ['http://localhost:3400/identity-access/apps/app-1', true],
+    ['http://127.0.0.1:3400/identity-access/apps/app-1', true],
+    ['http://[::1]:3400/identity-access/apps/app-1', true],
+    ['http://bridge.test/identity-access/apps/app-1', false],
+    ['https://user:pw@bridge.test/identity-access/apps/app-1', false],
+  ])('accepts the issuer %s: %s', async (issuer, accepted) => {
+    const fetchFn = (async () => Response.json({ ...standard, issuer })) as unknown as typeof fetch;
+    const result = discover(issuer, fetchFn);
+    if (accepted) await expect(result).resolves.toMatchObject({ metadata: { issuer } });
+    else await expect(result).rejects.toMatchObject({ kind: 'misconfigured', message: expect.stringMatching(/must be an https/) });
+  });
+
+  it('refuses metadata that lists an endpoint or a lane over plain http', () => {
+    expect(() => readMetadata(ISSUER, { ...standard, bridge_app: 'app-1', bridge_endpoints: { '2': { accounts: 'http://bridge.test/v2/accounts' } } })).toThrow(/"accounts" at an address that is not https/);
+    expect(() => readMetadata(ISSUER, { ...standard, bridge_app: 'app-1', bridge_revocation_lanes: { billing: 'http://bridge.test/x' }, bridge_endpoints: { '2': { accounts: 'https://bridge.test/v2/accounts' } } })).toThrow(/billing lane/);
+    expect(() => readMetadata(ISSUER, { ...standard, token_endpoint: 'http://bridge.test/v2/identity-access/apps/app-1/token' })).toThrow(/token_endpoint/);
+  });
+
+  it('does not take the standard fields for version 2 when they are for another version', () => {
+    const metadata = readMetadata(ISSUER, { ...standard, bridge_app: 'app-1', bridge_api_version: 3, bridge_endpoints: { '2': { sign_in: 'https://bridge.test/v2/s', token: 'https://bridge.test/v2/t', accounts: 'https://bridge.test/v2/accounts' } } });
+    expect(metadata.endpoints.token).toBe('https://bridge.test/v2/t');
+    expect(metadata.endpoints.jwks).toBeUndefined();
+  });
+
+  it('refuses metadata that comes from a redirect', async () => {
+    const fetchFn = (async () => new Response(null, { status: 302, headers: { location: 'https://evil.test/metadata' } })) as unknown as typeof fetch;
+    await expect(discover(ISSUER, fetchFn)).rejects.toMatchObject({ kind: 'misconfigured', message: expect.stringMatching(/redirect/) });
+  });
+});
+
+describe('discovery: a failed read is tried again, never kept', () => {
+  it('waits longer after each failure, then recovers', async () => {
+    let now = 0;
+    let fail = 2;
+    let reads = 0;
+    const fetchFn = (async () => {
+      reads += 1;
+      return fail-- > 0 ? new Response(null, { status: 503 }) : Response.json(standard);
+    }) as unknown as typeof fetch;
+    const discovery = new Discovery(ISSUER, fetchFn, { retryMinMs: 1000, now: () => now });
+    await expect(discovery.get()).rejects.toMatchObject({ kind: 'unavailable' });
+    // Within the wait: the last error at once, without asking again.
+    await expect(discovery.get()).rejects.toMatchObject({ kind: 'unavailable' });
+    expect(reads).toBe(1);
+    now = 1000;
+    await expect(discovery.get()).rejects.toMatchObject({ kind: 'unavailable' });
+    expect(discovery.retryInMs()).toBe(2000);
+    now = 3000;
+    await expect(discovery.get()).resolves.toMatchObject({ metadata: { appId: 'app-1' } });
+    expect(reads).toBe(3);
+    // Kept once read.
+    await discovery.get();
+    expect(reads).toBe(3);
+  });
+
+  it('reads at once when asked to, even within the wait', async () => {
+    let fail = true;
+    const fetchFn = (async () => (fail ? new Response(null, { status: 503 }) : Response.json(standard))) as unknown as typeof fetch;
+    const discovery = new Discovery(ISSUER, fetchFn, { retryMinMs: 60_000 });
+    await expect(discovery.get()).rejects.toBeDefined();
+    fail = false;
+    await expect(discovery.get({ now: true })).resolves.toBeDefined();
   });
 });

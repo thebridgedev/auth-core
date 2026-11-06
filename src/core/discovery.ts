@@ -1,5 +1,6 @@
 import { BridgeError } from './errors.js';
 import { call, type Fetch } from './http.js';
+import { secureUrl } from './urls.js';
 import {
   API_VERSION,
   CONTRACT_PATHS,
@@ -58,18 +59,21 @@ function trimSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
 
+/** Every address the metadata gives must be https (http only on this machine, for development). */
 function absoluteUrl(value: unknown): string | null {
-  if (typeof value !== 'string' || value === '') return null;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' || url.protocol === 'http:' ? trimSlash(value) : null;
-  } catch {
-    return null;
-  }
+  return secureUrl(value, 'https:');
 }
 
 function misconfigured(message: string): BridgeError {
   return new BridgeError('misconfigured', message);
+}
+
+/** An address the metadata lists: null when it lists none, refused when it lists one that is not https. */
+function listedUrl(value: unknown, name: string): string | null {
+  if (value === undefined || value === null) return null;
+  const url = absoluteUrl(value);
+  if (url === null) throw misconfigured(`The issuer's metadata lists "${name}" at an address that is not https: ${String(value)}.`);
+  return url;
 }
 
 /** The metadata document's address for an issuer. */
@@ -98,10 +102,12 @@ export function readMetadata(issuer: string, document: unknown): IssuerMetadata 
     throw misconfigured(`The issuer does not offer version ${API_VERSION} of Bridge's API, which this SDK speaks (it offers: ${offered}).`);
   }
   const listed = v2 as Record<string, unknown>;
+  // The standard fields point at the version `bridge_api_version` names: they stand in for version 2's only when that is 2.
+  const standardIsV2 = doc['bridge_api_version'] === undefined || String(doc['bridge_api_version']) === API_VERSION;
   const endpoints: Partial<Record<EndpointName, string>> = {};
   for (const name of ENDPOINT_NAMES) {
-    const standard = STANDARD_FIELDS[name];
-    const url = absoluteUrl(listed[name]) ?? (standard === undefined ? null : absoluteUrl(doc[standard]));
+    const standard = standardIsV2 ? STANDARD_FIELDS[name] : undefined;
+    const url = listedUrl(listed[name], name) ?? (standard === undefined ? null : listedUrl(doc[standard], standard));
     if (url !== null) endpoints[name] = url;
   }
   const appId = doc['bridge_app'];
@@ -113,7 +119,7 @@ export function readMetadata(issuer: string, document: unknown): IssuerMetadata 
   const givenLanes = doc['bridge_revocation_lanes'];
   if (givenLanes !== null && typeof givenLanes === 'object') {
     for (const lane of REVOCATION_LANES) {
-      const url = absoluteUrl((givenLanes as Record<string, unknown>)[lane]);
+      const url = listedUrl((givenLanes as Record<string, unknown>)[lane], `${lane} lane`);
       if (url !== null) lanes[lane] = url;
     }
   }
@@ -140,7 +146,7 @@ export function readMetadata(issuer: string, document: unknown): IssuerMetadata 
  * fields: a server must be given it.
  */
 function derivedMetadata(issuer: string, doc: Readonly<Record<string, unknown>>): IssuerMetadata {
-  const tokenEndpoint = absoluteUrl(doc['token_endpoint']);
+  const tokenEndpoint = listedUrl(doc['token_endpoint'], 'token_endpoint');
   const match = tokenEndpoint?.match(/^(.*\/v2)\/identity-access\/apps\/([^/]+)\/token$/);
   if (tokenEndpoint === null || tokenEndpoint === undefined || match === null || match === undefined) {
     throw misconfigured(`The issuer's metadata lists no version ${API_VERSION} endpoints (bridge_endpoints), and its token endpoint is not one this SDK can work them out from.`);
@@ -151,7 +157,7 @@ function derivedMetadata(issuer: string, doc: Readonly<Record<string, unknown>>)
   const endpoints: Partial<Record<EndpointName, string>> = {};
   for (const name of ENDPOINT_NAMES) {
     const standard = STANDARD_FIELDS[name];
-    const url = standard === undefined ? null : absoluteUrl(doc[standard]);
+    const url = standard === undefined ? null : listedUrl(doc[standard], standard);
     endpoints[name] = url ?? at(CONTRACT_PATHS[name]);
   }
   // Not served yet: refused as `not-offered` rather than called.
@@ -183,7 +189,72 @@ export function endpointsFrom(metadata: IssuerMetadata): Endpoints {
 
 /** Fetches and reads the issuer's metadata. */
 export async function discover(issuer: string, fetchFn: Fetch): Promise<Endpoints> {
-  if (absoluteUrl(issuer) === null) throw misconfigured(`The issuer must be an absolute https address; got "${issuer}".`);
+  if (absoluteUrl(issuer) === null) throw misconfigured(`The issuer must be an https address (http only on localhost); got "${issuer}".`);
   const answer = await call<unknown>(fetchFn, metadataUrl(issuer), { method: 'GET' });
   return endpointsFrom(readMetadata(issuer, answer.body));
+}
+
+export interface DiscoveryOptions {
+  /** The first wait after a failed read. @default 1000 */
+  readonly retryMinMs?: number;
+  /** The longest wait between reads. @default 60000 */
+  readonly retryMaxMs?: number;
+  readonly now?: () => number;
+}
+
+/**
+ * The issuer's metadata, read once it can be. A failed read is never kept:
+ * the next call reads again, waiting longer after each failure, so a client
+ * started while Bridge was briefly unreachable recovers on its own. Within
+ * the wait, calls fail at once with the last error rather than asking again.
+ */
+export class Discovery {
+  private endpoints: Endpoints | null = null;
+  private inflight: Promise<Endpoints> | null = null;
+  private lastError: unknown = null;
+  private nextTryAt = 0;
+  private waitMs: number;
+  private readonly now: () => number;
+
+  constructor(
+    private readonly issuer: string,
+    private readonly fetchFn: Fetch,
+    private readonly options: DiscoveryOptions = {},
+  ) {
+    this.now = options.now ?? Date.now;
+    this.waitMs = options.retryMinMs ?? 1000;
+  }
+
+  /** The endpoints, once read; null before. */
+  current(): Endpoints | null {
+    return this.endpoints;
+  }
+
+  /** How long until the next read may be tried, in ms. 0 when it may be tried now. */
+  retryInMs(): number {
+    return Math.max(0, this.nextTryAt - this.now());
+  }
+
+  /** The endpoints, reading them when they are not held. `now` reads even within the wait (a person just asked for something). */
+  get(options: { readonly now?: boolean } = {}): Promise<Endpoints> {
+    if (this.endpoints !== null) return Promise.resolve(this.endpoints);
+    if (this.inflight !== null) return this.inflight;
+    if (!options.now && this.lastError !== null && this.now() < this.nextTryAt) return Promise.reject(this.lastError);
+    this.inflight = discover(this.issuer, this.fetchFn)
+      .then((endpoints) => {
+        this.endpoints = endpoints;
+        this.lastError = null;
+        return endpoints;
+      })
+      .catch((error: unknown) => {
+        this.lastError = error;
+        this.nextTryAt = this.now() + this.waitMs;
+        this.waitMs = Math.min(this.options.retryMaxMs ?? 60_000, this.waitMs * 2);
+        throw error;
+      })
+      .finally(() => {
+        this.inflight = null;
+      });
+    return this.inflight;
+  }
 }

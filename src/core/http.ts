@@ -52,6 +52,20 @@ async function readBody(response: Response): Promise<unknown> {
   }
 }
 
+/**
+ * A fetch that never follows a redirect, for the token checks: their key set,
+ * revocation lanes and key introspection are read only where the issuer said.
+ */
+export function withoutRedirects(fetchFn: Fetch): Fetch {
+  return (async (input: Parameters<Fetch>[0], init?: Parameters<Fetch>[1]) => {
+    const response = await fetchFn(input, { ...init, redirect: 'manual' });
+    if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400 && response.status !== 304)) {
+      throw new TypeError('Bridge answered with a redirect, which is not followed.');
+    }
+    return response;
+  }) as Fetch;
+}
+
 export async function call<T>(fetchFn: Fetch, url: string, options: CallOptions): Promise<Answer<T>> {
   const headers: Record<string, string> = { Accept: 'application/json', ...options.headers };
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
@@ -66,12 +80,17 @@ export async function call<T>(fetchFn: Fetch, url: string, options: CallOptions)
       headers,
       ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
+      // Never followed: a redirect would carry the token or key, or the metadata, to an address the issuer did not list.
+      redirect: 'manual',
     });
   } catch (cause) {
     if (options.signal?.aborted) throw cause;
     throw new BridgeError('network', `Could not reach Bridge (${options.method} ${new URL(url).pathname}).`, { cause });
   }
 
+  if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400 && response.status !== 304)) {
+    throw new BridgeError('misconfigured', `Bridge answered ${options.method} ${new URL(url).pathname} with a redirect, which the SDK does not follow.`, { status: response.status });
+  }
   const etag = response.headers.get('etag');
   if (response.status === 304) return { status: 304, body: undefined as T, etag: etag ?? options.etag ?? null, notModified: true };
   const body = await readBody(response);

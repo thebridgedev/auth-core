@@ -1,0 +1,65 @@
+{
+  "about": "The issuer's metadata exactly as Bridge's discovery endpoint builds it, field for field, with the values of Bridge's own test of it. The revocation lanes are the four every app's copy carries when deployed. The discovery test checks that the SDK reads this document as it is.",
+  "source": {
+    "file": "microservices/identity-access/src/controllers.ts (discovery) and identity-access.test.ts",
+    "commit": "dee40c5276d16bc3ed9a5760980f0037994a2043"
+  },
+  "document": {
+    "issuer": "https://bridge.test/identity-access/apps/app-1",
+    "authorization_challenge_endpoint": "https://bridge.test/v2/identity-access/apps/app-1/sign-in",
+    "token_endpoint": "https://bridge.test/v2/identity-access/apps/app-1/token",
+    "revocation_endpoint": "https://bridge.test/v2/identity-access/apps/app-1/revoke",
+    "introspection_endpoint": "https://bridge.test/v2/identity-access/apps/app-1/introspect",
+    "jwks_uri": "https://bridge.test/v2/identity-access/apps/app-1/jwks.json",
+    "response_types_supported": [
+      "code"
+    ],
+    "grant_types_supported": [
+      "authorization_code",
+      "refresh_token",
+      "client_credentials"
+    ],
+    "code_challenge_methods_supported": [
+      "S256"
+    ],
+    "token_endpoint_auth_methods_supported": [
+      "none",
+      "client_secret_post"
+    ],
+    "subject_types_supported": [
+      "public"
+    ],
+    "id_token_signing_alg_values_supported": [
+      "PS256"
+    ],
+    "authorization_response_iss_parameter_supported": true,
+    "bridge_app": "app-1",
+    "bridge_api_version": 2,
+    "bridge_access_token_audience": "https://bridge.test",
+    "bridge_revocation_lanes": {
+      "identity-access": "https://bridge.test/v2/identity-access/apps/app-1/revocations/identity-access",
+      "app-registry": "https://bridge.test/v2/app-registry/apps/app-1/revocations/app-registry",
+      "accounts": "https://bridge.test/v2/accounts/apps/app-1/revocations/accounts",
+      "billing": "https://bridge.test/v2/billing/apps/app-1/revocations/billing"
+    },
+    "bridge_endpoints": {
+      "2": {
+        "sign_in_options": "https://bridge.test/v2/identity-access/apps/app-1/sign-in-options",
+        "sign_up": "https://bridge.test/v2/identity-access/apps/app-1/sign-up",
+        "sign_up_verify": "https://bridge.test/v2/identity-access/apps/app-1/sign-up/verify",
+        "password_forgot": "https://bridge.test/v2/identity-access/apps/app-1/password/forgot",
+        "password": "https://bridge.test/v2/identity-access/apps/app-1/password",
+        "sign_out": "https://bridge.test/v2/identity-access/sign-out",
+        "sessions": "https://bridge.test/v2/identity-access/sessions",
+        "accounts": "https://bridge.test/v2/accounts",
+        "billing": "https://bridge.test/v2/billing",
+        "flags": "https://bridge.test/v2/flags",
+        "flags_visitor": "https://bridge.test/v2/flags/apps/app-1",
+        "live": "https://bridge.test/v2/live",
+        "live_visitor": "https://bridge.test/v2/live/apps/app-1",
+        "live_connection": "https://bridge.test/v2/live/apps/app-1/connection",
+        "events_and_logs": "https://bridge.test/v2/events-and-logs"
+      }
+    }
+  }
+}

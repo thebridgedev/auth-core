@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { BridgeError, errorFromAnswer, parseRetryAfter } from '../../core/errors.js';
-import { call, platformFetch } from '../../core/http.js';
+import { call, platformFetch, withoutRedirects } from '../../core/http.js';
 import { fillPath } from '../../core/routes.js';
 import { localStorageAdapter, memoryStorage, readJson, storageKey } from '../../core/storage.js';
 import { Emitter, Store, createPkce, isS256Challenge, pkceChallenge, readJwtPayload } from '../../core/util.js';
@@ -132,6 +132,18 @@ describe('http', () => {
   it('throws the refusal as a BridgeError', async () => {
     const fetchFn = (async () => Response.json({ error: 'wrong_credentials' }, { status: 400 })) as typeof fetch;
     await expect(call(fetchFn, 'https://bridge.test/x', { method: 'POST', body: {} })).rejects.toMatchObject({ kind: 'wrong-credentials' });
+  });
+
+  it('never follows a redirect, so a token or key never reaches an address Bridge did not give', async () => {
+    let init: RequestInit | undefined;
+    const fetchFn = (async (_: RequestInfo | URL, given?: RequestInit) => {
+      init = given;
+      return new Response(null, { status: 307, headers: { location: 'https://evil.test/' } });
+    }) as typeof fetch;
+    await expect(call(fetchFn, 'https://bridge.test/v2/billing/usage', { method: 'POST', apiKey: 'k', body: {} })).rejects.toMatchObject({ kind: 'misconfigured', status: 307 });
+    expect(init?.redirect).toBe('manual');
+    const guarded = withoutRedirects(fetchFn);
+    await expect(guarded('https://bridge.test/jwks.json')).rejects.toThrow(/redirect/);
   });
 
   it('binds the platform fetch so it can be stored and called as a method', async () => {
