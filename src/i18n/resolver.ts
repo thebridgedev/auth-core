@@ -1,7 +1,7 @@
 import { en, LOCALES, type MessageKey, type Messages } from './messages.js';
 
 /**
- * Message resolution for the SDK auth components (TBP-630).
+ * Message resolution for the SDK auth components.
  *
  * ## Synchronous, deliberately
  *
@@ -29,7 +29,7 @@ import { en, LOCALES, type MessageKey, type Messages } from './messages.js';
  * person who configured it. An app that sets `locale: 'de'` today gets English,
  * no error, nothing in the UI to notice — which is exactly how a consumer
  * shipping twelve languages discovered ten of them were English only after
- * release (TBP-633).
+ * release.
  *
  * So the fallback warns on the console, once per locale, in non-production
  * builds. Also standard: react-intl, vue-i18n and i18next all warn in dev and
@@ -89,7 +89,8 @@ export function normalizeLocale(locale: string): string {
  */
 function isDevelopment(): boolean {
   try {
-    return typeof process === 'undefined' || process.env?.NODE_ENV !== 'production';
+    const runtime = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process;
+    return runtime === undefined || runtime.env?.['NODE_ENV'] !== 'production';
   } catch {
     return true;
   }

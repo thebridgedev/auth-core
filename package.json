@@ -1,7 +1,7 @@
 {
   "name": "@nebulr-group/bridge-auth-core",
-  "version": "0.8.1-m59.1",
-  "description": "The Bridge core client: sign-in flows, sessions and token refresh, feature flags, billing state and the management API for any JavaScript app.",
+  "version": "1.0.0-alpha.0",
+  "description": "The Bridge client core: sign-in in your own pages, sessions with refresh across tabs, workspaces and teams, flag results, billing, live updates, and server-side token checks that honour revocation.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -11,10 +11,14 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
-    "./backend": {
-      "types": "./dist/backend/index.d.ts",
-      "import": "./dist/backend/index.js",
-      "default": "./dist/backend/index.js"
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "edge-light": "./dist/server/index.js",
+      "workerd": "./dist/server/index.js",
+      "worker": "./dist/server/index.js",
+      "node": "./dist/server/index.js",
+      "import": "./dist/server/index.js",
+      "default": "./dist/server/index.js"
     },
     "./verifier": {
       "types": "./dist/verifier/index.d.ts",
@@ -25,15 +29,32 @@
       "node": "./dist/verifier/index.js",
       "import": "./dist/verifier/index.js",
       "default": "./dist/verifier/index.js"
-    }
+    },
+    "./i18n": {
+      "types": "./dist/i18n/index.d.ts",
+      "import": "./dist/i18n/index.js",
+      "default": "./dist/i18n/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "import": "./dist/testing/index.js",
+      "default": "./dist/testing/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "typesVersions": {
     "*": {
-      "backend": [
-        "./dist/backend/index.d.ts"
+      "server": [
+        "./dist/server/index.d.ts"
       ],
       "verifier": [
         "./dist/verifier/index.d.ts"
+      ],
+      "i18n": [
+        "./dist/i18n/index.d.ts"
+      ],
+      "testing": [
+        "./dist/testing/index.d.ts"
       ]
     }
   },
@@ -44,6 +65,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "typecheck": "tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist",
@@ -59,7 +81,6 @@
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
   },
-  "peerDependencies": {},
   "repository": {
     "type": "git",
     "url": "https://github.com/thebridgedev/auth-core"
@@ -67,27 +88,30 @@
   "license": "MIT",
   "homepage": "https://thebridge.dev/docs/getting-started/",
   "keywords": [
-    "typescript",
-    "jwt",
-    "passkeys",
-    "magic-link",
-    "management-api",
     "the-bridge",
     "bridge",
     "authentication",
     "auth",
-    "login",
-    "sso",
-    "feature-flags",
-    "stripe",
-    "subscriptions",
-    "billing",
-    "plan-limits",
+    "sign-in",
+    "pkce",
+    "oauth",
+    "openid",
     "multi-tenant",
-    "rbac",
-    "saas"
+    "workspaces",
+    "feature-flags",
+    "openfeature",
+    "ofrep",
+    "billing",
+    "subscriptions",
+    "usage-metering",
+    "jwt",
+    "revocation",
+    "typescript"
   ],
   "bugs": {
     "url": "https://github.com/thebridgedev/auth-core/issues"
-  }
+  },
+  "sideEffects": [
+    "./dist/index.js"
+  ]
 }

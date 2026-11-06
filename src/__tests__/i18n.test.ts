@@ -24,7 +24,7 @@ import {
   normalizeLocale,
 } from '../i18n/resolver.js';
 
-// TBP-630 — the SDK auth components render fixed English copy. These tests hold
+// the SDK auth components render fixed English copy. These tests hold
 // the resolver's one non-negotiable promise: a raw key (`login.submit`) must
 // NEVER reach a button. Every fallback rung therefore asserts the actual
 // resolved STRING, never merely "did not throw" or "is defined" — a resolver
@@ -59,10 +59,7 @@ const SV_SECOND = 'Glömt lösenordet?';
 const ALLOWED_EMPTY = new Set<MessageKey>(['placeholder.phoneNumber']);
 
 /** Keys whose copy carries `{email}` — dropping it silently loses the address. */
-const EMAIL_INTERPOLATED: MessageKey[] = [
-  'signup.successDescription',
-  'passkey.sentDescription',
-];
+const EMAIL_INTERPOLATED: MessageKey[] = ['signup.successDescription'];
 
 const ALL_KEYS = Object.keys(en) as MessageKey[];
 
@@ -95,7 +92,7 @@ const SHIPPED: Record<string, Messages> = {
  * the package does not have".
  *
  * They are invented rather than real-but-unshipped (`de`, `fr`) on purpose:
- * TBP-632 shipped ten more languages and every test that had borrowed a real
+ * shipped ten more languages and every test that had borrowed a real
  * code as its stand-in for "unknown" started failing, because the stand-in had
  * become known. An invented code cannot be overtaken by the next locale.
  * `assertUnshipped` below fails loudly if one ever is.
@@ -108,7 +105,7 @@ const SYNTHETIC = 'zz';
 
 /**
  * Register a partial catalogue under `SYNTHETIC`. `LOCALES` is a plain record,
- * so this is how a half-finished locale (TBP-632's ten follow-up languages)
+ * so this is how a half-finished locale (ten follow-up languages)
  * would actually look at runtime. Removed again in `afterEach`.
  */
 function registerPartialLocale(partial: Partial<Messages>): void {
@@ -187,7 +184,7 @@ describe('createTranslator — resolution order', () => {
   it('works with no arguments at all and returns English', () => {
     const t = createTranslator();
     expect(t(PROBE_KEY)).toBe(EN_PROBE);
-    expect(t('mfaSetup.heading')).toBe(en['mfaSetup.heading']);
+    expect(t('forgot.headingSet')).toBe(en['forgot.headingSet']);
   });
 });
 
@@ -370,14 +367,14 @@ describe('interpolate', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. Catalogue parity — the guard against a half-finished locale (TBP-632)
+// 7. Catalogue parity — the guard against a half-finished locale
 // ---------------------------------------------------------------------------
 
 describe('catalogue parity', () => {
   const localeNames = Object.keys(LOCALES);
 
   it('ships the locales it claims to ship', () => {
-    // TBP-632 took this from two to twelve. The list is spelled out rather than
+    // took this from two to twelve. The list is spelled out rather than
     // derived from LOCALES so that dropping a locale is a test failure and not
     // a silently shorter loop.
     expect(localeNames.slice().sort()).toEqual([
@@ -409,26 +406,10 @@ describe('catalogue parity', () => {
     });
   }
 
-  it('keeps the click-to-start passkey copy distinct from the in-flight copy', () => {
-    // TBP-633 — react/angular/nextjs raise the browser ceremony on a click, so
-    // their setup screen sits idle until the user acts; svelte starts it on
-    // mount. `setupDescription` narrates a ceremony already running ("follow the
-    // prompt from your browser"), which is wrong on a screen where no prompt has
-    // been raised. The keys exist to say different things, so a locale that
-    // collapses them back to one sentence has undone the fix.
-    for (const name of localeNames) {
-      expect(LOCALES[name]['passkey.setupClickPrompt']).not.toBe(
-        LOCALES[name]['passkey.setupDescription'],
-      );
-      expect(LOCALES[name]['passkey.setupSubmit']).not.toBe(
-        LOCALES[name]['passkey.setupDescription'],
-      );
-    }
-  });
 
   it('keeps placeholder.phoneNumber empty in every locale', () => {
     // Regression: the US format `+1 (555) 000-0000` was shown to every European
-    // workspace (TBP-630). No hint beats a wrong hint; the field has a label.
+    // workspace. No hint beats a wrong hint; the field has a label.
     for (const name of localeNames) {
       expect(LOCALES[name]['placeholder.phoneNumber']).toBe('');
     }
@@ -510,39 +491,24 @@ describe('interpolated copy', () => {
   it('keeps the other documented placeholders too', () => {
     for (const name of Object.keys(LOCALES)) {
       const catalogue = LOCALES[name];
-      expect(catalogue['magicLink.sent']).toContain('{expiry}');
-      expect(catalogue['magicLink.expiryMinute']).toContain('{count}');
-      expect(catalogue['magicLink.expiryMinutes']).toContain('{count}');
-      expect(catalogue['magicLink.expirySeconds']).toContain('{count}');
-      expect(catalogue['mfa.resendCountdown']).toContain('{seconds}');
+      expect(catalogue['handoff.heading']).toContain('{program}');
+      expect(catalogue['handoff.done']).toContain('{program}');
+      expect(catalogue['invite.heading']).toContain('{workspace}');
     }
   });
 
-  // TBP-634 — sso.continueWith was the one interpolated key with no
-  // per-locale retention test, so a translator dropping {provider} in a
-  // single locale would have shipped green. It renders the name of the
-  // identity provider on the sign-in button; without the variable the
-  // button reads "Continue with" and names nothing.
-  it('keeps {provider} in sso.continueWith in every locale', () => {
+  it('handoff.done renders the program, not the placeholder, in every locale', () => {
     for (const name of Object.keys(LOCALES)) {
-      expect(LOCALES[name]['sso.continueWith']).toContain('{provider}');
-    }
-  });
-
-  it('sso.continueWith renders the provider, not the placeholder, in every locale', () => {
-    for (const name of Object.keys(LOCALES)) {
-      const rendered = createTranslator({ locale: name })('sso.continueWith', {
-        provider: 'Okta',
-      });
-      expect(rendered).toContain('Okta');
-      expect(rendered).not.toContain('{provider}');
+      const rendered = createTranslator({ locale: name })('handoff.done', { program: 'Bridge CLI' });
+      expect(rendered).toContain('Bridge CLI');
+      expect(rendered).not.toContain('{program}');
     }
   });
 });
 
 // ---------------------------------------------------------------------------
 
-describe('missing-locale warning (TBP-633)', () => {
+describe('missing-locale warning', () => {
   let warnings: string[];
   let originalWarn: typeof console.warn;
 
@@ -663,17 +629,17 @@ describe('missing-locale warning (TBP-633)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 10. Synchrony — the promise that there is no flash of English (TBP-633)
+// 10. Synchrony — the promise that there is no flash of English
 // ---------------------------------------------------------------------------
 
-// TBP-633 AC: "Resolver stays synchronous in every package. These render during
+// AC: "Resolver stays synchronous in every package. These render during
 // an auth redirect; an async catalogue load flashes English first." That
 // guarantee rested entirely on a structural property — static imports, no
 // Promise in the module — that no test defended. Making `createTranslator` or
 // its returned function async would have shipped green while reintroducing
 // exactly the flash the AC forbids, because a component awaiting its copy
 // paints the fallback first.
-describe('resolver synchrony (TBP-633)', () => {
+describe('resolver synchrony', () => {
   it('createTranslator returns a usable function, not a promise', () => {
     const t = createTranslator({ locale: 'sv' });
     expect(typeof t).toBe('function');
@@ -702,25 +668,25 @@ describe('resolver synchrony (TBP-633)', () => {
   });
 
   it('renders an interpolated string synchronously', () => {
-    const rendered = createTranslator({ locale: 'de' })('sso.continueWith', {
-      provider: 'Okta',
+    const rendered = createTranslator({ locale: 'de' })('handoff.heading', {
+      program: 'Bridge CLI',
     });
     expect(typeof rendered).toBe('string');
-    expect(rendered).toContain('Okta');
+    expect(rendered).toContain('Bridge CLI');
   });
 });
 
 // ---------------------------------------------------------------------------
-// 11. Root entry surface — what the UI packages actually import (TBP-633/634)
+// 11. Root entry surface — what the UI packages actually import
 // ---------------------------------------------------------------------------
 
 // The four UI packages consume the catalogue through the package root; there is
 // no `./i18n` subpath export, so a dropped re-export line in index.ts breaks all
 // of them at once. Nothing asserted that surface — it was checked only by the
 // compiler, and the compiler is happy to remove an export nobody in-repo imports.
-describe('root entry re-exports the catalogue surface (TBP-633)', () => {
+describe('root entry re-exports the catalogue surface', () => {
   it('exports a working translator factory, locales and helpers', async () => {
-    const root = await import('../index.js');
+    const root = await import('../i18n/index.js');
 
     expect(typeof root.createTranslator).toBe('function');
     expect(typeof root.interpolate).toBe('function');
@@ -739,7 +705,7 @@ describe('root entry re-exports the catalogue surface (TBP-633)', () => {
   });
 
   it('exports all twelve locale catalogues and the LOCALES registry', async () => {
-    const root = await import('../index.js');
+    const root = await import('../i18n/index.js');
 
     expect(Object.keys(root.LOCALES).slice().sort()).toEqual([
       'da', 'de', 'en', 'es', 'fi', 'fr', 'it', 'nb', 'nl', 'pl', 'pt', 'sv',

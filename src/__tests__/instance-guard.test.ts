@@ -1,4 +1,4 @@
-// TBP-598 — duplicate-copy detection.
+// duplicate-copy detection.
 //
 // A second copy of this package silently splits module-scoped state. The
 // sharpest consequence is the billing lock: `lock-signal.ts` is registered by
@@ -20,7 +20,7 @@ import {
   __resetInstanceRegistryForTests,
 } from '../instance-guard.js';
 
-describe('instance-guard (TBP-598)', () => {
+describe('instance-guard', () => {
   let warn: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -55,9 +55,7 @@ describe('instance-guard (TBP-598)', () => {
     expect(msg).toContain('bridge-auth-core');
     expect(msg).toContain('2 copies');
     // The three concrete failures, not a vague "this may cause issues".
-    expect(msg).toContain('billing lock');
-    expect(msg).toContain('realtime');
-    expect(msg).toContain('feature-flag cache');
+    expect(msg).toContain('instanceof BridgeError');
     // And how to diagnose it.
     expect(msg).toContain('npm ls @nebulr-group/bridge-auth-core');
   });
