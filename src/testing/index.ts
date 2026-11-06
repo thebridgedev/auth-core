@@ -152,6 +152,11 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       bridge_revocation_lanes: Object.fromEntries(['identity-access', 'accounts', 'billing', 'app-registry'].map((lane) => [lane, `${v2}/${lane}/apps/${appId}/revocations/${lane}`])),
       bridge_endpoints: {
         '2': {
+          sign_in: `${at}/sign-in`,
+          token: `${at}/token`,
+          revoke: `${at}/revoke`,
+          introspect: `${at}/introspect`,
+          jwks: `${at}/jwks.json`,
           sign_in_options: `${at}/sign-in-options`,
           sign_up: `${at}/sign-up`,
           sign_up_verify: `${at}/sign-up/verify`,

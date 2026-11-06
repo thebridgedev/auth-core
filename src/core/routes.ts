@@ -90,7 +90,7 @@ export const ROUTES = {
   signUpVerify: route('POST', 'sign_up_verify'),
   passwordForgot: route('POST', 'password_forgot'),
   passwordSet: route('POST', 'password'),
-  signInOptions: route('GET', 'sign_in_options', '', 'public sign-in options'),
+  signInOptions: route('GET', 'sign_in_options'),
   inviteAccept: route('POST', 'invites', '/accept', 'accepting an invite'),
   invitePreview: route('GET', 'invite_preview', '/{token}', 'showing an invite before sign-in'),
 
@@ -140,7 +140,7 @@ export const ROUTES = {
   liveHistory: route('GET', 'live', '/history'),
   liveVisitorChannels: route('GET', 'live_visitor', '/channels'),
   liveVisitorHistory: route('GET', 'live_visitor', '/history'),
-  liveConnection: route('GET', 'live_connection', '', 'the Live connection address'),
+  liveConnection: route('GET', 'live_connection'),
 } as const satisfies Readonly<Record<string, Route>>;
 
 export type RouteName = keyof typeof ROUTES;

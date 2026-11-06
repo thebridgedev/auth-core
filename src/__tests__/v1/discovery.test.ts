@@ -57,7 +57,7 @@ describe('discovery: the issuer is the only setting', () => {
   it('answers not-offered for an endpoint the issuer does not list', () => {
     const endpoints = endpointsFrom(readMetadata(ISSUER, { ...standard, bridge_app: 'app-1', bridge_endpoints: { '2': { accounts: 'https://bridge.test/v2/accounts' } } }));
     expect(endpoints.offers(ROUTES.signInOptions)).toBe(false);
-    expect(() => endpoints.url(ROUTES.signInOptions)).toThrow(/does not offer public sign-in options yet/);
+    expect(() => endpoints.url(ROUTES.signInOptions)).toThrow(/does not offer the "sign_in_options" endpoint yet/);
   });
 
   describe('fallback: metadata with the standard fields only', () => {
@@ -108,8 +108,25 @@ describe("discovery: Bridge's own discovery document", () => {
     expect(Object.keys(metadata.revocationLanes).sort()).toEqual([...REVOCATION_LANES].sort());
   });
 
-  it('gets the five standard endpoints from the standard fields', () => {
+  it("lists version 2's own copy of the five standard endpoints, and the SDK reads them there", () => {
+    const listed = doc.bridge_endpoints['2'] ?? {};
     const { endpoints } = readMetadata(doc.issuer, doc);
+    for (const name of ['sign_in', 'token', 'revoke', 'introspect', 'jwks'] as const) {
+      expect(listed[name], name).toBeDefined();
+      expect(endpoints[name]).toBe(listed[name]);
+    }
+  });
+
+  it("prefers version 2's copy to the standard fields, which may point at a newer version", () => {
+    const newer = { ...doc, token_endpoint: 'https://bridge.test/v3/identity-access/apps/app-1/token', jwks_uri: 'https://bridge.test/v3/identity-access/apps/app-1/jwks.json' };
+    const { endpoints } = readMetadata(doc.issuer, newer);
+    expect(endpoints.token).toBe(doc.bridge_endpoints['2']?.['token']);
+    expect(endpoints.jwks).toBe(doc.bridge_endpoints['2']?.['jwks']);
+  });
+
+  it('falls back to the standard fields only for an issuer whose list leaves them out', () => {
+    const { sign_in: _s, token: _t, revoke: _r, introspect: _i, jwks: _j, ...rest } = doc.bridge_endpoints['2'] ?? {};
+    const { endpoints } = readMetadata(doc.issuer, { ...doc, bridge_endpoints: { '2': rest } });
     expect([endpoints.sign_in, endpoints.token, endpoints.revoke, endpoints.introspect, endpoints.jwks]).toEqual([
       doc['authorization_challenge_endpoint'],
       doc['token_endpoint'],

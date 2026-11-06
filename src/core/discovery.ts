@@ -102,7 +102,8 @@ export function readMetadata(issuer: string, document: unknown): IssuerMetadata 
     throw misconfigured(`The issuer does not offer version ${API_VERSION} of Bridge's API, which this SDK speaks (it offers: ${offered}).`);
   }
   const listed = v2 as Record<string, unknown>;
-  // The standard fields point at the version `bridge_api_version` names: they stand in for version 2's only when that is 2.
+  // Version 2's own copy of the standard endpoints comes first. The standard fields point at the version
+  // `bridge_api_version` names: they stand in, for an issuer that lists no copy, only when that is 2.
   const standardIsV2 = doc['bridge_api_version'] === undefined || String(doc['bridge_api_version']) === API_VERSION;
   const endpoints: Partial<Record<EndpointName, string>> = {};
   for (const name of ENDPOINT_NAMES) {
@@ -160,7 +161,7 @@ function derivedMetadata(issuer: string, doc: Readonly<Record<string, unknown>>)
     const url = standard === undefined ? null : listedUrl(doc[standard], standard);
     endpoints[name] = url ?? at(CONTRACT_PATHS[name]);
   }
-  // Not served yet: refused as `not-offered` rather than called.
+  // An issuer that publishes no endpoint list predates these: refused as `not-offered` rather than called.
   for (const pending of ['sign_in_options', 'invites', 'invite_preview', 'live_connection'] as const) delete endpoints[pending];
   const lanes: Partial<Record<RevocationLane, string>> = {};
   for (const lane of REVOCATION_LANES) {

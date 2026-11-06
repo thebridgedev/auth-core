@@ -1,6 +1,6 @@
 {
   "about": "A pinned copy of the endpoints Bridge's public API promises, from Bridge's API contract: each one's method, path, callers and the body fields it accepts. The contract test checks every route the SDK calls, and the fields it sends, against it. To update: copy the contract's endpoints at a newer commit and change `source`.",
-  "source": {"file": "tools/access/public-api.json", "commit": "2e48d0bdbbd00dd39651da611aeb4aa2bce73102"},
+  "source": {"file": "tools/access/public-api.json", "commit": "856d7be229a20916e3377a72636336019f0269ae"},
   "endpoints": [
     {"method": "GET", "path": "/v2/accounts/apps/{appId}/custom-fields", "public": true, "callers": [], "fields": []},
     {"method": "GET", "path": "/v2/accounts/apps/{appId}/revocations/{lane}", "public": true, "callers": [], "fields": []},
@@ -169,6 +169,7 @@
     {"method": "GET", "path": "/v2/identity-access/apps/{appId}/revocations/{lane}", "public": true, "callers": [], "fields": []},
     {"method": "POST", "path": "/v2/identity-access/apps/{appId}/revoke", "public": true, "callers": [], "fields": ["client_id", "token", "token_type_hint"]},
     {"method": "POST", "path": "/v2/identity-access/apps/{appId}/sign-in", "public": true, "callers": [], "fields": ["client_id", "code_challenge", "code_challenge_method", "email", "flow", "password", "workspace"]},
+    {"method": "GET", "path": "/v2/identity-access/apps/{appId}/sign-in-options", "public": true, "callers": [], "fields": []},
     {"method": "POST", "path": "/v2/identity-access/apps/{appId}/sign-up", "public": true, "callers": [], "fields": ["code_challenge", "code_challenge_method", "email", "firstName", "lastName", "password", "workspace"]},
     {"method": "POST", "path": "/v2/identity-access/apps/{appId}/sign-up/verify", "public": true, "callers": [], "fields": ["code_verifier", "token"]},
     {"method": "POST", "path": "/v2/identity-access/apps/{appId}/token", "public": true, "callers": [], "fields": ["client_id", "client_secret", "code", "code_verifier", "grant_type", "key", "redirect_uri", "refresh_token", "scope", "workspace"]},
@@ -180,6 +181,7 @@
     {"method": "DELETE", "path": "/v2/identity-access/sessions/{sessionId}", "public": false, "callers": ["person"], "fields": []},
     {"method": "POST", "path": "/v2/identity-access/sign-out", "public": false, "callers": ["person"], "fields": []},
     {"method": "GET", "path": "/v2/live/apps/{appId}/channels", "public": true, "callers": [], "fields": []},
+    {"method": "GET", "path": "/v2/live/apps/{appId}/connection", "public": true, "callers": [], "fields": []},
     {"method": "GET", "path": "/v2/live/apps/{appId}/history", "public": true, "callers": [], "fields": []},
     {"method": "GET", "path": "/v2/live/channels", "public": false, "callers": ["person"], "fields": []},
     {"method": "GET", "path": "/v2/live/history", "public": false, "callers": ["person"], "fields": []}
