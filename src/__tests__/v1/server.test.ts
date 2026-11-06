@@ -110,8 +110,12 @@ describe('server: token checks that honour every revocation lane', () => {
     const token = await personToken(ring);
     await server.verify(withBearer(token));
     await list.revoke('identity-access', { kind: 'session', id: 'ses-1' });
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    await expect(server.verify(withBearer(token))).rejects.toMatchObject({ kind: 'signed-out', status: 401, code: 'revoked' });
+    let result = await server.check(withBearer(token));
+    for (let tries = 0; result.ok && tries < 100; tries += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      result = await server.check(withBearer(token));
+    }
+    expect(result.ok ? null : { kind: result.error.kind, status: result.error.status, code: result.error.code }).toEqual({ kind: 'signed-out', status: 401, code: 'revoked' });
     await server.close();
   });
 

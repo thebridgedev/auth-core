@@ -88,10 +88,13 @@ describe('billing: the payer, checkout and the portal', () => {
   it('fetches flags again after a plan change, since rules may read the plan', async () => {
     const { client, fake } = await aliceClient();
     fake.setPlans(plans);
-    const before = fake.requests.filter((request) => request.path.endsWith('/evaluate/flags')).length;
+    // Let the load that signing in started settle first.
+    await client.flags.load();
+    const loads = () => fake.requests.filter((request) => request.path.endsWith('/evaluate/flags')).length;
+    const before = loads();
     await client.billing.choosePlan({ plan: 'free' });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(fake.requests.filter((request) => request.path.endsWith('/evaluate/flags')).length).toBe(before + 1);
+    for (let tries = 0; loads() === before && tries < 100; tries += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(loads()).toBe(before + 1);
   });
 
   it('gives the billing portal address', async () => {
