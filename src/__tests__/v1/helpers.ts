@@ -89,3 +89,45 @@ export function tokenCalls(fake: ReturnType<typeof createFakeIssuer>, grant?: st
 }
 
 export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** The body a request was sent with, as an object. */
+export function bodyOf(init?: RequestInit): Record<string, unknown> {
+  try {
+    return typeof init?.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function urlOf(input: RequestInfo | URL): string {
+  return typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+}
+
+/** A fetch that holds refresh grants until released, to put a refresh in flight. */
+export function holdingRefreshes(fake: ReturnType<typeof createFakeIssuer>) {
+  let hold = false;
+  let release: () => void = () => undefined;
+  let held = Promise.resolve();
+  let waiting = 0;
+  const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (hold && urlOf(input).endsWith('/token') && bodyOf(init)['grant_type'] === 'refresh_token') {
+      waiting += 1;
+      await held;
+    }
+    return fake.fetch(input, init);
+  }) as typeof fetch;
+  return {
+    fetch: fetchFn,
+    hold() {
+      hold = true;
+      held = new Promise<void>((resolve) => (release = resolve));
+    },
+    release() {
+      hold = false;
+      release();
+    },
+    get waiting() {
+      return waiting;
+    },
+  };
+}

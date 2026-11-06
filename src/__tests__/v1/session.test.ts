@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { memoryStorage } from '../../core/storage.js';
-import { clientOn, flush, issuerWithPeople, PASSWORD, tokenCalls, twoTabs } from './helpers.js';
+import { bodyOf, clientOn, flush, holdingRefreshes, issuerWithPeople, PASSWORD, sharedChannels, tokenCalls, twoTabs, urlOf } from './helpers.js';
 
 async function signedIn(client: ReturnType<typeof clientOn>, email = 'alice@acme.test') {
   await client.ready;
@@ -234,3 +234,133 @@ describe('session: one refresher across tabs', () => {
     expect(tabs.second.session.get()).toMatchObject({ workspace: { id: 'ws-acme' } });
   });
 });
+
+describe('session: a sign-out always wins over a refresh in flight', () => {
+  it('drops the answer of a refresh that was in flight, and stays signed out', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { fake } = issuerWithPeople();
+      const gate = holdingRefreshes(fake);
+      const storage = memoryStorage();
+      const client = clientOn(fake, { storage, fetch: gate.fetch });
+      await signedIn(client);
+      // The tab comes back after its access token expired: a refresh starts, and the person signs out at once.
+      vi.setSystemTime(Date.now() + 301_000);
+      gate.hold();
+      const refreshing = client.token();
+      await until(() => gate.waiting === 1);
+      const signingOut = client.signOut();
+      gate.release();
+      await expect(refreshing).rejects.toMatchObject({ kind: 'signed-out' });
+      await signingOut;
+      expect(client.session.get()).toEqual({ status: 'signed-out', reason: 'signed-out' });
+      expect(await storage.get(`bridge:${fake.issuer}:session`)).toBeNull();
+      expect(fake.sessions().every((session) => session.ended)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("in every tab: a sign-out waits for another tab's refresh, then ends what it got", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { fake } = issuerWithPeople();
+      const gate = holdingRefreshes(fake);
+      const tabs = twoTabs(fake, { fetch: gate.fetch, loadFlags: false });
+      await signedIn(tabs.first);
+      await tabs.second.ready;
+      await flush();
+      vi.setSystemTime(Date.now() + 301_000);
+      gate.hold();
+      const refreshing = tabs.second.token();
+      await until(() => gate.waiting === 1);
+      const signingOut = tabs.first.signOut();
+      gate.release();
+      await refreshing.catch(() => undefined);
+      await signingOut;
+      await flush();
+      expect(tabs.first.session.get()).toEqual({ status: 'signed-out', reason: 'signed-out' });
+      expect(tabs.second.session.get()).toEqual({ status: 'signed-out', reason: 'signed-out' });
+      expect(await tabs.storage.get(`bridge:${fake.issuer}:session`)).toBeNull();
+      expect(fake.sessions().every((session) => session.ended)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('session: a refresh Bridge refuses with 403 ends the session cleanly', () => {
+  function refusing(fake: ReturnType<typeof issuerWithPeople>['fake'], reason: string) {
+    let refuse = false;
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const body = bodyOf(init);
+      if (refuse && urlOf(input).endsWith('/token') && body['grant_type'] === 'refresh_token' && body['workspace'] === undefined) {
+        return Response.json({ error: 'access_denied', reason }, { status: 403 });
+      }
+      return fake.fetch(input, init);
+    }) as typeof fetch;
+    return { fetch: fetchFn, refuse: () => (refuse = true) };
+  }
+
+  it.each(['user_suspended', 'not_a_member'])('signs out with access-removed when refused as %s, and never retries', async (reason) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { fake } = issuerWithPeople();
+      const gate = refusing(fake, reason);
+      const storage = memoryStorage();
+      const client = clientOn(fake, { storage, fetch: gate.fetch });
+      const outs: string[] = [];
+      client.on('signed-out', ({ reason: why }) => outs.push(why));
+      await signedIn(client);
+      gate.refuse();
+      vi.setSystemTime(Date.now() + 301_000);
+      await expect(client.token()).rejects.toMatchObject({ kind: 'signed-out' });
+      expect(client.session.get()).toEqual({ status: 'signed-out', reason: 'access-removed' });
+      expect(outs).toEqual(['access-removed']);
+      expect(await storage.get(`bridge:${fake.issuer}:session`)).toBeNull();
+      expect(fake.requests.some((request) => request.path.endsWith('/revoke'))).toBe(true);
+      const calls = tokenCalls(fake).length;
+      await expect(client.token()).rejects.toMatchObject({ kind: 'signed-out' });
+      expect(tokenCalls(fake).length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a refused switch to another workspace keeps the session', async () => {
+    const { fake } = issuerWithPeople();
+    const client = clientOn(fake);
+    await signedIn(client);
+    await expect(client.workspaces.switch('ws-globex')).rejects.toMatchObject({ kind: 'forbidden' });
+    expect(client.session.get()).toMatchObject({ status: 'signed-in', workspace: { id: 'ws-acme' } });
+  });
+});
+
+describe('session: two tabs without Web Locks', () => {
+  it('both refresh at once with the same token, both stay signed in, and the session lives on', async () => {
+    const { fake } = issuerWithPeople();
+    const storage = memoryStorage();
+    const channel = sharedChannels();
+    await signedIn(clientOn(fake, { storage }));
+    const first = clientOn(fake, { storage, tabChannel: channel, locks: null, loadFlags: false });
+    const second = clientOn(fake, { storage, tabChannel: channel, locks: null, loadFlags: false });
+    await Promise.all([first.ready, second.ready]);
+    const spent = tokenCalls(fake, 'refresh_token').map((request) => (request.body as { refresh_token: string }).refresh_token);
+    expect(spent.length).toBeGreaterThanOrEqual(2);
+    expect(first.session.get().status).toBe('signed-in');
+    expect(second.session.get().status).toBe('signed-in');
+    expect(fake.sessions().every((session) => !session.ended)).toBe(true);
+    // Whichever token was stored last still works.
+    const later = clientOn(fake, { storage, loadFlags: false });
+    await later.ready;
+    expect(later.session.get().status).toBe('signed-in');
+  });
+});
+
+async function until(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+  const started = performance.now();
+  while (!condition()) {
+    if (performance.now() - started > timeoutMs) throw new Error('timed out waiting');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}

@@ -40,7 +40,13 @@ export type SignedOutReason =
   /** The person signed out, here or in another tab. */
   | 'signed-out'
   /** Bridge ended the session: it expired, was ended from another device, or its password was reset. */
-  | 'session-ended';
+  | 'session-ended'
+  /**
+   * Bridge refused to renew the session: the person was removed from the
+   * workspace or suspended. Ask them to sign in again; they can pick another
+   * workspace then.
+   */
+  | 'access-removed';
 
 export type SessionState =
   | { readonly status: 'loading' }
@@ -163,7 +169,16 @@ export class Session {
   private readonly locks: LockManagerLike | null;
   private readonly channel: ChannelLike | null;
   private access: Access | null = null;
+  /** The sign-in session the tokens belong to (`sid`), for code that keeps things per session. */
+  private sid: string | null = null;
   private generation = 0;
+  /**
+   * Counts the times the session ended here. An answer to a refresh or a
+   * code exchange started before the latest end is never adopted, so a
+   * sign-out always wins over a refresh in flight.
+   */
+  private endings = 0;
+  private signingOut = false;
   private inflight: Promise<void> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private retryMs = RETRY_MIN_MS;
@@ -237,6 +252,11 @@ export class Session {
     return this.access.token;
   }
 
+  /** The sign-in session the current tokens belong to, or null. Changes when someone signs in again. */
+  sessionId(): string | null {
+    return this.store.get().status === 'signed-in' ? this.sid : null;
+  }
+
   /** The access token if one is held, without refreshing. */
   currentAccessToken(): string | null {
     return this.access !== null && this.access.expiresAt > this.now() ? this.access.token : null;
@@ -248,6 +268,7 @@ export class Session {
    * refreshes even when the access token is still fresh (after a 401).
    */
   refresh(options: { readonly workspace?: string; readonly force?: boolean } = {}): Promise<void> {
+    if (this.signingOut) return Promise.reject(signedOut('Signing out.'));
     if (options.workspace === undefined && this.inflight !== null) return this.inflight;
     const seen = this.generation;
     const run = this.withLock(() => this.refreshLocked(options, seen));
@@ -261,6 +282,8 @@ export class Session {
   private async refreshLocked(options: { readonly workspace?: string; readonly force?: boolean }, seen: number): Promise<void> {
     // Another tab refreshed while this one waited for the lock, and handed over its access token.
     if (options.workspace === undefined && !options.force && this.generation !== seen && this.accessFresh()) return;
+    if (this.signingOut) throw signedOut('Signing out.');
+    const endings = this.endings;
     const stored = await this.read();
     if (stored === null) {
       this.endLocally(this.store.get().status === 'signed-in' ? 'signed-out' : 'never-signed-in', false);
@@ -272,6 +295,13 @@ export class Session {
     try {
       answer = await grant(stored.refreshToken);
     } catch (error) {
+      if ((isBridgeError(error, 'forbidden') || isBridgeError(error, 'unsupported-step')) && options.workspace === undefined) {
+        // The person may no longer enter this workspace (removed, suspended, or it now asks for a step this SDK lacks):
+        // renewing will never work, so end the session cleanly instead of retrying.
+        await this.revokeQuietly(stored.refreshToken);
+        this.endLocally('access-removed', true);
+        throw new BridgeError('signed-out', 'Bridge refused to renew the session: access was removed.', { status: 403, code: error.code });
+      }
       if (!isBridgeError(error, 'signed-out')) throw error;
       // Without Web Locks another tab may have spent this refresh token a moment ago: try the one it stored.
       const again = await this.read();
@@ -286,13 +316,31 @@ export class Session {
         throw retryError;
       }
     }
-    await this.adopt(answer, stored.idToken);
+    await this.adoptUnlessEnded(answer, stored.idToken, endings);
   }
 
   /** Trades an authorization code and its PKCE verifier for tokens: the last step of every sign-in. */
   async exchangeCode(code: string, verifier: string): Promise<void> {
+    const endings = this.endings;
     const answer = await this.tokenCall({ grant_type: 'authorization_code', code, code_verifier: verifier });
-    await this.adopt(answer, null);
+    await this.adoptUnlessEnded(answer, null, endings);
+  }
+
+  /** Adopts new tokens, unless the session ended since they were asked for: then they are revoked instead. */
+  private async adoptUnlessEnded(answer: TokenAnswer, previousIdToken: string | null, endings: number): Promise<void> {
+    if (this.endings !== endings || this.signingOut) {
+      if (answer.refresh_token !== undefined) await this.revokeQuietly(answer.refresh_token);
+      throw signedOut('The session ended while it was being renewed.');
+    }
+    await this.adopt(answer, previousIdToken);
+  }
+
+  private async revokeQuietly(refreshToken: string): Promise<void> {
+    try {
+      await call(this.options.fetch, this.options.endpoints().url(ROUTES.revoke), { method: 'POST', body: { token: refreshToken, token_type_hint: 'refresh_token' } });
+    } catch {
+      // Best effort: the session is forgotten here regardless.
+    }
   }
 
   /**
@@ -302,25 +350,30 @@ export class Session {
    * reached.
    */
   async signOut(): Promise<void> {
-    const stored = await this.read();
-    const token = this.currentAccessToken();
-    let ended = false;
-    if (token !== null && this.options.endpoints().offers(ROUTES.signOut)) {
-      try {
-        await call(this.options.fetch, this.options.endpoints().url(ROUTES.signOut), { method: 'POST', token });
-        ended = true;
-      } catch {
-        // Revoking the refresh token below ends the session as well.
-      }
+    // From here on, no refresh starts and no answer in flight is adopted.
+    this.signingOut = true;
+    this.endings += 1;
+    try {
+      // After any refresh this tab or another has in flight, so its new refresh token is the one revoked.
+      await this.inflight?.catch(() => undefined);
+      await this.withLock(async () => {
+        const stored = await this.read();
+        const token = this.currentAccessToken();
+        let ended = false;
+        if (token !== null && this.options.endpoints().offers(ROUTES.signOut)) {
+          try {
+            await call(this.options.fetch, this.options.endpoints().url(ROUTES.signOut), { method: 'POST', token });
+            ended = true;
+          } catch {
+            // Revoking the refresh token below ends the session as well.
+          }
+        }
+        if (!ended && stored !== null) await this.revokeQuietly(stored.refreshToken);
+        this.endLocally('signed-out', true);
+      });
+    } finally {
+      this.signingOut = false;
     }
-    if (!ended && stored !== null) {
-      try {
-        await call(this.options.fetch, this.options.endpoints().url(ROUTES.revoke), { method: 'POST', body: { token: stored.refreshToken, token_type_hint: 'refresh_token' } });
-      } catch {
-        // Forgotten here regardless.
-      }
-    }
-    this.endLocally('signed-out', true);
   }
 
   destroy(): void {
@@ -350,19 +403,23 @@ export class Session {
       await this.options.storage.set(this.key, JSON.stringify(record));
     }
     const access: Access = { token: answer.access_token, expiresAt: this.now() + answer.expires_in * 1000 };
-    this.take(access, user, workspace);
+    this.take(access, user, workspace, idToken);
     this.channel?.postMessage({ type: 'tokens', access, idToken, workspace } satisfies TabMessage);
   }
 
   /** Holds new tokens and says what changed. */
-  private take(access: Access, user: SessionUser, workspace: SessionWorkspace | null): void {
+  private take(access: Access, user: SessionUser, workspace: SessionWorkspace | null, idToken: string | null): void {
     const before = this.store.get();
     this.access = access;
+    const previousSid = this.sid;
+    const sid = readJwtPayload(idToken)?.['sid'] ?? readJwtPayload(access.token)?.['sid'];
+    this.sid = typeof sid === 'string' ? sid : null;
     this.generation += 1;
     this.retryMs = RETRY_MIN_MS;
     const state: SignedInState = { status: 'signed-in', user, workspace };
     this.store.set(state);
-    if (before.status !== 'signed-in' || before.user.id !== user.id) this.events.emit('signed-in', state);
+    // A new sign-in, even by the same person, is a new session: whatever was kept for the last one is dropped.
+    if (before.status !== 'signed-in' || before.user.id !== user.id || previousSid !== this.sid) this.events.emit('signed-in', state);
     else if ((before.workspace?.id ?? null) !== (workspace?.id ?? null)) this.events.emit('workspace-changed', { workspace });
     this.events.emit('token-refreshed', { expiresAt: access.expiresAt });
     this.schedule();
@@ -370,6 +427,8 @@ export class Session {
 
   private fromOtherTab(message: TabMessage): void {
     if (this.destroyed || message === null || typeof message !== 'object') return;
+    // A tab that is signing out takes no tokens: its sign-out ends them.
+    if (message.type === 'tokens' && this.signingOut) return;
     if (message.type === 'signed-out') {
       if (this.store.get().status !== 'signed-out') this.endLocally(message.reason, false);
       return;
@@ -384,14 +443,16 @@ export class Session {
       this.events.emit('session-stale', { workspace: otherWorkspace });
       return;
     }
-    this.take(message.access, user, message.workspace);
+    this.take(message.access, user, message.workspace, message.idToken);
   }
 
   private endLocally(reason: SignedOutReason, tellOtherTabs: boolean): void {
     const before = this.store.get();
     this.clearTimer();
     this.access = null;
+    this.sid = null;
     this.generation += 1;
+    this.endings += 1;
     void this.options.storage.remove(this.key);
     this.store.set({ status: 'signed-out', reason });
     if (before.status === 'signed-in') this.events.emit('signed-out', { reason });
