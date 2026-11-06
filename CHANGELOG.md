@@ -14,6 +14,7 @@ The 1.0 line, for the new version of The Bridge. Published on the `alpha` tag; `
 - **One error type.** `BridgeError` with a `kind`, for both problem details and OAuth errors.
 - **`./server`** checks tokens against every lane of the app's revocation list, reads flag results for the caller, and counts usage ("count this").
 - **`./testing`** has a fake issuer for your own tests.
+- **Safe by default.** Addresses must be https (http only on localhost) and redirects are never followed. `bridge.fetch` sends the token only to the page's origin, The Bridge's endpoints and `tokenOrigins`. The server entry cannot be bundled for a browser. A client or server that could not reach the issuer at start keeps trying, and never needs a restart.
 
 ### Removed
 

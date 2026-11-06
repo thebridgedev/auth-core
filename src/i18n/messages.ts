@@ -63,7 +63,7 @@ export interface Messages {
   'login.signupPrompt': string;
   'login.signupLink': string;
   'login.error.invalidCredentials': string;
-  /** The page's origin is not in the app's allowed origins. `{origin}` is that origin. */
+  /** The page's address is not one of the app's registered addresses (`origin-not-allowed`). `{origin}` is that address. */
   'error.originNotAllowed': string;
 
   // Forgot / set password
@@ -164,8 +164,7 @@ export const en: Messages = {
   'login.signupPrompt': "Don't have an account?",
   'login.signupLink': 'Sign up',
   'login.error.invalidCredentials': 'Invalid email or password.',
-  'error.originNotAllowed':
-    'This app\'s allowed origins in Bridge don\'t include {origin} — add it in Bridge admin under Authentication → Security → Allowed Origins.',
+  'error.originNotAllowed': 'This page\'s address, {origin}, is not one of this app\'s registered addresses in Bridge.',
 
   'forgot.headingRequest': 'Reset your password',
   'forgot.headingSet': 'Set new password',
@@ -264,8 +263,7 @@ export const sv: Messages = {
   'login.signupPrompt': 'Har du inget konto?',
   'login.signupLink': 'Skapa konto',
   'login.error.invalidCredentials': 'Fel e-postadress eller lösenord.',
-  'error.originNotAllowed':
-    'Appens tillåtna ursprung i Bridge omfattar inte {origin} — lägg till det i Bridge admin under Authentication → Security → Allowed Origins.',
+  'error.originNotAllowed': 'Sidans adress, {origin}, är inte en av appens registrerade adresser i Bridge.',
 
   'forgot.headingRequest': 'Återställ ditt lösenord',
   'forgot.headingSet': 'Ange nytt lösenord',
@@ -344,8 +342,7 @@ export const da: Messages = {
   'login.signupPrompt': 'Har du ikke en konto?',
   'login.signupLink': 'Opret konto',
   'login.error.invalidCredentials': 'Forkert e-mail eller adgangskode.',
-  'error.originNotAllowed':
-    'Appens tilladte oprindelser i Bridge omfatter ikke {origin} — tilføj den i Bridge admin under Authentication → Security → Allowed Origins.',
+  'error.originNotAllowed': 'Sidens adresse, {origin}, er ikke en af appens registrerede adresser i Bridge.',
 
   'forgot.headingRequest': 'Nulstil din adgangskode',
   'forgot.headingSet': 'Vælg ny adgangskode',
@@ -424,8 +421,7 @@ export const nb: Messages = {
   'login.signupPrompt': 'Har du ingen konto?',
   'login.signupLink': 'Opprett konto',
   'login.error.invalidCredentials': 'Feil e-postadresse eller passord.',
-  'error.originNotAllowed':
-    'Appens tillatte opprinnelser i Bridge omfatter ikke {origin} — legg den til i Bridge admin under Authentication → Security → Allowed Origins.',
+  'error.originNotAllowed': 'Sidens adresse, {origin}, er ikke en av appens registrerte adresser i Bridge.',
 
   'forgot.headingRequest': 'Tilbakestill passordet ditt',
   'forgot.headingSet': 'Velg nytt passord',
@@ -504,8 +500,7 @@ export const nl: Messages = {
   'login.signupPrompt': 'Nog geen account?',
   'login.signupLink': 'Account aanmaken',
   'login.error.invalidCredentials': 'Onjuist e-mailadres of wachtwoord.',
-  'error.originNotAllowed':
-    'De toegestane origins van deze app in Bridge bevatten {origin} niet — voeg het toe in Bridge admin onder Authentication → Security → Allowed Origins.',
+  'error.originNotAllowed': 'Het adres van deze pagina, {origin}, is niet een van de geregistreerde adressen van deze app in Bridge.',
 
   'forgot.headingRequest': 'Stel je wachtwoord opnieuw in',
   'forgot.headingSet': 'Nieuw wachtwoord instellen',
@@ -584,8 +579,7 @@ export const de: Messages = {
   'login.signupPrompt': 'Noch kein Konto?',
   'login.signupLink': 'Konto erstellen',
   'login.error.invalidCredentials': 'E-Mail-Adresse oder Passwort ist falsch.',
-  'error.originNotAllowed':
-    'Die erlaubten Origins dieser App in Bridge enthalten {origin} nicht — in Bridge admin unter Authentication → Security → Allowed Origins hinzufügen.',
+  'error.originNotAllowed': 'Die Adresse dieser Seite, {origin}, gehört nicht zu den registrierten Adressen dieser App in Bridge.',
 
   'forgot.headingRequest': 'Passwort zurücksetzen',
   'forgot.headingSet': 'Neues Passwort festlegen',
@@ -664,8 +658,7 @@ export const fi: Messages = {
   'login.signupPrompt': 'Eikö sinulla ole tiliä?',
   'login.signupLink': 'Luo tili',
   'login.error.invalidCredentials': 'Virheellinen sähköpostiosoite tai salasana.',
-  'error.originNotAllowed':
-    'Sovelluksen sallituissa alkuperissä Bridgessä ei ole osoitetta {origin} — lisää se Bridge adminissa kohdassa Authentication → Security → Allowed Origins.',
+  'error.originNotAllowed': 'Tämän sivun osoite, {origin}, ei ole yksi sovelluksen rekisteröidyistä osoitteista Bridgessä.',
 
   'forgot.headingRequest': 'Palauta salasanasi',
   'forgot.headingSet': 'Aseta uusi salasana',
@@ -744,8 +737,7 @@ export const fr: Messages = {
   'login.signupPrompt': 'Tu n’as pas de compte ?',
   'login.signupLink': 'Créer un compte',
   'login.error.invalidCredentials': 'E-mail ou mot de passe incorrect.',
-  'error.originNotAllowed':
-    'Les origines autorisées de cette app dans Bridge n’incluent pas {origin} — ajoute-la dans Bridge admin sous Authentication → Security → Allowed Origins.',
+  'error.originNotAllowed': 'L’adresse de cette page, {origin}, ne fait pas partie des adresses enregistrées de cette appli dans Bridge.',
 
   'forgot.headingRequest': 'Réinitialise ton mot de passe',
   'forgot.headingSet': 'Définis un nouveau mot de passe',
@@ -824,8 +816,7 @@ export const es: Messages = {
   'login.signupPrompt': '¿Aún no tienes cuenta?',
   'login.signupLink': 'Crear cuenta',
   'login.error.invalidCredentials': 'Correo electrónico o contraseña incorrectos.',
-  'error.originNotAllowed':
-    'Los orígenes permitidos de esta app en Bridge no incluyen {origin}: añádelo en Bridge admin, en Authentication → Security → Allowed Origins.',
+  'error.originNotAllowed': 'La dirección de esta página, {origin}, no es una de las direcciones registradas de esta app en Bridge.',
 
   'forgot.headingRequest': 'Restablece tu contraseña',
   'forgot.headingSet': 'Establece una nueva contraseña',
@@ -904,8 +895,7 @@ export const it: Messages = {
   'login.signupPrompt': 'Non hai un account?',
   'login.signupLink': 'Crea un account',
   'login.error.invalidCredentials': 'E-mail o password non corretti.',
-  'error.originNotAllowed':
-    'Le origini consentite di questa app in Bridge non includono {origin}: aggiungila in Bridge admin, in Authentication → Security → Allowed Origins.',
+  'error.originNotAllowed': 'L’indirizzo di questa pagina, {origin}, non è tra gli indirizzi registrati di questa app in Bridge.',
 
   'forgot.headingRequest': 'Reimposta la tua password',
   'forgot.headingSet': 'Imposta una nuova password',
@@ -984,8 +974,7 @@ export const pt: Messages = {
   'login.signupPrompt': 'Ainda não tens conta?',
   'login.signupLink': 'Criar conta',
   'login.error.invalidCredentials': 'E-mail ou palavra-passe incorretos.',
-  'error.originNotAllowed':
-    'As origens permitidas desta app no Bridge não incluem {origin} — adiciona-a no Bridge admin em Authentication → Security → Allowed Origins.',
+  'error.originNotAllowed': 'O endereço desta página, {origin}, não é um dos endereços registados desta app no Bridge.',
 
   'forgot.headingRequest': 'Repõe a tua palavra-passe',
   'forgot.headingSet': 'Define uma nova palavra-passe',
@@ -1064,8 +1053,7 @@ export const pl: Messages = {
   'login.signupPrompt': 'Nie masz jeszcze konta?',
   'login.signupLink': 'Załóż konto',
   'login.error.invalidCredentials': 'Nieprawidłowy e-mail lub hasło.',
-  'error.originNotAllowed':
-    'Dozwolone originy tej aplikacji w Bridge nie obejmują {origin} — dodaj go w Bridge admin w sekcji Authentication → Security → Allowed Origins.',
+  'error.originNotAllowed': 'Adres tej strony, {origin}, nie należy do zarejestrowanych adresów tej aplikacji w Bridge.',
 
   'forgot.headingRequest': 'Zresetuj hasło',
   'forgot.headingSet': 'Ustaw nowe hasło',

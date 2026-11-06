@@ -25,6 +25,8 @@ bridge.session.subscribe((session) => {
 
 Make one client per page and share it.
 
+The issuer and every address it lists must be `https` (plain `http` only on `localhost`, for development), and the SDK never follows a redirect. If the issuer cannot be reached at first, `ready` rejects with the reason, and the client keeps trying in the background: the session leaves `loading` and the `ready` event fires once it starts. Calls made meanwhile try again at once, and fail with the reason if Bridge is still unreachable.
+
 ## Signing in
 
 Sign-in is a short conversation: you send what the person typed, and The Bridge answers "done", or asks for the next step, such as which workspace.
@@ -82,9 +84,10 @@ await bridge.workspaces.switch(workspaceId); // every tab follows
 - The access token lives in memory only. The refresh token and ID token are kept in `localStorage`, under a key for your issuer. Pass `storage` to keep them elsewhere.
 - The Bridge replaces the refresh token on every use. Tabs take turns: one tab refreshes and hands the new access token to the others, so two tabs never spend the same refresh token.
 - A hidden tab does not keep a session alive. It refreshes when it is looked at again.
-- When The Bridge cannot be reached, the session is kept and refreshed later. When the session ended (it expired, or was ended elsewhere), you get `signed-out` with the reason `session-ended`.
+- When The Bridge cannot be reached, the session is kept and refreshed later. When the session ended (it expired, or was ended elsewhere), you get `signed-out` with the reason `session-ended`. When The Bridge refuses to renew it because the person was removed from the workspace or suspended, the reason is `access-removed`: ask them to sign in again.
+- Signing out always wins: a refresh still in flight in any tab is dropped, never adopted.
 
-Events: `signed-in`, `signed-out`, `workspace-changed`, `session-stale`, `token-refreshed`, `notice`, `error`.
+Events: `ready`, `signed-in`, `signed-out`, `workspace-changed`, `session-stale`, `token-refreshed`, `notice`, `error`.
 
 ```ts
 bridge.on('signed-out', ({ reason }) => goTo('/sign-in'));
@@ -98,6 +101,8 @@ bridge.on('signed-out', ({ reason }) => goTo('/sign-in'));
 const response = await bridge.fetch('/api/invoices');
 ```
 
+The token goes only to the page's own origin and The Bridge's endpoints. List your API's other hosts in `tokenOrigins` (`createBridge({ issuer, tokenOrigins: ['https://api.example.com'] })`). Any other address is refused before anything is sent, so the token never reaches a third party.
+
 ## Flags
 
 Every gate in your app is a flag. The flag's rule says why: a privilege, a plan feature or a rollout. The SDK fetches the results The Bridge worked out for this person, and never reads a role, a privilege or the plan itself.
@@ -109,7 +114,7 @@ const { entitlement } = bridge.flags.reason('reports'); // the plan feature that
 bridge.flags.subscribe(() => render());
 ```
 
-A flag The Bridge gave no result for returns your fallback. Results are fetched again when a flag changes, when the person or workspace changes, and after a plan change made through the SDK.
+A flag The Bridge gave no result for returns your fallback. Results are fetched again when a flag changes, when the person, workspace or session changes, and after a plan change made through the SDK. Results are only ever read for the person, workspace and session they were fetched for: while those change, every flag gives its fallback. If a reload fails, the results already held for the same person, workspace and session stay.
 
 ## Billing
 
@@ -173,7 +178,9 @@ export async function handle(request: Request) {
 - **Revocation.** Token checks follow your app's revocation list. A session that ended, a member who was removed or a key that was revoked is refused within seconds. While the list cannot be read, checks answer `unavailable`, never yes. For writes and sensitive actions, pass `{ strict: true }` for a tighter limit.
 - **Keys.** A request with `x-api-key` is checked as a key and becomes the same kind of Actor.
 - **No roles in the Actor.** Gate with flags.
-- **Usage** is counted only from servers. A batch that fails is sent again with the same ids, so nothing is counted twice. Call `bridge.usage.flush()` before a short-lived process ends.
+- **Usage** is counted only from servers. A batch that fails is sent again with the same ids, so nothing is counted twice. A batch The Bridge refuses as malformed is logged and dropped, so it never holds up the rest. While The Bridge cannot be reached, at most `maxQueuedReports` (10,000) wait; past that, the oldest are dropped and logged. Call `bridge.usage.flush()` before a short-lived process ends.
+- **Start-up.** If the issuer cannot be reached at first, checks answer `unavailable` (503), flags give their fallbacks and usage waits, and the server keeps trying, waiting longer each time. It never needs a restart.
+- **Never in a page.** The server entry holds your app key: a browser build of it fails at once, and `createBridgeServer` refuses to start in a browser with an app key.
 - **Edge runtimes.** `./server` uses only `fetch` and Web Crypto.
 
 The low-level checker is at `@nebulr-group/bridge-auth-core/verifier`.
@@ -200,6 +207,7 @@ Everything the SDK refuses is a `BridgeError`. Read `kind`:
 | `wrong-device`, `link-invalid` | An email link opened elsewhere, or used or expired |
 | `flow-expired` | A sign-in step took too long |
 | `signed-out`, `reauthenticate` | No session, or the action needs a recent sign-in |
+| `misconfigured` | The SDK is set up wrongly: an address that is not https, a token for a host not in `tokenOrigins`, a redirect |
 | `forbidden`, `not-found`, `conflict`, `invalid` | The request was refused |
 | `plan-required` | The plan does not include it; `entitlement` names the feature |
 | `rate-limited` | Try again after `retryAfterSeconds` |
