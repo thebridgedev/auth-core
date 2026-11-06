@@ -1,6 +1,23 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.0-alpha.0] - Unreleased
+
+The 1.0 line, for the new version of The Bridge. Published on the `alpha` tag; `latest` stays on 0.x. It does not keep the 0.x API: apps on 0.x keep working on 0.x.
+
+### Changed
+
+- **One setting: the issuer.** `createBridge({ issuer })` replaces `appId`, `apiBaseUrl` and `hostedUrl`. Every endpoint is read from the issuer's metadata, at version 2 of The Bridge's API, and every call is pinned to it.
+- **Sign-in on your own pages, as steps.** `signIn.start` answers "done" or the next step (today, which workspace). Sign-up finishes from its email link on the same device, with PKCE. Forgot and set password, sign-out and switching workspace are on the client.
+- **Sessions across tabs.** The access token stays in memory; the refresh token is replaced on every use, and tabs take turns refreshing, so two tabs never spend the same one. A failed refresh says whether the session ended or The Bridge could not be reached.
+- **Flag results only.** Flags are The Bridge's results over OFREP, revalidated with an ETag. No rules reach the browser, and nothing reads a role, a privilege or the plan.
+- **Billing, team and live updates** use the new endpoints: the payer, checkout and the portal; members, invites and roles over REST; Live channels named by The Bridge, with history to fill gaps.
+- **One error type.** `BridgeError` with a `kind`, for both problem details and OAuth errors.
+- **`./server`** checks tokens against every lane of the app's revocation list, reads flag results for the caller, and counts usage ("count this").
+- **`./testing`** has a fake issuer for your own tests.
+
+### Removed
+
+- Hosted-page sign-in, the 0.x `BridgeAuth` class, browser usage reporting, the in-browser flag engine, the GraphQL team service, `BridgeManagement` and `./backend`. Magic links, passkeys, two-step codes and company sign-in return as sign-in steps when The Bridge offers them.
 
 ### Added
 
@@ -10,10 +27,6 @@
 - **Runs at the edge.** The verifier entry uses only `fetch` and Web Crypto, so it loads in Next.js middleware and other edge runtimes as well as on Node and in the browser.
 - **Who is calling comes only from the credential.** `verifyRequest` reads only the `Authorization: Bearer` and `x-api-key` headers. Other headers, the query string and the body never change who the caller is.
 - **No silent revocation opt-out.** The verifier's `revocationCheck` option is required: pass a revocation check, or `'none'` to rely on tokens expiring.
-
-### Deprecated
-
-- `BridgeUser`, `ApiTokenClaims`, `transformJwtToBridgeUser` and `JwksService` from `/backend`. They keep working. Use the `Actor` from the verifier instead; `actorToBridgeUser` and `actorToApiTokenClaims` convert while your handlers move over.
 
 ## [0.8.0] - 2026-09-30
 
