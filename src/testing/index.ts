@@ -1,0 +1,563 @@
+/**
+ * @nebulr-group/bridge-auth-core/testing
+ *
+ * A fake Bridge issuer in memory, for testing code built on the browser SDK
+ * without a network: discovery, sign-in with the workspace step, sign-up
+ * with its email link, password recovery, refresh with rotation, sign-out,
+ * accounts, flags, billing, usage and Live. Pass its `fetch` (and its
+ * `websocket` for Live) to `createBridge`.
+ *
+ * Its tokens are shaped like Bridge's but not signed: they are for code
+ * that reads who is signed in, never for a token check. It answers the way
+ * Bridge does, including its refusals, but it is not Bridge: test against a
+ * real Bridge before you ship.
+ */
+
+export interface FakePerson {
+  readonly id: string;
+  readonly email: string;
+  password: string;
+  firstName: string | null;
+  lastName: string | null;
+  readonly workspaces: { id: string; name: string; role: string }[];
+}
+
+export interface FakeIssuerOptions {
+  readonly appId?: string;
+  readonly origin?: string;
+  /** `published`: metadata lists every endpoint (`bridge_endpoints`). `standard`: only the standard fields. @default 'published' */
+  readonly metadata?: 'published' | 'standard';
+  readonly accessTokenSeconds?: number;
+  /** How long a replaced refresh token still works. @default 30 */
+  readonly refreshGraceSeconds?: number;
+  /** The clock, in ms. @default Date.now */
+  readonly now?: () => number;
+}
+
+interface Session {
+  readonly id: string;
+  readonly user: string;
+  workspace: string | null;
+  ended: boolean;
+}
+
+interface Code {
+  readonly user: string;
+  readonly workspace: string | null;
+  readonly challenge: string;
+  used: boolean;
+  session: string | null;
+}
+
+interface LiveFrame {
+  readonly seq: number;
+  readonly cursor: string;
+  readonly notice: { type: string; record: string | null; version: number | null; time: string; workspace: string | null };
+}
+
+export interface FakeSocket {
+  readonly url: string;
+  readonly protocols: readonly string[];
+  readonly sent: unknown[];
+  send(data: string): void;
+  close(): void;
+  onopen: (() => void) | null;
+  onmessage: ((event: { data: unknown }) => void) | null;
+  onclose: (() => void) | null;
+  onerror: (() => void) | null;
+}
+
+export interface RecordedRequest {
+  readonly method: string;
+  readonly path: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: unknown;
+}
+
+function base64url(text: string): string {
+  return btoa(unescape(encodeURIComponent(text))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function fakeJwt(typ: string, claims: Record<string, unknown>): string {
+  return `${base64url(JSON.stringify({ alg: 'none', typ }))}.${base64url(JSON.stringify(claims))}.`;
+}
+
+async function s256(verifier: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
+  let binary = '';
+  for (const byte of new Uint8Array(digest)) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+const secret = () => crypto.randomUUID().replace(/-/g, '');
+
+function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
+  if (status === 204 || body === undefined) return new Response(null, { status, headers });
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } });
+}
+
+const oauth = (status: number, error: string, extra: Record<string, unknown> = {}) => json(status, { error, ...extra });
+const problem = (status: number, kind: string, detail: string) =>
+  json(status, { type: `urn:bridge:problem:${kind}`, title: kind, status, detail }, { 'content-type': 'application/problem+json' });
+
+export function createFakeIssuer(options: FakeIssuerOptions = {}) {
+  const appId = options.appId ?? 'app-test';
+  const origin = options.origin ?? 'https://bridge.test';
+  const now = options.now ?? Date.now;
+  const accessSeconds = options.accessTokenSeconds ?? 300;
+  const graceMs = (options.refreshGraceSeconds ?? 30) * 1000;
+  const issuer = `${origin}/identity-access/apps/${appId}`;
+  const at = `${origin}/v2/identity-access/apps/${appId}`;
+
+  const people = new Map<string, FakePerson>();
+  const sessions = new Map<string, Session>();
+  const accessTokens = new Map<string, { session: string; user: string; workspace: string | null; exp: number }>();
+  const refreshTokens = new Map<string, { session: string; rotatedAt: number | null }>();
+  const codes = new Map<string, Code>();
+  const flows = new Map<string, { user: string; challenge: string }>();
+  const links = new Map<string, { purpose: 'sign-up' | 'reset'; email: string; challenge?: string; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
+  const sentLinks: { to: string; purpose: string; token: string }[] = [];
+  const requests: RecordedRequest[] = [];
+  const invites: { id: string; email: string; role: string; state: string; expiresAt: string; invitedBy: string | null; createdAt: string }[] = [];
+  const usage: unknown[] = [];
+  let flagResults: Record<string, unknown>[] = [];
+  let flagsRevision = 1;
+  let visitorFlags: Record<string, unknown>[] = [];
+  let facts: Record<string, unknown> = { plan: null, status: 'none', access: 'needs_plan', features: {}, limits: {}, usage: {}, periodStart: null, periodEnd: null, trialEnd: null, cancelAtPeriodEnd: false, waiting: null, locked: false };
+  let plans: Record<string, unknown>[] = [];
+  const checkouts = new Set<string>();
+  const live = { history: new Map<string, LiveFrame[]>(), sockets: [] as FakeSocket[], subscribed: new Map<FakeSocket, Map<string, string>>(), offered: true, lost: new Set<string>() };
+  let nextId = 1;
+  const id = (prefix: string) => `${prefix}${String(nextId++).padStart(4, '0')}`;
+
+  function metadata(): Record<string, unknown> {
+    const standard = {
+      issuer,
+      authorization_challenge_endpoint: `${at}/sign-in`,
+      token_endpoint: `${at}/token`,
+      revocation_endpoint: `${at}/revoke`,
+      introspection_endpoint: `${at}/introspect`,
+      jwks_uri: `${at}/jwks.json`,
+      response_types_supported: ['code'],
+      grant_types_supported: ['authorization_code', 'refresh_token', 'client_credentials'],
+      code_challenge_methods_supported: ['S256'],
+    };
+    if (options.metadata === 'standard') return standard;
+    const v2 = `${origin}/v2`;
+    return {
+      ...standard,
+      bridge_app: appId,
+      bridge_access_token_audience: `${origin}/api`,
+      bridge_revocation_lanes: Object.fromEntries(['identity-access', 'accounts', 'billing', 'app-registry'].map((lane) => [lane, `${v2}/${lane}/apps/${appId}/revocations/${lane}`])),
+      bridge_endpoints: {
+        '2': {
+          sign_up: `${at}/sign-up`,
+          sign_up_verify: `${at}/sign-up/verify`,
+          password_forgot: `${at}/password/forgot`,
+          password: `${at}/password`,
+          sign_out: `${v2}/identity-access/sign-out`,
+          sessions: `${v2}/identity-access/sessions`,
+          accounts: `${v2}/accounts`,
+          billing: `${v2}/billing`,
+          flags: `${v2}/flags`,
+          flags_visitor: `${v2}/flags/apps/${appId}`,
+          live: `${v2}/live`,
+          live_visitor: `${v2}/live/apps/${appId}`,
+          ...(live.offered ? { live_connection: `${v2}/live/apps/${appId}/connection` } : {}),
+          events_and_logs: `${v2}/events-and-logs`,
+        },
+      },
+    };
+  }
+
+  function issueTokens(session: Session, withRefresh = true) {
+    const person = people.get(session.user) as FakePerson;
+    const membership = person.workspaces.find((each) => each.id === session.workspace) ?? null;
+    const exp = Math.floor(now() / 1000) + accessSeconds;
+    const access = fakeJwt('at+jwt', {
+      iss: issuer, aud: `${origin}/api`, sub: person.id, aid: appId, sid: session.id, jti: secret(), exp,
+      ...(membership === null ? {} : { tid: membership.id, wst: 'active' }),
+      email: person.email, email_verified: true,
+    });
+    accessTokens.set(access, { session: session.id, user: person.id, workspace: session.workspace, exp: exp * 1000 });
+    const idToken = fakeJwt('JWT', { iss: issuer, aud: appId, sub: person.id, aid: appId, sid: session.id, email: person.email, email_verified: true, exp });
+    const body: Record<string, unknown> = { access_token: access, token_type: 'Bearer', expires_in: accessSeconds, id_token: idToken, ...(membership === null ? {} : { workspace: membership.id }) };
+    if (withRefresh) {
+      const refresh = secret();
+      refreshTokens.set(refresh, { session: session.id, rotatedAt: null });
+      body['refresh_token'] = refresh;
+    }
+    return json(200, body, { 'cache-control': 'no-store' });
+  }
+
+  function endSession(sessionId: string): void {
+    const session = sessions.get(sessionId);
+    if (session !== undefined) session.ended = true;
+    for (const [token, record] of refreshTokens) if (record.session === sessionId) refreshTokens.delete(token);
+  }
+
+  function toWorkspace(person: FakePerson, challenge: string, requested: string | null): Response {
+    let workspace = requested;
+    if (workspace === null) {
+      if (person.workspaces.length > 1) {
+        const flow = secret();
+        flows.set(flow, { user: person.id, challenge });
+        return json(200, { next: 'workspace', flow, workspaces: person.workspaces.map((each) => ({ id: each.id, name: each.name, logo: null })) });
+      }
+      workspace = person.workspaces[0]?.id ?? null;
+    }
+    if (workspace !== null && !person.workspaces.some((each) => each.id === workspace)) return oauth(403, 'access_denied', { reason: 'not_a_member' });
+    const code = secret();
+    codes.set(code, { user: person.id, workspace, challenge, used: false, session: null });
+    return json(200, { code });
+  }
+
+  function personOf(headers: Headers): { session: Session; person: FakePerson } | null {
+    const token = headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
+    const record = accessTokens.get(token);
+    if (record === undefined || record.exp <= now()) return null;
+    const session = sessions.get(record.session);
+    if (session === undefined || session.ended) return null;
+    return { session: { ...session, workspace: record.workspace }, person: people.get(record.user) as FakePerson };
+  }
+
+  const unauthorized = () => problem(401, 'credential-refused', 'The token is not valid.');
+
+  function channelsFor(who: { session: Session; person: FakePerson } | null) {
+    const channels = [{ kind: 'app', name: `/app/${appId}` }];
+    if (who !== null) {
+      channels.push({ kind: 'account', name: `/account/${appId}/${who.person.id}/1` });
+      if (who.session.workspace !== null) channels.push({ kind: 'workspace', name: `/workspace/${appId}/${who.session.workspace}/1` });
+    }
+    return channels.map((channel) => {
+      const frames = live.history.get(channel.name) ?? [];
+      return { ...channel, cursor: `${channel.name}#${String(frames.at(-1)?.seq ?? 0)}` };
+    });
+  }
+
+  function historyFrom(cursor: string) {
+    const [name, seq] = cursor.split('#');
+    if (live.lost.delete(name ?? '')) return { fetchAgain: true, reason: 'gap' };
+    const frames = (live.history.get(name ?? '') ?? []).filter((frame) => frame.seq > Number(seq));
+    return { fetchAgain: false, notices: frames, cursor: frames.at(-1)?.cursor ?? cursor };
+  }
+
+  async function handle(method: string, url: URL, headers: Headers, body: Record<string, unknown>): Promise<Response> {
+    const path = url.pathname;
+    if (method === 'GET' && path === `/identity-access/apps/${appId}/.well-known/openid-configuration`) return json(200, metadata());
+
+    if (path.startsWith(`/v2/identity-access/apps/${appId}/`)) {
+      const route = path.slice(`/v2/identity-access/apps/${appId}`.length);
+      if (route === '/sign-in') {
+        if (typeof body['flow'] === 'string') {
+          const flow = flows.get(body['flow']);
+          flows.delete(body['flow']);
+          if (flow === undefined) return oauth(400, 'flow_expired');
+          return toWorkspace(people.get(flow.user) as FakePerson, flow.challenge, String(body['workspace']));
+        }
+        if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string') return oauth(400, 'invalid_request');
+        const person = [...people.values()].find((each) => each.email === String(body['email']).toLowerCase());
+        if (person === undefined || person.password !== body['password']) return oauth(400, 'wrong_credentials');
+        return toWorkspace(person, body['code_challenge'], typeof body['workspace'] === 'string' ? body['workspace'] : null);
+      }
+      if (route === '/token') {
+        if (body['grant_type'] === 'authorization_code') {
+          const code = codes.get(String(body['code']));
+          if (code === undefined || code.used || (await s256(String(body['code_verifier']))) !== code.challenge) {
+            if (code?.used && code.session !== null) endSession(code.session);
+            return oauth(400, 'invalid_grant', { error_description: 'The code is not valid.' });
+          }
+          code.used = true;
+          const session: Session = { id: id('ses'), user: code.user, workspace: code.workspace, ended: false };
+          sessions.set(session.id, session);
+          code.session = session.id;
+          return issueTokens(session);
+        }
+        if (body['grant_type'] === 'refresh_token') {
+          const record = refreshTokens.get(String(body['refresh_token']));
+          const session = record === undefined ? undefined : sessions.get(record.session);
+          if (record === undefined || session === undefined || session.ended) return oauth(400, 'invalid_grant', { error_description: 'The session has ended; sign in again.' });
+          if (record.rotatedAt !== null && now() - record.rotatedAt > graceMs) {
+            endSession(session.id);
+            return oauth(400, 'invalid_grant', { error_description: 'The refresh token was already used; the session has ended.' });
+          }
+          if (typeof body['workspace'] === 'string') {
+            const person = people.get(session.user) as FakePerson;
+            if (!person.workspaces.some((each) => each.id === body['workspace'])) return oauth(403, 'access_denied', { reason: 'not_a_member' });
+            session.workspace = body['workspace'];
+          }
+          record.rotatedAt ??= now();
+          return issueTokens(session);
+        }
+        return oauth(400, 'unsupported_grant_type');
+      }
+      if (route === '/revoke') {
+        const record = refreshTokens.get(String(body['token']));
+        if (record !== undefined) endSession(record.session);
+        return json(200, {});
+      }
+      if (route === '/sign-up') {
+        const email = String(body['email']).toLowerCase();
+        const token = secret();
+        if (![...people.values()].some((each) => each.email === email)) {
+          links.set(token, { purpose: 'sign-up', email, challenge: String(body['code_challenge']), signUp: { password: String(body['password']), firstName: (body['firstName'] as string) ?? null, lastName: (body['lastName'] as string) ?? null, workspace: (body['workspace'] as string | boolean) ?? null } });
+          sentLinks.push({ to: email, purpose: 'verify-sign-up', token });
+        } else {
+          sentLinks.push({ to: email, purpose: 'account-exists', token: '' });
+        }
+        return json(202, { next: 'verify_email' });
+      }
+      if (route === '/sign-up/verify') {
+        const link = links.get(String(body['token']));
+        if (link?.purpose !== 'sign-up' || link.signUp === undefined) return oauth(400, 'invalid_link');
+        if (typeof body['code_verifier'] !== 'string' || (await s256(body['code_verifier'])) !== link.challenge) return oauth(400, 'wrong_device', { error_description: 'Open the link on the device you signed up on.' });
+        links.delete(String(body['token']));
+        const workspaces = link.signUp.workspace === null ? [] : [{ id: id('ws'), name: typeof link.signUp.workspace === 'string' ? link.signUp.workspace : '', role: 'OWNER' }];
+        const person = addPerson({ email: link.email, password: link.signUp.password, firstName: link.signUp.firstName, lastName: link.signUp.lastName, workspaces });
+        return toWorkspace(person, link.challenge as string, workspaces[0]?.id ?? null);
+      }
+      if (route === '/password/forgot') {
+        const email = String(body['email']).toLowerCase();
+        if ([...people.values()].some((each) => each.email === email)) {
+          const token = secret();
+          links.set(token, { purpose: 'reset', email });
+          sentLinks.push({ to: email, purpose: 'reset-password', token });
+        }
+        return json(202, { next: 'verify_email' });
+      }
+      if (route === '/password') {
+        const link = links.get(String(body['token']));
+        if (link?.purpose !== 'reset') return oauth(400, 'invalid_link');
+        links.delete(String(body['token']));
+        const person = [...people.values()].find((each) => each.email === link.email) as FakePerson;
+        person.password = String(body['password']);
+        for (const session of sessions.values()) if (session.user === person.id) endSession(session.id);
+        return json(200, { done: true });
+      }
+      return problem(404, 'not-found', 'No such route.');
+    }
+
+    if (method === 'POST' && path === '/v2/identity-access/sign-out') {
+      const who = personOf(headers);
+      if (who === null) return unauthorized();
+      endSession(who.session.id);
+      return json(200, { ended: true });
+    }
+
+    if (path === `/v2/live/apps/${appId}/connection`) return json(200, { kind: 'appsync-events', endpoint: 'wss://live.bridge.test', host: 'live-http.bridge.test', region: 'test-1' });
+    if (path === `/v2/live/apps/${appId}/channels`) return json(200, { channels: channelsFor(null) });
+    if (path === `/v2/live/apps/${appId}/history`) return json(200, historyFrom(url.searchParams.get('cursor') ?? `/app/${appId}#0`));
+    if (method === 'POST' && path === `/v2/flags/apps/${appId}/ofrep/v1/evaluate/flags`) return json(200, { flags: visitorFlags }, { etag: `"v${String(flagsRevision)}"` });
+
+    if (method === 'POST' && path === '/v2/billing/usage') {
+      if (headers.get('x-api-key') === null) return problem(401, 'credential-missing', 'This route needs a token or a key.');
+      const reports = (body['reports'] as unknown[]) ?? [];
+      usage.push(...reports);
+      return json(201, { counted: reports.length, deduped: 0, outcomes: [] });
+    }
+
+    // Everything below is for a signed-in person.
+    const who = personOf(headers);
+    if (who === null) return unauthorized();
+    const { person, session } = who;
+    const workspaceRequired = () => (session.workspace === null ? problem(403, 'workspace-required', 'Choose a workspace first.') : null);
+
+    if (path === '/v2/accounts/me' && method === 'GET') {
+      return json(200, { id: person.id, email: person.email, firstName: person.firstName, lastName: person.lastName, phoneNumber: null, onboarded: false, consentsToPrivacyPolicy: false, suspended: false, workspaces: person.workspaces.map((each) => ({ id: each.id, name: each.name, logo: null, member: `mem-${each.id}`, role: each.role, status: 'active' })) });
+    }
+    if (path === '/v2/accounts/me' && method === 'PATCH') {
+      if (typeof body['firstName'] === 'string') person.firstName = body['firstName'];
+      if (typeof body['lastName'] === 'string') person.lastName = body['lastName'];
+      return json(200, { id: person.id, email: person.email, firstName: person.firstName, lastName: person.lastName });
+    }
+    if (path === '/v2/accounts/workspaces' && method === 'POST') {
+      const made = { id: id('ws'), name: String(body['name'] ?? ''), role: 'OWNER' };
+      person.workspaces.push(made);
+      return json(201, { id: made.id, name: made.name, logo: null, state: 'active' });
+    }
+    if (path === '/v2/accounts/members' && method === 'GET') {
+      return workspaceRequired() ?? json(200, [...people.values()].filter((each) => each.workspaces.some((w) => w.id === session.workspace)).map((each) => ({ id: `mem-${each.id}`, user: { id: each.id, email: each.email, firstName: each.firstName, lastName: each.lastName }, role: each.workspaces.find((w) => w.id === session.workspace)?.role, teams: [], status: 'active', customParams: {}, ownerOffered: false, lastSignIn: null, joinedAt: null })));
+    }
+    if (path === '/v2/accounts/invites' && method === 'GET') return workspaceRequired() ?? json(200, invites);
+    if (path === '/v2/accounts/invites' && method === 'POST') {
+      const invite = { id: id('inv'), email: String(body['email']), role: String(body['role'] ?? 'MEMBER'), state: 'open', expiresAt: new Date(now() + 7 * 86_400_000).toISOString(), invitedBy: person.id, createdAt: new Date(now()).toISOString() };
+      invites.push(invite);
+      return json(201, invite);
+    }
+    const inviteMatch = path.match(/^\/v2\/accounts\/invites\/([^/]+)$/);
+    if (inviteMatch !== null && method === 'DELETE') {
+      const found = invites.find((each) => each.id === inviteMatch[1]);
+      if (found === undefined) return problem(404, 'not-found', '');
+      found.state = 'revoked';
+      return json(200, { revoked: true });
+    }
+    if (path === '/v2/accounts/roles' && method === 'GET') return json(200, [{ key: 'OWNER', name: 'Owner', privileges: [] }, { key: 'MEMBER', name: 'Member', privileges: [] }].filter((role) => url.searchParams.get('assignable') !== 'true' || role.key !== 'OWNER'));
+
+    if (path === '/v2/flags/ofrep/v1/evaluate/flags' && method === 'POST') {
+      const etag = `"r${String(flagsRevision)}:${person.id}:${session.workspace ?? ''}"`;
+      if (headers.get('if-none-match') === etag) return new Response(null, { status: 304, headers: { etag } });
+      return json(200, { flags: flagResults }, { etag });
+    }
+
+    if (path === '/v2/billing/plans' && method === 'GET') return json(200, plans);
+    if (path === '/v2/billing/payer' && method === 'GET') return workspaceRequired() ?? json(200, facts);
+    if (path === '/v2/billing/payer/usage' && method === 'GET') return json(200, { periodStart: new Date(now()).toISOString(), periodEnd: new Date(now() + 30 * 86_400_000).toISOString(), metrics: [] });
+    if (path === '/v2/billing/payer/plan' && method === 'POST') {
+      const plan = plans.find((each) => each['key'] === body['plan']);
+      if (plan === undefined) return problem(400, 'bad-request', 'No such plan.');
+      if (plan['free'] === true) {
+        facts = { ...facts, plan: { key: plan['key'], name: plan['name'] }, status: 'active', access: 'ok' };
+        return json(200, { status: 'changed' });
+      }
+      const checkout = `cs_${secret()}`;
+      checkouts.add(checkout);
+      facts = { ...facts, waiting: { plan: plan['key'], waitsFor: 'payment', at: null } };
+      return json(200, { status: 'payment_required', checkout: { session: checkout, url: `https://checkout.bridge.test/${checkout}` } });
+    }
+    const confirm = path.match(/^\/v2\/billing\/payer\/checkouts\/([^/]+)\/confirm$/);
+    if (confirm !== null && method === 'POST') {
+      if (!checkouts.has(confirm[1] as string)) return problem(404, 'not-found', '');
+      const waiting = facts['waiting'] as { plan: string } | null;
+      const plan = plans.find((each) => each['key'] === waiting?.plan);
+      facts = { ...facts, plan: plan === undefined ? null : { key: plan['key'], name: plan['name'] }, status: 'active', access: 'ok', waiting: null };
+      return json(200, facts);
+    }
+    if (path === '/v2/billing/payer/portal' && method === 'GET') return json(200, { url: 'https://portal.bridge.test/session' });
+
+    if (path === '/v2/live/channels' && method === 'GET') return json(200, { channels: channelsFor(who) });
+    if (path === '/v2/live/history' && method === 'GET') return json(200, historyFrom(url.searchParams.get('cursor') ?? ''));
+
+    return problem(404, 'not-found', 'No such route.');
+  }
+
+  const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = input instanceof Request ? input : new Request(input, init);
+    const url = new URL(request.url);
+    const raw = await request.text();
+    let body: Record<string, unknown> = {};
+    try {
+      body = raw === '' ? {} : (JSON.parse(raw) as Record<string, unknown>);
+    } catch {
+      return problem(400, 'bad-request', 'The body is not JSON.');
+    }
+    const headers: Record<string, string> = {};
+    request.headers.forEach((value, name) => (headers[name] = value));
+    requests.push({ method: request.method, path: url.pathname + url.search, headers, body: raw === '' ? undefined : body });
+    return handle(request.method, url, request.headers, body);
+  }) as typeof fetch;
+
+  function addPerson(person: { email: string; password: string; firstName?: string | null; lastName?: string | null; workspaces?: { id: string; name: string; role?: string }[] }): FakePerson {
+    const made: FakePerson = {
+      id: id('usr'),
+      email: person.email.toLowerCase(),
+      password: person.password,
+      firstName: person.firstName ?? null,
+      lastName: person.lastName ?? null,
+      workspaces: (person.workspaces ?? []).map((each) => ({ id: each.id, name: each.name, role: each.role ?? 'MEMBER' })),
+    };
+    people.set(made.id, made);
+    return made;
+  }
+
+  /** Makes a socket factory that speaks Live's socket protocol and delivers what `publish` sends. */
+  const websocket = (url: string, protocols: string[]): FakeSocket => {
+    const socket: FakeSocket = {
+      url,
+      protocols,
+      sent: [],
+      onopen: null,
+      onmessage: null,
+      onclose: null,
+      onerror: null,
+      send(data: string) {
+        const message = JSON.parse(data) as { type: string; id?: string; channel?: string; authorization?: { Authorization?: string } };
+        socket.sent.push(message);
+        const reply = (value: unknown) => queueMicrotask(() => socket.onmessage?.({ data: JSON.stringify(value) }));
+        if (message.type === 'connection_init') reply({ type: 'connection_ack', connectionTimeoutMs: 300_000 });
+        if (message.type === 'subscribe' && message.id !== undefined && message.channel !== undefined) {
+          const token = message.authorization?.Authorization?.replace(/^Bearer /, '') ?? '';
+          const who = token === 'anonymous' ? null : personOf(new Headers({ authorization: `Bearer ${token}` }));
+          if (!channelsFor(who).some((channel) => channel.name === message.channel)) {
+            reply({ type: 'subscribe_error', id: message.id, errors: [{ errorType: 'UnauthorizedException' }] });
+            return;
+          }
+          const map = live.subscribed.get(socket) ?? new Map<string, string>();
+          map.set(message.channel, message.id);
+          live.subscribed.set(socket, map);
+          reply({ type: 'subscribe_success', id: message.id });
+        }
+      },
+      close() {
+        live.sockets.splice(live.sockets.indexOf(socket), 1);
+        live.subscribed.delete(socket);
+        queueMicrotask(() => socket.onclose?.());
+      },
+    };
+    live.sockets.push(socket);
+    queueMicrotask(() => socket.onopen?.());
+    return socket;
+  };
+
+  return {
+    issuer,
+    appId,
+    fetch: fakeFetch,
+    websocket,
+    requests,
+    addPerson,
+    /** The person, by email. */
+    person: (email: string) => [...people.values()].find((each) => each.email === email.toLowerCase()),
+    /** The last email link sent to an address for a purpose (`verify-sign-up`, `reset-password`), or null. */
+    lastLink(to: string, purpose: string): string | null {
+      return [...sentLinks].reverse().find((each) => each.to === to.toLowerCase() && each.purpose === purpose)?.token ?? null;
+    },
+    sentLinks,
+    /** Sets the signed-in results of every flag: `{ key: value }` or full OFREP results. */
+    setFlags(results: Record<string, unknown>, visitor: Record<string, unknown> = {}): void {
+      const shape = (entries: Record<string, unknown>) => Object.entries(entries).map(([key, value]) => (value !== null && typeof value === 'object' && 'reason' in (value as object) ? { key, ...(value as object) } : { key, value, reason: 'TARGETING_MATCH', variant: String(value), metadata: {} }));
+      flagResults = shape(results);
+      visitorFlags = shape(visitor);
+      flagsRevision += 1;
+    },
+    setPlans(given: Record<string, unknown>[]): void {
+      plans = given;
+    },
+    setFacts(given: Record<string, unknown>): void {
+      facts = { ...facts, ...given };
+    },
+    usage,
+    /** Ends a session as Bridge would: its refresh tokens stop working at once. */
+    endSession,
+    sessions: () => [...sessions.values()],
+    /** Turns the Live connection endpoint off, as an issuer that does not offer it yet. */
+    withoutLiveConnection(): void {
+      live.offered = false;
+    },
+    /** Sends a notice on a channel, by its name: to every socket that joined it, and into its history. */
+    publish(channel: string, notice: { type: string; record?: string | null; workspace?: string | null }): void {
+      const frames = live.history.get(channel) ?? [];
+      const seq = (frames.at(-1)?.seq ?? 0) + 1;
+      const frame: LiveFrame = { seq, cursor: `${channel}#${String(seq)}`, notice: { type: notice.type, record: notice.record ?? null, version: null, time: new Date(now()).toISOString(), workspace: notice.workspace ?? null } };
+      frames.push(frame);
+      live.history.set(channel, frames);
+      for (const [socket, map] of live.subscribed) {
+        const subscription = map.get(channel);
+        if (subscription !== undefined) queueMicrotask(() => socket.onmessage?.({ data: JSON.stringify({ type: 'data', id: subscription, event: [JSON.stringify(frame)] }) }));
+      }
+    },
+    /** Puts a notice into a channel's history without sending it, as if the socket missed it. */
+    publishSilently(channel: string, notice: { type: string }): void {
+      const frames = live.history.get(channel) ?? [];
+      const seq = (frames.at(-1)?.seq ?? 0) + 1;
+      frames.push({ seq, cursor: `${channel}#${String(seq)}`, notice: { type: notice.type, record: null, version: null, time: new Date(now()).toISOString(), workspace: null } });
+      live.history.set(channel, frames);
+    },
+    /** Makes the next history read of a channel answer that it cannot fill the gap. */
+    loseHistory(channel: string): void {
+      live.lost.add(channel);
+    },
+    sockets: live.sockets,
+  };
+}
+
+export type FakeIssuer = ReturnType<typeof createFakeIssuer>;
