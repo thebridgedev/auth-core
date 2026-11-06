@@ -1,9 +1,10 @@
 import { createAccounts } from './accounts.js';
 import { createBilling } from './billing.js';
-import { discover, type Endpoints, type IssuerMetadata } from './core/discovery.js';
+import { Discovery, type DiscoveryOptions, type Endpoints, type IssuerMetadata } from './core/discovery.js';
 import { BridgeError } from './core/errors.js';
 import { platformFetch, type Fetch } from './core/http.js';
 import { defaultStorage, type BridgeStorage } from './core/storage.js';
+import { originOf, secureUrl } from './core/urls.js';
 import { Emitter, type Readable } from './core/util.js';
 import { Flags } from './flags.js';
 import { Live, MANY_CHANGED, type LiveNotice, type LiveOptions, type LiveStatus } from './live.js';
@@ -28,6 +29,14 @@ export interface BridgeOptions {
   readonly autoRefresh?: boolean;
   /** When another tab switches workspace: follow it, or raise `session-stale`. @default 'follow' */
   readonly otherTabWorkspace?: 'follow' | 'stale';
+  /**
+   * Other origins `bridge.fetch` may send the person's token to, such as
+   * your API on its own host (`https://api.example.com`). The page's own
+   * origin and Bridge's endpoints are always allowed; nothing else is.
+   */
+  readonly tokenOrigins?: readonly string[];
+  /** How the issuer's metadata is read again after a failure. */
+  readonly discovery?: DiscoveryOptions;
   /** For tests: Web Locks, or null for none. */
   readonly locks?: LockManagerLike | null;
   /** For tests: how tabs talk, or null for not at all. */
@@ -37,6 +46,8 @@ export interface BridgeOptions {
 export type BridgeEvents = SessionEvents & {
   /** A Live notice: something changed, fetch it again if it is on screen. */
   notice: LiveNotice;
+  /** The client started: the issuer's metadata is read and any stored session restored. Fires once. */
+  ready: { readonly issuer: string };
 };
 
 /** Notices after which flag results may differ. */
@@ -44,17 +55,21 @@ const FLAG_NOTICES = new Set(['flags.revision_changed', 'accounts.member_updated
 
 type AsyncFn = (...args: never[]) => Promise<unknown>;
 
-/** Every function of `api`, waiting for `ready` first, so calls made early wait instead of failing. */
-function afterReady<T extends object>(api: T, ready: Promise<void>): T {
+/**
+ * Every function of `api`, waiting for the client to start first, so calls
+ * made early wait instead of failing. A client that could not start tries
+ * again at once, and the call fails with the reason if it still cannot.
+ */
+function afterReady<T extends object>(api: T, started: () => Promise<void>): T {
   const wrapped: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(api)) {
     if (typeof value === 'function') {
       wrapped[name] = async (...args: never[]) => {
-        await ready;
+        await started();
         return (value as AsyncFn)(...args);
       };
     } else if (value !== null && typeof value === 'object') {
-      wrapped[name] = afterReady(value as object, ready);
+      wrapped[name] = afterReady(value as object, started);
     } else {
       wrapped[name] = value;
     }
@@ -80,11 +95,18 @@ export function createBridge(options: BridgeOptions) {
   const fetchFn = options.fetch ?? platformFetch();
   const storage = options.storage ?? defaultStorage();
   const events = new Emitter<BridgeEvents>();
-  let resolved: Endpoints | null = null;
+  const discovery = new Discovery(issuer, fetchFn, options.discovery);
   const endpoints = (): Endpoints => {
-    if (resolved === null) throw new BridgeError('misconfigured', 'The SDK is not ready yet: wait for `bridge.ready`.');
-    return resolved;
+    const found = discovery.current();
+    if (found === null) throw new BridgeError('unavailable', "The issuer's metadata has not been read yet.", { status: 503 });
+    return found;
   };
+  const tokenOrigins = (options.tokenOrigins ?? []).map((origin) => {
+    const secure = secureUrl(origin, 'https:');
+    const normalised = secure === null ? null : originOf(secure);
+    if (normalised === null) throw new BridgeError('misconfigured', `tokenOrigins must be https origins (http only on localhost); got "${origin}".`);
+    return normalised;
+  });
   const onError = (error: unknown) => events.emit('error', error);
 
   const session = new Session({
@@ -122,23 +144,62 @@ export function createBridge(options: BridgeOptions) {
     if (notice.type === 'identity.signed_out') void session.refresh({ force: true }).catch(() => undefined);
   });
 
-  const ready = (async () => {
-    resolved = await discover(issuer, fetchFn);
-    await session.restore();
-    if (options.loadFlags !== false) await flags.load();
-    started = true;
-    void live.start();
-  })();
-  // A failed start is reported through `ready`; never as an unhandled rejection.
-  ready.catch(onError);
+  // Starting: read the metadata, restore the session, load flags, connect Live. A failed start is tried again, waiting
+  // longer each time, so a page opened while Bridge was briefly unreachable recovers without a reload.
+  let starting: Promise<void> | null = null;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let destroyed = false;
+  function start(now: boolean): Promise<void> {
+    if (started) return Promise.resolve();
+    starting ??= (async () => {
+      await discovery.get({ now });
+      await session.restore();
+      if (options.loadFlags !== false) await flags.load();
+      started = true;
+      events.emit('ready', { issuer });
+      void live.start();
+    })().finally(() => {
+      starting = null;
+    });
+    return starting;
+  }
+  function retryLater(error: unknown): void {
+    onError(error);
+    if (destroyed || started || retryTimer !== null) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      start(false).catch(retryLater);
+    }, Math.max(1000, discovery.retryInMs()));
+  }
+  const ready = start(true);
+  // A failed first start is reported through `ready` and `error`, and tried again; never an unhandled rejection.
+  ready.catch(retryLater);
+  const ensureStarted = () => start(true);
+
+  /** Whether `bridge.fetch` may send the person's token to this address. */
+  function mayCarryToken(url: string): boolean {
+    const page = typeof location !== 'undefined' && typeof location.href === 'string' ? location : null;
+    const origin = originOf(url, page?.href);
+    if (origin === null) return false;
+    if (page !== null && origin === page.origin) return true;
+    if (tokenOrigins.includes(origin)) return true;
+    const known = discovery.current()?.metadata.endpoints ?? {};
+    return Object.values(known).some((endpoint) => endpoint !== undefined && originOf(endpoint) === origin);
+  }
 
   /**
    * `fetch` for the Child App's own API: adds the person's access token, and
    * after a 401 refreshes once and tries again. A request body that is a
-   * stream cannot be sent twice, so it is not retried.
+   * stream cannot be sent twice, so it is not retried. The token goes only to
+   * the page's own origin, Bridge's endpoints and `tokenOrigins`; any other
+   * address is refused before anything is sent.
    */
   async function bridgeFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-    await ready;
+    await ensureStarted();
+    const target = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    if (!mayCarryToken(target)) {
+      throw new BridgeError('misconfigured', `bridge.fetch sends the person's token only to this page's origin, Bridge's endpoints and \`tokenOrigins\`; ${originOf(target) ?? target} is none of them.`);
+    }
     const withToken = (token: string): RequestInit => {
       const headers = new Headers(init.headers ?? (typeof Request !== 'undefined' && input instanceof Request ? input.headers : undefined));
       headers.set('Authorization', `Bearer ${token}`);
@@ -158,7 +219,12 @@ export function createBridge(options: BridgeOptions) {
 
   return {
     issuer,
-    /** Resolves once the issuer's metadata is read and any stored session is restored. */
+    /**
+     * Resolves once the issuer's metadata is read and any stored session is
+     * restored. If the first try fails, it rejects with the reason and the
+     * client keeps trying in the background (`ready` fires when it starts);
+     * calls made meanwhile try again at once.
+     */
     ready,
     /** Who is signed in. */
     session: session.state as Readable<SessionState>,
@@ -180,7 +246,7 @@ export function createBridge(options: BridgeOptions) {
         /** The person's access token, for calling the Child App's own API by hand. Prefer `fetch`. */
         token: () => session.accessToken(),
       },
-      ready,
+      ensureStarted,
     ),
     flags,
     live: {
@@ -193,6 +259,8 @@ export function createBridge(options: BridgeOptions) {
     },
     /** Stops timers, Live and tab messages. */
     destroy(): void {
+      destroyed = true;
+      if (retryTimer !== null) clearTimeout(retryTimer);
       live.stop();
       session.destroy();
       events.clear();

@@ -78,16 +78,20 @@ export interface HandoffInput {
 
 /** What the app's sign-in page can show before anyone signs in. */
 export interface SignInOptions {
+  /** The app, and what its profile in Bridge gives for the page's header. */
   readonly app: {
-    readonly name: string | null;
-    readonly logo: string | null;
-    readonly website: string | null;
-    readonly privacyPolicy: string | null;
-    readonly termsOfService: string | null;
+    readonly id: string;
+    readonly name?: string | null;
+    readonly logo?: string | null;
+    readonly website?: string | null;
+    readonly privacyPolicy?: string | null;
+    readonly termsOfService?: string | null;
   };
+  /** Whether people may sign up. */
   readonly signUp: boolean;
+  /** The sign-in methods on offer, such as `password`. */
   readonly methods: readonly string[];
-  readonly password: { readonly minLength: number };
+  readonly password: { readonly minLength: number; readonly maxLength?: number };
 }
 
 /** An email link Bridge sent, as it lands on the app's page: `#bridge=<kind>&token=<token>`. */

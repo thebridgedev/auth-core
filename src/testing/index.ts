@@ -147,10 +147,12 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     return {
       ...standard,
       bridge_app: appId,
+      bridge_api_version: 2,
       bridge_access_token_audience: `${origin}/api`,
       bridge_revocation_lanes: Object.fromEntries(['identity-access', 'accounts', 'billing', 'app-registry'].map((lane) => [lane, `${v2}/${lane}/apps/${appId}/revocations/${lane}`])),
       bridge_endpoints: {
         '2': {
+          sign_in_options: `${at}/sign-in-options`,
           sign_up: `${at}/sign-up`,
           sign_up_verify: `${at}/sign-up/verify`,
           password_forgot: `${at}/password/forgot`,
@@ -260,6 +262,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (person === undefined || person.password !== body['password']) return oauth(400, 'wrong_credentials');
         return toWorkspace(person, body['code_challenge'], typeof body['workspace'] === 'string' ? body['workspace'] : null);
       }
+      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods: ['password'], password: { minLength: 8, maxLength: 128 } });
       if (route === '/token') {
         if (body['grant_type'] === 'authorization_code') {
           const code = codes.get(String(body['code']));
@@ -344,7 +347,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       return json(200, { ended: true });
     }
 
-    if (path === `/v2/live/apps/${appId}/connection`) return json(200, { kind: 'appsync-events', endpoint: 'wss://live.bridge.test', host: 'live-http.bridge.test', region: 'test-1' });
+    if (path === `/v2/live/apps/${appId}/connection`) return json(200, { kind: 'appsync-events', endpoint: 'wss://live.bridge.test/event/realtime', host: 'live-http.bridge.test', region: 'test-1' });
     if (path === `/v2/live/apps/${appId}/channels`) return json(200, { channels: channelsFor(null) });
     if (path === `/v2/live/apps/${appId}/history`) return json(200, historyFrom(url.searchParams.get('cursor') ?? `/app/${appId}#0`));
     if (method === 'POST' && path === `/v2/flags/apps/${appId}/ofrep/v1/evaluate/flags`) return json(200, { flags: visitorFlags }, { etag: `"v${String(flagsRevision)}"` });

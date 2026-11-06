@@ -1,7 +1,8 @@
 import type { Endpoints } from './core/discovery.js';
-import { isBridgeError } from './core/errors.js';
+import { BridgeError, isBridgeError } from './core/errors.js';
 import { call, type Fetch } from './core/http.js';
 import { ROUTES } from './core/routes.js';
+import { secureUrl } from './core/urls.js';
 import { Emitter, Store, base64urlText, randomId, type Readable } from './core/util.js';
 import type { Session } from './session.js';
 
@@ -163,8 +164,13 @@ export class Live {
       }
       const connection = await this.connection();
       if (run !== this.run) return;
-      if (connection?.kind === 'appsync-events' && connection.endpoint !== undefined && connection.host !== undefined && this.websocket !== null) {
-        this.open(run, connection.endpoint, connection.host);
+      const endpoint = connection?.kind === 'appsync-events' ? secureUrl(connection.endpoint, 'wss:') : null;
+      if (connection?.kind === 'appsync-events' && endpoint === null) {
+        // The access token goes into every subscribe frame: never over a socket that is not wss.
+        this.deps.onError(new BridgeError('misconfigured', `Live's address must be wss (ws only on localhost); got "${String(connection.endpoint)}". Polling instead.`));
+      }
+      if (endpoint !== null && typeof connection?.host === 'string' && this.websocket !== null) {
+        this.open(run, endpoint, connection.host);
       } else {
         this.poll(run);
       }

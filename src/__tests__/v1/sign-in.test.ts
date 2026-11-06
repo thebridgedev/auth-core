@@ -136,9 +136,14 @@ describe('forgot and reset password', () => {
   });
 });
 
-describe('invites and sign-in options wait for the issuer', () => {
-  it('answers not-offered while the issuer does not list them', async () => {
+describe('sign-in options and invites', () => {
+  it('reads the sign-in options when the issuer lists them', async () => {
     const { fake } = issuerWithPeople();
+    await expect(clientOn(fake).signIn.options()).resolves.toEqual({ app: { id: fake.appId }, signUp: true, methods: ['password'], password: { minLength: 8, maxLength: 128 } });
+  });
+
+  it('answers not-offered while the issuer does not list them', async () => {
+    const { fake } = issuerWithPeople({ metadata: 'standard' });
     const client = clientOn(fake);
     await expect(client.signIn.options()).rejects.toMatchObject({ kind: 'not-offered' });
     await expect(client.invites.preview('t')).rejects.toMatchObject({ kind: 'not-offered' });
@@ -180,6 +185,9 @@ describe('hand-off: signing in for a program on this machine', () => {
     ['http://evil.test:53123/callback', false],
     ['http://127.0.0.1.evil.test:53123/', false],
     ['http://user@127.0.0.1:53123/', false],
+    ['http://127.0.0.1@evil.test:53123/', false],
+    ['http://127.0.0.1:53123/#x', false],
+    ['http://[::ffff:127.0.0.1]:53123/', false],
     ['not a url', false],
   ])('returns a code to %s: %s', (address, allowed) => {
     expect(isLoopbackRedirect(address)).toBe(allowed);

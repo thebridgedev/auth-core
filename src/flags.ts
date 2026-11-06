@@ -68,6 +68,8 @@ export interface FlagsDeps {
 /** A context value Bridge may read as a hint. Bridge takes who the person is from their token, never from here. */
 export type Hint = string | number | boolean | null;
 
+const NO_RESULTS: ReadonlyMap<string, FlagResult> = new Map();
+
 /** Reads an OFREP bulk answer. */
 export function resultsOf(body: unknown): Map<string, FlagResult> {
   const flags = (body as { flags?: unknown } | undefined)?.flags;
@@ -134,9 +136,25 @@ export class Flags {
     return this.statusStore;
   }
 
+  /**
+   * Who the results are for: the person, the workspace and the sign-in
+   * session, or a visitor. Results are only ever read for the context they
+   * were fetched for, so no screen sees another person's or workspace's
+   * results while a session changes.
+   */
+  private contextNow(): string {
+    const state = this.deps.session.state.get();
+    if (state.status !== 'signed-in') return 'visitor';
+    return `person:${state.user.id}:${state.workspace?.id ?? ''}:${this.deps.session.sessionId() ?? ''}`;
+  }
+
+  private visible(): ReadonlyMap<string, FlagResult> {
+    return this.contextNow() === this.context ? this.results.get() : NO_RESULTS;
+  }
+
   /** A flag's value, or `fallback` when Bridge gave none or one of another type. */
   get<T>(key: string, fallback: T): T {
-    return new FlagSet(this.results.get()).get(key, fallback);
+    return new FlagSet(this.visible()).get(key, fallback);
   }
 
   /** Whether a boolean flag is on. Off unless Bridge said on. */
@@ -146,17 +164,17 @@ export class Flags {
 
   /** Why a flag has its value. */
   reason(key: string): FlagReason {
-    return new FlagSet(this.results.get()).reason(key);
+    return new FlagSet(this.visible()).reason(key);
   }
 
   /** Every result Bridge gave. */
   all(): ReadonlyMap<string, FlagResult> {
-    return this.results.get();
+    return this.visible();
   }
 
   /** Called now and whenever results change. */
   subscribe(listener: (results: ReadonlyMap<string, FlagResult>) => void): () => void {
-    return this.results.subscribe(listener);
+    return this.results.subscribe(() => listener(this.visible()));
   }
 
   /**
@@ -196,10 +214,17 @@ export class Flags {
   }
 
   private async fetchOnce(): Promise<void> {
-    const state = this.deps.session.state.get();
-    const endpoints = this.deps.endpoints();
-    const signedIn = state.status === 'signed-in';
-    const context = signedIn ? `person:${state.user.id}:${state.workspace?.id ?? ''}` : 'visitor';
+    const signedIn = this.deps.session.state.get().status === 'signed-in';
+    const context = this.contextNow();
+    let endpoints: Endpoints;
+    try {
+      endpoints = this.deps.endpoints();
+    } catch (error) {
+      // Not started yet: every flag gives its fallback until it is.
+      this.statusStore.set('error');
+      this.deps.onError(error);
+      return;
+    }
     if (context !== this.context) {
       this.etag = null;
       if (this.context !== '') this.results.set(new Map());
@@ -222,7 +247,8 @@ export class Flags {
       this.statusStore.set('ready');
     } catch (error) {
       if (isBridgeError(error, 'signed-out') && signedIn) return;
-      // Results already held stay: they were Bridge's answers for this same person. None held: every flag gives its fallback.
+      // Results already held stay: they are Bridge's answers for this same person, workspace and session (a change of any
+      // of them dropped them). None held: every flag gives its fallback.
       this.statusStore.set('error');
       this.deps.onError(error);
     }
