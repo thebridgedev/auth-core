@@ -17,6 +17,7 @@
       "workerd": "./dist/server/index.js",
       "worker": "./dist/server/index.js",
       "node": "./dist/server/index.js",
+      "browser": "./dist/server/browser.js",
       "import": "./dist/server/index.js",
       "default": "./dist/server/index.js"
     },

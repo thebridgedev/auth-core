@@ -26,7 +26,8 @@ interface Setup {
   usageAnswers: number[];
 }
 
-async function setUp(options: Partial<BridgeServerOptions> & { metadata?: Record<string, unknown>; listNow?: () => number } = {}): Promise<Setup> {
+async function setUp(options: Partial<BridgeServerOptions> & { metadata?: Record<string, unknown>; listNow?: () => number; metadataFailures?: number; jwksRedirect?: boolean } = {}): Promise<Setup> {
+  let metadataFailures = options.metadataFailures ?? 0;
   const ring = await makeKeyRing();
   const laneKeys: Record<string, LaneKey> = {};
   for (const lane of LANES) laneKeys[lane] = await makeLaneKey(lane);
@@ -49,7 +50,15 @@ async function setUp(options: Partial<BridgeServerOptions> & { metadata?: Record
     const request = new Request(input, init);
     const body = request.method === 'POST' ? await request.clone().json().catch(() => undefined) : undefined;
     requests.push({ url: request.url, headers: request.headers, body });
-    if (request.url === `${ISSUER}/.well-known/openid-configuration`) return Response.json(metadata);
+    if (request.url === `${ISSUER}/.well-known/openid-configuration`) {
+      if (metadataFailures > 0) {
+        metadataFailures -= 1;
+        return new Response(null, { status: 503 });
+      }
+      return Response.json(metadata);
+    }
+    if (options.jwksRedirect && request.url === JWKS) return new Response(null, { status: 302, headers: { location: `${ORIGIN}/elsewhere/jwks.json` } });
+    if (request.url === `${ORIGIN}/elsewhere/jwks.json`) return list.fetch(JWKS, init);
     if (request.url === `${ORIGIN}/v2/billing/usage`) {
       const status = usageAnswers.shift() ?? 201;
       return status === 201 ? Response.json({ counted: 1, deduped: 0, outcomes: [] }, { status }) : new Response(null, { status });
@@ -57,7 +66,8 @@ async function setUp(options: Partial<BridgeServerOptions> & { metadata?: Record
     if (request.url === `${ORIGIN}/v2/flags/ofrep/v1/evaluate/flags`) return Response.json({ flags: [{ key: 'reports', value: true, reason: 'TARGETING_MATCH' }] });
     return list.fetch(input, init);
   }) as typeof fetch;
-  const server = createBridgeServer({ issuer: ISSUER, fetch: fetchFn, appKey: 'app-key-1', usageFlushMs: 60_000, ...options });
+  const { metadata: _metadata, listNow: _listNow, metadataFailures: _failures, jwksRedirect: _redirect, ...serverOptions } = options;
+  const server = createBridgeServer({ issuer: ISSUER, fetch: fetchFn, appKey: 'app-key-1', usageFlushMs: 60_000, ...serverOptions });
   return { ring, list, requests, server, usageAnswers };
 }
 
@@ -239,5 +249,118 @@ describe('server: "count this"', () => {
     await server.close();
     const keyless = (await setUp({ appKey: undefined as unknown as string })).server;
     expect(() => keyless.usage.count(actor, 'api.calls')).toThrow(/app key/);
+  });
+});
+
+describe('server: a failed start-up is tried again, never kept', () => {
+  it('answers 503 while the metadata cannot be read, then recovers on its own', async () => {
+    const { server, ring } = await setUp({ metadataFailures: 1, discoveryRetryMs: 0 });
+    await expect(server.ready).rejects.toMatchObject({ kind: 'unavailable' });
+    await expect(server.check(withBearer(await personToken(ring)))).resolves.toMatchObject({ ok: true });
+    await server.close();
+  });
+
+  it('while it cannot be read: checks answer 503, flags give fallbacks, usage waits', async () => {
+    // Four failed reads: at start-up, then for the check, the flags and the usage below.
+    const { server, ring, requests } = await setUp({ metadataFailures: 4, discoveryRetryMs: 0 });
+    const token = await personToken(ring);
+    const refused = await server.check(withBearer(token));
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) expect([refused.error.kind, refused.error.status]).toEqual(['unavailable', 503]);
+    expect((await server.flags.forRequest(withBearer(token))).enabled('reports')).toBe(false);
+    const actor = { kind: 'person', id: 'usr-alice', personId: 'usr-alice', workspaceId: 'ws-acme', sessionId: 'ses-1', appId: APP, standing: 'active' } as const;
+    server.usage.count(actor, 'api.calls');
+    await server.usage.flush();
+    expect(server.usage.pending()).toBe(1);
+    // The fifth read works: everything recovers without a restart.
+    await expect(server.verify(withBearer(token))).resolves.toMatchObject({ id: 'usr-alice' });
+    await server.usage.flush();
+    expect(server.usage.pending()).toBe(0);
+    expect(requests.filter((request) => request.url.endsWith('/v2/billing/usage'))).toHaveLength(1);
+    await server.close();
+  });
+
+  it('within the wait after a failure, it answers at once without asking Bridge again', async () => {
+    const { server, ring, requests } = await setUp({ metadataFailures: 5, discoveryRetryMs: 60_000 });
+    await server.ready.catch(() => undefined);
+    const token = await personToken(ring);
+    for (let i = 0; i < 3; i += 1) expect((await server.check(withBearer(token))).ok).toBe(false);
+    expect(requests.filter((request) => request.url.endsWith('/openid-configuration'))).toHaveLength(1);
+    await server.close();
+  });
+});
+
+describe('server: usage that Bridge refuses never blocks the rest', () => {
+  it('drops and logs a batch refused with 400, and sends the next', async () => {
+    const logs: string[] = [];
+    const { server, ring, requests, usageAnswers } = await setUp({ log: (message) => logs.push(message) });
+    const actor = await server.verify(withBearer(await personToken(ring)));
+    usageAnswers.push(400);
+    server.usage.count(actor, 'api.calls');
+    await server.usage.flush();
+    expect(server.usage.pending()).toBe(0);
+    expect(logs).toContain('Usage reports were refused by Bridge and dropped.');
+    server.usage.count(actor, 'api.calls');
+    await server.usage.flush();
+    expect(requests.filter((request) => request.url.endsWith('/v2/billing/usage'))).toHaveLength(2);
+    await server.close();
+  });
+
+  it.each([408, 429, 503])('keeps a batch answered %i, to send again', async (status) => {
+    const { server, ring, usageAnswers } = await setUp();
+    const actor = await server.verify(withBearer(await personToken(ring)));
+    usageAnswers.push(status);
+    server.usage.count(actor, 'api.calls');
+    await server.usage.flush();
+    expect(server.usage.pending()).toBe(1);
+    await server.close();
+  });
+
+  it('keeps at most the queue limit through a long outage, dropping the oldest and saying so', async () => {
+    const logs: string[] = [];
+    const { server, ring, requests } = await setUp({ maxQueuedReports: 3, log: (message) => logs.push(message) });
+    const actor = await server.verify(withBearer(await personToken(ring)));
+    // Bridge cannot take reports for a while: they pile up, within the limit.
+    for (let i = 1; i <= 5; i += 1) server.usage.count(actor, 'api.calls', 1, { id: `r-${String(i)}` });
+    expect(server.usage.pending()).toBe(3);
+    expect(logs).toContain('The usage queue is full; the oldest reports are being dropped.');
+    await server.usage.flush();
+    const sent = (requests.at(-1)!.body as { reports: { id: string }[] }).reports.map((report) => report.id);
+    expect(sent).toEqual(['r-3', 'r-4', 'r-5']);
+    expect(logs).toContain('Usage reports were dropped while the queue was full.');
+    await server.close();
+  });
+
+  it('refuses an id or a workspace Bridge would refuse, at count time', async () => {
+    const { server, ring } = await setUp();
+    const actor = await server.verify(withBearer(await personToken(ring)));
+    expect(() => server.usage.count(actor, 'api.calls', 1, { id: 'has a space' })).toThrow(/report id/);
+    expect(() => server.usage.count(actor, 'api.calls', 1, { id: 'x'.repeat(201) })).toThrow(/report id/);
+    expect(() => server.usage.count(actor, 'api.calls', 1, { workspace: 'not/an id' })).toThrow(/workspace id/);
+    expect(server.usage.pending()).toBe(0);
+    await server.close();
+  });
+});
+
+describe('server: never in a browser, never via a redirect', () => {
+  it('refuses to start with the app key in a browser', () => {
+    const g = globalThis as { window?: unknown; document?: unknown };
+    g.window = {};
+    g.document = {};
+    try {
+      expect(() => createBridgeServer({ issuer: ISSUER, appKey: 'app-key-1', fetch: (() => undefined) as unknown as typeof fetch })).toThrow(/never in a browser/);
+    } finally {
+      delete g.window;
+      delete g.document;
+    }
+  });
+
+  it('does not follow a redirect for the key set: the check answers 503 and the other address is never read', async () => {
+    const { server, ring, requests } = await setUp({ jwksRedirect: true });
+    const result = await server.check(withBearer(await personToken(ring)));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.status).toBe(503);
+    expect(requests.some((request) => request.url.includes('/elsewhere/'))).toBe(false);
+    await server.close();
   });
 });

@@ -59,6 +59,29 @@ describe('the package', () => {
     }
   });
 
+  describe('the server entry, which holds the app key, never reaches a browser build', () => {
+    // Node's rule for "exports": the first key, in the object's order, that is one of the build's conditions.
+    const resolve = (conditions: string[]) => {
+      const entry = pkg.exports['./server'] as Record<string, string>;
+      const key = Object.keys(entry).find((name) => name !== 'types' && conditions.includes(name));
+      return key === undefined ? null : entry[key];
+    };
+
+    it.each([
+      ['a browser build', ['browser', 'import', 'module', 'default'], './dist/server/browser.js'],
+      ['Node', ['node', 'import', 'default'], './dist/server/index.js'],
+      ['an edge runtime (Next.js middleware)', ['edge-light', 'worker', 'browser', 'import', 'module', 'default'], './dist/server/index.js'],
+      ['Cloudflare Workers', ['workerd', 'worker', 'browser', 'import', 'default'], './dist/server/index.js'],
+      ['a server build that names only import', ['import', 'default'], './dist/server/index.js'],
+    ])('%s gets %s', (_, conditions, file) => {
+      expect(resolve(conditions as string[])).toBe(file);
+    });
+
+    it("the browser build's file throws as soon as it is imported", async () => {
+      await expect(import('../../server/browser.js')).rejects.toThrow(/runs only on a server/);
+    });
+  });
+
   it('has no .npmrc', () => {
     expect(readdirSync(root)).not.toContain('.npmrc');
   });
