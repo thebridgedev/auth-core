@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-alpha.1] - Unreleased
+
+### Changed
+
+- **Hand-off returns `iss`.** `handoffReturnUrl(request, code, issuer)` now takes the issuer the page signed in with and adds it to the callback as `iss` (RFC 9207), so a program can check which issuer answered.
+- **Hand-off returns only to `/callback`.** `isLoopbackRedirect` and `readHandoffRequest` accept `http://127.0.0.1:<port>/callback` and `http://[::1]:<port>/callback` only, so a crafted link cannot send a code to another service on the same port. A request that gives a parameter twice is refused. `HANDOFF_CALLBACK_PATH` names the path.
+
 ## [1.0.0-alpha.0] - Unreleased
 
 The 1.0 line, for the new version of The Bridge. Published on the `alpha` tag; `latest` stays on 0.x. It does not keep the 0.x API: apps on 0.x keep working on 0.x.

@@ -183,25 +183,48 @@ describe('hand-off: signing in for a program on this machine', () => {
     ['https://127.0.0.1:53123/callback', false],
     ['http://127.0.0.1/callback', false],
     ['http://evil.test:53123/callback', false],
-    ['http://127.0.0.1.evil.test:53123/', false],
-    ['http://user@127.0.0.1:53123/', false],
-    ['http://127.0.0.1@evil.test:53123/', false],
-    ['http://127.0.0.1:53123/#x', false],
-    ['http://[::ffff:127.0.0.1]:53123/', false],
+    ['http://127.0.0.1.evil.test:53123/callback', false],
+    ['http://127.0.0.1.evil.com:53123/callback', false],
+    ['http://user@127.0.0.1:53123/callback', false],
+    ['http://127.0.0.1@evil.test:53123/callback', false],
+    ['http://127.0.0.1@evil.com/callback', false],
+    ['http://127.0.0.1:53123/callback#x', false],
+    ['http://[::ffff:127.0.0.1]:53123/callback', false],
+    ['http://127.0.0.1:53123/', false],
+    ['http://127.0.0.1:53123/cb', false],
+    ['http://127.0.0.1:53123/callback/', false],
+    ['http://127.0.0.1:53123/callback/x', false],
+    ['http://127.0.0.1:53123/%63allback', false],
+    ['http://127.0.0.1:53123/other/callback', false],
     ['not a url', false],
   ])('returns a code to %s: %s', (address, allowed) => {
     expect(isLoopbackRedirect(address)).toBe(allowed);
   });
 
-  it('reads a hand-off request, and sends the code back with the state', () => {
-    const request = readHandoffRequest(`?code_challenge=${challenge}&code_challenge_method=S256&redirect_uri=${encodeURIComponent('http://127.0.0.1:5000/cb')}&state=state-123456`);
-    expect(handoffReturnUrl(request, 'the-code')).toBe('http://127.0.0.1:5000/cb?code=the-code&state=state-123456');
+  const query = (redirect: string, extra = '') =>
+    `?code_challenge=${challenge}&code_challenge_method=S256&redirect_uri=${encodeURIComponent(redirect)}&state=state-123456${extra}`;
+
+  it('reads a hand-off request, and sends the code back with the state and the issuer', () => {
+    const request = readHandoffRequest(query('http://127.0.0.1:5000/callback'));
+    const back = new URL(handoffReturnUrl(request, 'the-code', 'https://bridge.test/identity-access/apps/app-1'));
+    expect(back.origin + back.pathname).toBe('http://127.0.0.1:5000/callback');
+    expect(back.searchParams.get('code')).toBe('the-code');
+    expect(back.searchParams.get('state')).toBe('state-123456');
+    expect(back.searchParams.get('iss')).toBe('https://bridge.test/identity-access/apps/app-1');
+    expect(() => handoffReturnUrl(request, 'the-code', '')).toThrow(/issuer/);
+  });
+
+  it('refuses a callback other than /callback, and a parameter given twice', () => {
+    expect(() => readHandoffRequest(query('http://127.0.0.1:5000/cb'))).toThrow(/callback/);
+    expect(() => readHandoffRequest(query('http://127.0.0.1:5000/callback', `&redirect_uri=${encodeURIComponent('https://evil.test/callback')}`))).toThrow(/more than once/);
+    expect(() => readHandoffRequest(query('http://127.0.0.1:5000/callback', '&state=another-state-1'))).toThrow(/more than once/);
+    expect(() => readHandoffRequest(query('http://127.0.0.1:5000/callback', `&code_challenge=${challenge}`))).toThrow(/more than once/);
   });
 
   it('refuses a request that would send the code off the machine', () => {
     expect(() => readHandoffRequest(`code_challenge=${challenge}&code_challenge_method=S256&redirect_uri=https%3A%2F%2Fevil.test%2F&state=state-123456`)).toThrow(/loopback|127\.0\.0\.1/);
-    expect(() => readHandoffRequest(`code_challenge=${challenge}&code_challenge_method=plain&redirect_uri=http%3A%2F%2F127.0.0.1%3A5000%2F&state=state-123456`)).toThrow(/S256/);
-    expect(() => readHandoffRequest(`code_challenge=${challenge}&code_challenge_method=S256&redirect_uri=http%3A%2F%2F127.0.0.1%3A5000%2F`)).toThrow(/state/);
+    expect(() => readHandoffRequest(`code_challenge=${challenge}&code_challenge_method=plain&redirect_uri=http%3A%2F%2F127.0.0.1%3A5000%2Fcallback&state=state-123456`)).toThrow(/S256/);
+    expect(() => readHandoffRequest(`code_challenge=${challenge}&code_challenge_method=S256&redirect_uri=http%3A%2F%2F127.0.0.1%3A5000%2Fcallback`)).toThrow(/state/);
   });
 });
 

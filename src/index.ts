@@ -27,7 +27,7 @@ export type { Readable } from './core/util.js';
 export type { SessionState, SessionUser, SessionWorkspace, SignedInState, SignedOutReason } from './session.js';
 export { readEmailLink } from './sign-in.js';
 export type { EmailLink, HandoffInput, HandoffStep, SignInInput, SignInOptions, SignInStep, SignUpInput, WorkspaceChoice } from './sign-in.js';
-export { handoffReturnUrl, isLoopbackRedirect, readHandoffRequest } from './handoff.js';
+export { HANDOFF_CALLBACK_PATH, handoffReturnUrl, isLoopbackRedirect, readHandoffRequest } from './handoff.js';
 export type { HandoffRequest } from './handoff.js';
 
 export type { Invite, Me, MeUpdate, Member, MemberUpdate, MyWorkspace, Page, Role, Workspace, WorkspaceUpdate } from './accounts.js';
