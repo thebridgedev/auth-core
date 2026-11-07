@@ -11,11 +11,19 @@ import { isS256Challenge } from './core/util.js';
  * with the code. Only the program holds the verifier, so only it can trade
  * the code for tokens.
  *
- * The return address must be a loopback address with a literal IP
- * (RFC 8252, 7.3): `http://127.0.0.1:<port>/…` or `http://[::1]:<port>/…`.
- * Never `localhost`, which a hosts file can point anywhere, and never any
- * other host, so a crafted link cannot send a code off the person's machine.
+ * The return address must be a loopback address with a literal IP and a
+ * port (RFC 8252, 7.3), at the program's callback path:
+ * `http://127.0.0.1:<port>/callback` or `http://[::1]:<port>/callback`.
+ * Never `localhost`, which a hosts file can point anywhere, never any other
+ * host, and never another path on that port, so a crafted link cannot send
+ * a code off the person's machine or to another local service.
+ *
+ * The code goes back with `state` and `iss`, the issuer the page signed in
+ * with (RFC 9207), so the program can tell which issuer answered.
  */
+
+/** The one path a hand-off returns the code to. */
+export const HANDOFF_CALLBACK_PATH = '/callback';
 
 export interface HandoffRequest {
   readonly codeChallenge: string;
@@ -34,7 +42,7 @@ export function isLoopbackRedirect(value: string): boolean {
   }
   if (url.protocol !== 'http:' || url.username !== '' || url.password !== '' || url.hash !== '') return false;
   if (url.hostname !== '127.0.0.1' && url.hostname !== '[::1]') return false;
-  return url.port !== '';
+  return url.port !== '' && url.pathname === HANDOFF_CALLBACK_PATH;
 }
 
 /**
@@ -45,6 +53,10 @@ export function isLoopbackRedirect(value: string): boolean {
  */
 export function readHandoffRequest(search: string | URLSearchParams): HandoffRequest {
   const params = typeof search === 'string' ? new URLSearchParams(search.startsWith('?') ? search.slice(1) : search) : search;
+  for (const name of ['code_challenge', 'code_challenge_method', 'redirect_uri', 'state']) {
+    // A repeated parameter could be read one way here and another way elsewhere: refused, not guessed.
+    if (params.getAll(name).length > 1) throw new BridgeError('invalid', `The hand-off has ${name} more than once.`);
+  }
   const codeChallenge = params.get('code_challenge');
   const method = params.get('code_challenge_method');
   const redirectUri = params.get('redirect_uri');
@@ -52,17 +64,23 @@ export function readHandoffRequest(search: string | URLSearchParams): HandoffReq
   if (!isS256Challenge(codeChallenge)) throw new BridgeError('invalid', 'The hand-off needs an S256 code_challenge.');
   if (method !== 'S256') throw new BridgeError('invalid', 'The hand-off needs code_challenge_method=S256.');
   if (redirectUri === null || !isLoopbackRedirect(redirectUri)) {
-    throw new BridgeError('invalid', 'The hand-off returns only to http://127.0.0.1:<port>/ or http://[::1]:<port>/.');
+    throw new BridgeError('invalid', 'The hand-off returns only to http://127.0.0.1:<port>/callback or http://[::1]:<port>/callback.');
   }
   if (state === null || state.length < 8 || state.length > 512) throw new BridgeError('invalid', 'The hand-off needs a state of 8 to 512 characters.');
   return { codeChallenge, codeChallengeMethod: 'S256', redirectUri, state };
 }
 
-/** The address to send the browser to once the code is issued. */
-export function handoffReturnUrl(request: HandoffRequest, code: string): string {
+/**
+ * The address to send the browser to once the code is issued: the program's
+ * callback with `code`, `state` and `iss`. `issuer` is the issuer the page
+ * signed in with, exactly as its metadata names it (`bridge.issuer`).
+ */
+export function handoffReturnUrl(request: HandoffRequest, code: string, issuer: string): string {
   if (!isLoopbackRedirect(request.redirectUri)) throw new BridgeError('invalid', 'The hand-off returns only to a loopback address.');
+  if (typeof issuer !== 'string' || issuer === '') throw new BridgeError('misconfigured', 'handoffReturnUrl needs the issuer the page signed in with.');
   const url = new URL(request.redirectUri);
   url.searchParams.set('code', code);
   url.searchParams.set('state', request.state);
+  url.searchParams.set('iss', issuer);
   return url.toString();
 }

@@ -187,14 +187,14 @@ The low-level checker is at `@nebulr-group/bridge-auth-core/verifier`.
 
 ## Signing in for a program on the same machine
 
-A sign-in page can sign a person in for a command-line tool on their machine. The tool opens the page with its PKCE challenge and a loopback address. The page signs in with that challenge and sends the code back; only the tool can trade it for tokens.
+A sign-in page can sign a person in for a command-line tool on their machine. The tool opens the page with its PKCE challenge and its loopback callback. The page signs in with that challenge and sends the code back with `state` and `iss` (the issuer, RFC 9207); only the tool can trade the code for tokens.
 
 ```ts
 import { readHandoffRequest, handoffReturnUrl } from '@nebulr-group/bridge-auth-core';
 
-const request = readHandoffRequest(location.search); // refuses anything but http://127.0.0.1:<port> or http://[::1]:<port>
+const request = readHandoffRequest(location.search); // refuses anything but http://127.0.0.1:<port>/callback or http://[::1]:<port>/callback
 const step = await bridge.signIn.handoff({ email, password, codeChallenge: request.codeChallenge });
-if (step.done) location.assign(handoffReturnUrl(request, step.code));
+if (step.done) location.assign(handoffReturnUrl(request, step.code, bridge.issuer));
 ```
 
 ## Errors
