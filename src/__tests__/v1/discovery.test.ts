@@ -140,10 +140,12 @@ describe("discovery: Bridge's own discovery document", () => {
     for (const name of Object.keys(doc.bridge_endpoints['2'] ?? {})) expect(Object.keys(CONTRACT_PATHS)).toContain(name);
   });
 
-  it('offers every route the SDK calls, except the invites Bridge does not list yet', () => {
+  it('offers every route the SDK calls, the invites included', () => {
     const endpoints = endpointsFrom(readMetadata(doc.issuer, doc));
     const missing = Object.entries(ROUTES).filter(([, route]) => !endpoints.offers(route)).map(([name]) => name);
-    expect(missing.sort()).toEqual(['inviteAccept', 'invitePreview']);
+    expect(missing).toEqual([]);
+    expect(endpoints.url(ROUTES.invitePreview)).toBe('https://bridge.test/v2/identity-access/apps/app-1/invites/preview');
+    expect(endpoints.url(ROUTES.inviteAccept)).toBe('https://bridge.test/v2/identity-access/invites/accept');
   });
 
   it('the addresses it gives are the contract\'s paths', () => {

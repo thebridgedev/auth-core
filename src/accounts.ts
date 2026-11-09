@@ -84,11 +84,13 @@ export interface MemberUpdate {
   readonly customParams?: Readonly<Record<string, unknown>>;
 }
 
+/** An open invite, as the workspace's list shows it. Accepted and revoked ones leave the list. */
 export interface Invite {
   readonly id: string;
   readonly email: string;
   readonly role: string;
-  readonly state: string;
+  /** `open` while the link works; `expired` once its 30 days have passed. */
+  readonly state: 'open' | 'expired' | (string & {});
   readonly expiresAt: string;
   readonly invitedBy: string | null;
   readonly createdAt: string | null;
@@ -152,8 +154,15 @@ export function createAccounts(deps: AccountsDeps) {
         deletionPreview: (memberId: string) => send<unknown>(ROUTES.memberDeletionPreview, { params: { memberId } }),
       },
       invites: {
+        /** The workspace's open invites. */
         list: () => send<Invite[]>(ROUTES.invites),
-        /** Invites an email, or sends the invite again (the old link stops working). */
+        /**
+         * Invites an email with a role (the workspace's default when left out),
+         * or sends the invite again: the old link stops working. Bridge emails
+         * the link; it works for 30 days. Refused with `conflict` when the app
+         * has no email-links address or the person is a member already, and
+         * with `rate-limited` when the workspace has sent too many for now.
+         */
         create: (invite: { readonly email: string; readonly role?: string }) => send<Invite>(ROUTES.inviteCreate, { body: invite }),
         revoke: (inviteId: string) => send<{ revoked: boolean }>(ROUTES.inviteRevoke, { params: { inviteId } }),
       },

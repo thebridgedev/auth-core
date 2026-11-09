@@ -112,6 +112,10 @@ const CODE_KINDS: Readonly<Record<string, BridgeErrorKind>> = {
   invalid_client: 'misconfigured',
   unsupported_grant_type: 'misconfigured',
   invalid_request: 'invalid',
+  // An invite's link that no longer works: revoked, used, or out of date (also what a link that names no invite gets).
+  invite_revoked: 'link-invalid',
+  invite_used: 'link-invalid',
+  invite_expired: 'link-invalid',
 };
 
 /** Problem `type`s whose kind is not the status's. */

@@ -37,8 +37,8 @@ describe('contract: the SDK calls only what Bridge promises at version 2', () =>
     expect(promised.has(key)).toBe(true);
   });
 
-  it.each(routes.filter((each) => 'pending' in each.route).map((each) => [each.name, each.key]))('%s (%s) is still pending: not in the contract yet', (_, key) => {
-    expect(promised.has(key)).toBe(false);
+  it('a route still marked pending is not in the contract yet', () => {
+    for (const { name, key, route } of routes) if ('pending' in route) expect([name, promised.has(key)]).toEqual([name, false]);
   });
 
   it('every route is at version 2', () => {
@@ -54,7 +54,7 @@ describe('contract: the SDK calls only what Bridge promises at version 2', () =>
   });
 
   it('every route before sign-in is public, and every signed-in route takes a person', () => {
-    const beforeSignIn = ['signIn', 'token', 'revoke', 'introspect', 'jwks', 'signInOptions', 'signUp', 'signUpVerify', 'passwordForgot', 'passwordSet', 'flagsVisitorEvaluate', 'liveVisitorChannels', 'liveVisitorHistory', 'liveConnection'];
+    const beforeSignIn = ['signIn', 'token', 'revoke', 'introspect', 'jwks', 'signInOptions', 'signUp', 'signUpVerify', 'passwordForgot', 'passwordSet', 'invitePreview', 'flagsVisitorEvaluate', 'liveVisitorChannels', 'liveVisitorHistory', 'liveConnection'];
     for (const { name, key } of routes) {
       const endpoint = promised.get(key);
       if (endpoint === undefined) continue;
@@ -76,7 +76,7 @@ describe('contract: every field the SDK sends is one Bridge accepts', () => {
     });
   }
 
-  it('across sign-in, sign-up, recovery, the team, billing, flags and sign-out', async () => {
+  it('across sign-in, sign-up, recovery, invites, the team, billing, flags and sign-out', async () => {
     const { fake } = issuerWithPeople();
     fake.setPlans([{ key: 'pro', name: 'Pro', free: false, prices: [{ currency: 'eur', interval: 'month', amount: 2000 }], features: [], limits: {}, archived: false, description: null, trial: null }]);
     const client = clientOn(fake);
@@ -98,6 +98,14 @@ describe('contract: every field the SDK sends is one Bridge accepts', () => {
     await client.signUp.finish(fake.lastLink('carol@acme.test', 'verify-sign-up')!);
     await client.password.forgot('carol@acme.test');
     await client.password.set(fake.lastLink('carol@acme.test', 'reset-password')!, 'another long password');
+    // Invites: a new person signs up from one; a person with an account signs in and accepts.
+    const forNew = fake.invite('dave@acme.test', { id: 'ws-acme', name: 'Acme' });
+    await client.invites.preview(forNew);
+    await client.invites.signUp({ token: forNew, password: PASSWORD, firstName: 'Dave', lastName: 'D', email: 'dave@acme.test' });
+    await client.signOut();
+    const forAlice = fake.invite('alice@acme.test', { id: 'ws-globex', name: 'Globex' });
+    await client.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    await client.invites.accept(forAlice);
 
     const checked = new Set<string>();
     for (const request of fake.requests) {
@@ -109,7 +117,7 @@ describe('contract: every field the SDK sends is one Bridge accepts', () => {
       checked.add(`${request.method} ${endpoint!.path}`);
     }
     // The flows above reach the endpoints that take a body.
-    for (const key of ['POST /v2/identity-access/apps/{appId}/sign-in', 'POST /v2/identity-access/apps/{appId}/token', 'POST /v2/identity-access/apps/{appId}/sign-up', 'POST /v2/identity-access/apps/{appId}/sign-up/verify', 'POST /v2/identity-access/apps/{appId}/password', 'PATCH /v2/accounts/me', 'POST /v2/accounts/invites', 'POST /v2/billing/payer/plan', 'POST /v2/flags/ofrep/v1/evaluate/flags']) {
+    for (const key of ['POST /v2/identity-access/apps/{appId}/sign-in', 'POST /v2/identity-access/apps/{appId}/token', 'POST /v2/identity-access/apps/{appId}/sign-up', 'POST /v2/identity-access/apps/{appId}/sign-up/verify', 'POST /v2/identity-access/apps/{appId}/password', 'PATCH /v2/accounts/me', 'POST /v2/accounts/invites', 'POST /v2/billing/payer/plan', 'POST /v2/flags/ofrep/v1/evaluate/flags', 'POST /v2/identity-access/apps/{appId}/invites/preview', 'POST /v2/identity-access/invites/accept']) {
       expect(checked).toContain(key);
     }
   });
