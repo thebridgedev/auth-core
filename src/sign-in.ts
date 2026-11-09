@@ -53,8 +53,6 @@ export interface SignInInput {
   readonly password: string;
   /** Sign in straight to this workspace. */
   readonly workspace?: string;
-  /** An invite to accept on the way in. Needs an issuer that accepts invites at sign-in. */
-  readonly invite?: string;
 }
 
 export interface SignUpInput {
@@ -64,8 +62,42 @@ export interface SignUpInput {
   readonly lastName?: string;
   /** `true` for a new workspace with no name yet, or its name. Leave out for none. */
   readonly workspace?: boolean | string;
-  /** An invite to accept once the address is proved. Needs an issuer that accepts invites at sign-up. */
-  readonly invite?: string;
+}
+
+/** What an invite's link shows before anyone signs in. */
+export type InvitePreview =
+  | {
+      /** The invite works: show the workspace, then sign up or sign in and accept. */
+      readonly state: 'open';
+      /** The inviting workspace's name and logo, as its members set them. */
+      readonly workspace: { readonly name: string | null; readonly logo: string | null };
+      /**
+       * Whether the invited address already signs in to this app: then the
+       * person signs in and accepts (`invites.accept`), otherwise signs up
+       * from the invite (`invites.signUp`).
+       */
+      readonly account: boolean;
+    }
+  | {
+      /** The invite no longer works: revoked, used already, or out of date (also a link that names no invite). */
+      readonly state: 'revoked' | 'used' | 'expired';
+    };
+
+/** A sign-up from an invite. The invite's link proves the address, so no second email is sent. */
+export interface InviteSignUpInput {
+  /** The token from the invite's link. */
+  readonly token: string;
+  readonly password: string;
+  readonly firstName?: string;
+  readonly lastName?: string;
+  /** The address the invite was sent to. Optional: when given, it must be that address. */
+  readonly email?: string;
+}
+
+/** An accepted invite: the workspace the person joined, and their membership there. */
+export interface AcceptedInvite {
+  readonly workspace: { readonly id: string; readonly name: string | null };
+  readonly member: { readonly id: string; readonly role: string | null };
 }
 
 export interface HandoffInput {
@@ -199,7 +231,6 @@ export function createSignIn(deps: SignInDeps) {
           code_challenge: pkce.challenge,
           code_challenge_method: 'S256',
           ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
-          ...(input.invite === undefined ? {} : { invite: input.invite }),
         });
         return signInSteps(answer, pkce.verifier);
       },
@@ -246,7 +277,6 @@ export function createSignIn(deps: SignInDeps) {
           ...(input.firstName === undefined ? {} : { firstName: input.firstName }),
           ...(input.lastName === undefined ? {} : { lastName: input.lastName }),
           ...(input.workspace === undefined || input.workspace === false ? {} : { workspace: input.workspace }),
-          ...(input.invite === undefined ? {} : { invite: input.invite }),
         });
         return { next: 'verify_email' };
       },
@@ -279,15 +309,73 @@ export function createSignIn(deps: SignInDeps) {
     },
 
     invites: {
-      /** Shows an invite before anyone signs in: the workspace and when it expires. */
-      async preview(token: string): Promise<unknown> {
-        return (await call<unknown>(deps.fetch, deps.endpoints().url(ROUTES.invitePreview, { token }), { method: 'GET' })).body;
+      /**
+       * What an invite's link shows before anyone signs in: whether it still
+       * works, the inviting workspace, and whether the invited address
+       * already has an account. It never says the address, the role or who
+       * invited. The token goes in the request body, never in an address.
+       */
+      async preview(token: string): Promise<InvitePreview> {
+        const answer = (await call<Record<string, unknown>>(deps.fetch, deps.endpoints().url(ROUTES.invitePreview), { method: 'POST', body: { token } })).body;
+        const state = answer?.['state'];
+        if (state === 'open') {
+          const workspace = (answer?.['workspace'] ?? {}) as Record<string, unknown>;
+          return {
+            state,
+            workspace: {
+              name: typeof workspace['name'] === 'string' ? workspace['name'] : null,
+              logo: typeof workspace['logo'] === 'string' ? workspace['logo'] : null,
+            },
+            account: answer?.['account'] === true,
+          };
+        }
+        if (state === 'revoked' || state === 'used') return { state };
+        return { state: 'expired' };
       },
-      /** Accepts an invite as the signed-in person, then moves the session into the new workspace. */
-      async accept(token: string): Promise<void> {
-        const answer = await post(ROUTES.inviteAccept, { invite: token }, await deps.session.accessToken());
-        const workspace = (answer as { workspace?: unknown } | undefined)?.workspace;
-        await deps.session.refresh(typeof workspace === 'string' ? { workspace } : { force: true });
+
+      /**
+       * Signs up from an invite and signs the new person in, in the inviting
+       * workspace with the invited role. The link proves the address, so no
+       * email is sent and nothing is kept for a later tab: the code comes back
+       * at once and is traded here. An address that already has an account
+       * gets `conflict` (`account_exists`): sign in, then `accept`.
+       */
+      async signUp(input: InviteSignUpInput): Promise<SignInStep> {
+        const pkce = await createPkce();
+        const answer = await post(ROUTES.signUp, {
+          invite: input.token,
+          password: input.password,
+          code_challenge: pkce.challenge,
+          code_challenge_method: 'S256',
+          ...(input.email === undefined ? {} : { email: input.email }),
+          ...(input.firstName === undefined ? {} : { firstName: input.firstName }),
+          ...(input.lastName === undefined ? {} : { lastName: input.lastName }),
+        });
+        return signInSteps(answer, pkce.verifier);
+      },
+
+      /**
+       * Accepts an invite as the signed-in person, then moves the session
+       * into the workspace they joined. Only the person the invite was sent
+       * to can accept it: anyone else gets `forbidden`
+       * (`invite_for_another_address`), and a member already gets `conflict`
+       * (`already_member`).
+       */
+      async accept(token: string): Promise<AcceptedInvite> {
+        // An issuer that does not offer invites says so before anyone is asked to sign in.
+        deps.endpoints().url(ROUTES.inviteAccept);
+        const answer = (await post(ROUTES.inviteAccept, { token }, await deps.session.accessToken())) as Record<string, unknown> | undefined;
+        const workspace = (answer?.['workspace'] ?? {}) as Record<string, unknown>;
+        const member = (answer?.['member'] ?? {}) as Record<string, unknown>;
+        if (typeof workspace['id'] !== 'string' || workspace['id'] === '') {
+          throw new BridgeError('unavailable', 'Bridge accepted the invite but did not name the workspace.');
+        }
+        const accepted: AcceptedInvite = {
+          workspace: { id: workspace['id'], name: typeof workspace['name'] === 'string' ? workspace['name'] : null },
+          member: { id: typeof member['id'] === 'string' ? member['id'] : '', role: typeof member['role'] === 'string' ? member['role'] : null },
+        };
+        await deps.session.refresh({ workspace: accepted.workspace.id });
+        return accepted;
       },
     },
   };
@@ -306,4 +394,25 @@ export function readEmailLink(hashOrUrl: string): EmailLink | null {
   if (token === null || token === '') return null;
   if (kind !== 'verify-email' && kind !== 'reset-password' && kind !== 'invite') return null;
   return { kind, token };
+}
+
+/** The parts of a window `takeEmailLink` reads and changes. */
+export interface EmailLinkWindow {
+  readonly location: { readonly hash: string; readonly pathname: string; readonly search: string };
+  readonly history: { readonly state: unknown; replaceState(data: unknown, unused: string, url?: string): void };
+}
+
+/**
+ * Takes the email link from the page's address and clears it, so its token
+ * does not stay in the address bar, the history or a bookmark. Only a
+ * Bridge link is taken (`#bridge=…&token=…`); any other fragment is left as
+ * it is. With `kind`, only a link of that kind. Returns null when the page
+ * carries none, or outside a browser.
+ */
+export function takeEmailLink(kind?: EmailLink['kind'], win: EmailLinkWindow | undefined = typeof window === 'undefined' ? undefined : window): EmailLink | null {
+  if (win === undefined) return null;
+  const link = readEmailLink(win.location.hash);
+  if (link === null || (kind !== undefined && link.kind !== kind)) return null;
+  win.history.replaceState(win.history.state, '', `${win.location.pathname}${win.location.search}`);
+  return link;
 }

@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.2] - Unreleased
+
+### Added
+
+- **Invites at sign-in.** `invites.preview(token)` shows an invite before anyone signs in: `open` with the workspace's name and logo and whether the address has an account, or only `revoked`, `used` or `expired`. `invites.signUp({ token, password, … })` signs a new person up from the invite and in, in the inviting workspace, with no second email. `invites.accept(token)` accepts as the signed-in person and moves the session into the workspace they joined. The token always travels in a request body.
+- **`takeEmailLink(kind?)`** reads a Bridge email link (`#bridge=…&token=…`) from the page's address and clears it from the address bar and the history. Other fragments are left alone.
+- **Invite refusals have their own codes.** A link that no longer works is `link-invalid` with `code` `invite_revoked`, `invite_used` or `invite_expired`; another address is `forbidden` (`invite_for_another_address`); a member already, or a sign-up for an address with an account, is `conflict` (`already_member`, `account_exists`).
+- **The fake issuer** in `./testing` serves invites: `invite(email, workspace, role?)`, `invites()`, `expireInvites(email)`, and `lastLink(email, 'invite')`. Its invites last 30 days, and sending one again replaces its token.
+
+### Changed
+
+- **`signIn.start` and `signUp.start` no longer take `invite`.** A sign-up from an invite is `invites.signUp`, and a person with an account signs in, then calls `invites.accept`.
+- **The invite endpoints are the issuer's** `invites` and `invite_preview`. `invites.preview` is a POST with the token in the body.
+
 ## [1.0.0-alpha.1] - Unreleased
 
 ### Changed

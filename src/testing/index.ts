@@ -3,8 +3,8 @@
  *
  * A fake Bridge issuer in memory, for testing code built on the browser SDK
  * without a network: discovery, sign-in with the workspace step, sign-up
- * with its email link, password recovery, refresh with rotation, sign-out,
- * accounts, flags, billing, usage and Live. Pass its `fetch` (and its
+ * with its email link, password recovery, invites, refresh with rotation,
+ * sign-out, accounts, flags, billing, usage and Live. Pass its `fetch` (and its
  * `websocket` for Live) to `createBridge`.
  *
  * Its tokens are shaped like Bridge's but not signed: they are for code
@@ -67,6 +67,22 @@ export interface FakeSocket {
   onerror: (() => void) | null;
 }
 
+interface FakeInvite {
+  readonly id: string;
+  readonly email: string;
+  role: string;
+  state: 'open' | 'accepted' | 'revoked';
+  expiresAt: string;
+  invitedBy: string | null;
+  createdAt: string;
+  /** The link's token, as Bridge emails it: `<workspace>_<secret>`. Bridge keeps only its digest; the fake keeps it to answer. */
+  token: string;
+  readonly workspace: { readonly id: string; readonly name: string };
+}
+
+/** How long an invite works. */
+const INVITE_DAYS = 30;
+
 export interface RecordedRequest {
   readonly method: string;
   readonly path: string;
@@ -118,7 +134,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   const links = new Map<string, { purpose: 'sign-up' | 'reset'; email: string; challenge?: string; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
   const sentLinks: { to: string; purpose: string; token: string }[] = [];
   const requests: RecordedRequest[] = [];
-  const invites: { id: string; email: string; role: string; state: string; expiresAt: string; invitedBy: string | null; createdAt: string }[] = [];
+  const invites: FakeInvite[] = [];
   const usage: unknown[] = [];
   let flagResults: Record<string, unknown>[] = [];
   let flagsRevision = 1;
@@ -172,6 +188,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           live_visitor: `${v2}/live/apps/${appId}`,
           ...(live.offered ? { live_connection: `${v2}/live/apps/${appId}/connection` } : {}),
           events_and_logs: `${v2}/events-and-logs`,
+          invites: `${v2}/identity-access/invites`,
+          invite_preview: `${at}/invites/preview`,
         },
       },
     };
@@ -217,6 +235,51 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     const code = secret();
     codes.set(code, { user: person.id, workspace, challenge, used: false, session: null });
     return json(200, { code });
+  }
+
+  /** Makes an invite, or sends it again with a new token (the old one stops working), and "emails" its link. */
+  function makeInvite(email: string, workspace: { id: string; name: string }, role: string, invitedBy: string | null) {
+    const address = email.toLowerCase();
+    const token = `${workspace.id}_${secret()}`;
+    const fields = { role, state: 'open' as const, expiresAt: new Date(now() + INVITE_DAYS * 86_400_000).toISOString(), invitedBy, token };
+    let invite = invites.find((each) => each.email === address && each.workspace.id === workspace.id);
+    if (invite === undefined) {
+      invite = { id: id('inv'), email: address, workspace, createdAt: new Date(now()).toISOString(), ...fields };
+      invites.push(invite);
+    } else {
+      Object.assign(invite, fields);
+    }
+    const known = [...people.values()].some((each) => each.email === address);
+    sentLinks.push({ to: address, purpose: known ? 'invite-existing' : 'invite-new', token });
+    return invite;
+  }
+
+  const inviteView = (invite: FakeInvite) => ({
+    id: invite.id,
+    email: invite.email,
+    role: invite.role,
+    state: invite.state === 'open' && Date.parse(invite.expiresAt) <= now() ? 'expired' : invite.state,
+    expiresAt: invite.expiresAt,
+    invitedBy: invite.invitedBy,
+    createdAt: invite.createdAt,
+  });
+
+  /** The invite a token is for while it works, or why it does not: as Bridge, a token that names none reads as expired. */
+  function inviteFor(token: unknown): FakeInvite | 'invite_revoked' | 'invite_used' | 'invite_expired' {
+    const invite = invites.find((each) => each.token === token);
+    if (invite === undefined) return 'invite_expired';
+    if (invite.state === 'revoked') return 'invite_revoked';
+    if (invite.state === 'accepted') return 'invite_used';
+    if (Date.parse(invite.expiresAt) <= now()) return 'invite_expired';
+    return invite;
+  }
+
+  const inviteRefused = (reason: 'invite_revoked' | 'invite_used' | 'invite_expired') =>
+    oauth(410, reason, { error_description: reason === 'invite_revoked' ? 'This invite was revoked.' : reason === 'invite_used' ? 'This invite was used already.' : 'This invite has expired; ask for a new one.' });
+
+  function join(person: FakePerson, invite: FakeInvite): void {
+    person.workspaces.push({ id: invite.workspace.id, name: invite.workspace.name, role: invite.role });
+    invite.state = 'accepted';
   }
 
   function personOf(headers: Headers): { session: Session; person: FakePerson } | null {
@@ -304,6 +367,22 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (record !== undefined) endSession(record.session);
         return json(200, {});
       }
+      if (route === '/invites/preview' && method === 'POST') {
+        const found = inviteFor(body['token']);
+        if (typeof found === 'string') return json(200, { state: found === 'invite_revoked' ? 'revoked' : found === 'invite_used' ? 'used' : 'expired' });
+        return json(200, { state: 'open', workspace: { name: found.workspace.name, logo: null }, account: [...people.values()].some((each) => each.email === found.email) });
+      }
+      if (route === '/sign-up' && body['invite'] !== undefined) {
+        if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string') return oauth(400, 'invalid_request');
+        if (body['workspace'] !== undefined) return oauth(400, 'invalid_request', { error_description: 'A sign-up from an invite joins the inviting workspace, and makes none of its own.' });
+        const found = inviteFor(body['invite']);
+        if (typeof found === 'string') return inviteRefused(found);
+        if (body['email'] !== undefined && String(body['email']).toLowerCase() !== found.email) return oauth(403, 'invite_for_another_address', { error_description: 'This invite is for another email address.' });
+        if ([...people.values()].some((each) => each.email === found.email)) return oauth(409, 'account_exists', { error_description: 'This address has an account already: sign in, then accept the invite.' });
+        const person = addPerson({ email: found.email, password: String(body['password']), firstName: (body['firstName'] as string) ?? null, lastName: (body['lastName'] as string) ?? null });
+        join(person, found);
+        return toWorkspace(person, body['code_challenge'], found.workspace.id);
+      }
       if (route === '/sign-up') {
         const email = String(body['email']).toLowerCase();
         const token = secret();
@@ -386,15 +465,29 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     if (path === '/v2/accounts/members' && method === 'GET') {
       return workspaceRequired() ?? json(200, [...people.values()].filter((each) => each.workspaces.some((w) => w.id === session.workspace)).map((each) => ({ id: `mem-${each.id}`, user: { id: each.id, email: each.email, firstName: each.firstName, lastName: each.lastName }, role: each.workspaces.find((w) => w.id === session.workspace)?.role, teams: [], status: 'active', customParams: {}, ownerOffered: false, lastSignIn: null, joinedAt: null })));
     }
-    if (path === '/v2/accounts/invites' && method === 'GET') return workspaceRequired() ?? json(200, invites);
+    if (path === '/v2/identity-access/invites/accept' && method === 'POST') {
+      const found = inviteFor(body['token']);
+      if (typeof found === 'string') return inviteRefused(found);
+      if (found.email !== person.email) return oauth(403, 'invite_for_another_address', { error_description: 'This invite is for another email address.' });
+      if (person.workspaces.some((each) => each.id === found.workspace.id)) return oauth(409, 'already_member', { error_description: 'You are a member of this workspace already.' });
+      join(person, found);
+      return json(200, { workspace: { id: found.workspace.id, name: found.workspace.name }, member: { id: `mem-${person.id}`, role: found.role } });
+    }
+    const here = () => invites.filter((each) => each.workspace.id === session.workspace);
+    if (path === '/v2/accounts/invites' && method === 'GET') return workspaceRequired() ?? json(200, here().filter((each) => each.state === 'open').map(inviteView));
     if (path === '/v2/accounts/invites' && method === 'POST') {
-      const invite = { id: id('inv'), email: String(body['email']), role: String(body['role'] ?? 'MEMBER'), state: 'open', expiresAt: new Date(now() + 7 * 86_400_000).toISOString(), invitedBy: person.id, createdAt: new Date(now()).toISOString() };
-      invites.push(invite);
-      return json(201, invite);
+      const required = workspaceRequired();
+      if (required !== null) return required;
+      const role = String(body['role'] ?? 'MEMBER');
+      if (role === 'OWNER') return problem(409, 'granting-owner', 'Invite people with another role; an Owner then offers them the Owner role.');
+      const email = String(body['email']).toLowerCase();
+      if ([...people.values()].some((each) => each.email === email && each.workspaces.some((w) => w.id === session.workspace))) return problem(409, 'invites', 'This person is a member already.');
+      const membership = person.workspaces.find((each) => each.id === session.workspace) as { id: string; name: string };
+      return json(201, inviteView(makeInvite(email, { id: membership.id, name: membership.name }, role, person.id)));
     }
     const inviteMatch = path.match(/^\/v2\/accounts\/invites\/([^/]+)$/);
     if (inviteMatch !== null && method === 'DELETE') {
-      const found = invites.find((each) => each.id === inviteMatch[1]);
+      const found = here().find((each) => each.id === inviteMatch[1] && each.state === 'open');
       if (found === undefined) return problem(404, 'not-found', '');
       found.state = 'revoked';
       return json(200, { revoked: true });
@@ -515,9 +608,28 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     addPerson,
     /** The person, by email. */
     person: (email: string) => [...people.values()].find((each) => each.email === email.toLowerCase()),
-    /** The last email link sent to an address for a purpose (`verify-sign-up`, `reset-password`), or null. */
+    /**
+     * The last email link sent to an address for a purpose (`verify-sign-up`,
+     * `reset-password`, `invite-new`, `invite-existing`; `invite` for either
+     * invite), or null.
+     */
     lastLink(to: string, purpose: string): string | null {
-      return [...sentLinks].reverse().find((each) => each.to === to.toLowerCase() && each.purpose === purpose)?.token ?? null;
+      const matches = (sent: string) => sent === purpose || (purpose === 'invite' && sent.startsWith('invite-'));
+      return [...sentLinks].reverse().find((each) => each.to === to.toLowerCase() && matches(each.purpose))?.token ?? null;
+    },
+    /**
+     * Invites an address into a workspace, as a member who may invite would,
+     * and returns the link's token. Sending again to the same address gives a
+     * new token, and the old one stops working.
+     */
+    invite(email: string, workspace: { id: string; name: string }, role = 'MEMBER'): string {
+      return makeInvite(email, workspace, role, null).token;
+    },
+    /** The invites, as the workspace's list shows them, with every state. */
+    invites: () => invites.map(inviteView),
+    /** Makes an address's invites out of date, as if their 30 days had passed. */
+    expireInvites(email: string): void {
+      for (const each of invites) if (each.email === email.toLowerCase()) each.expiresAt = new Date(now() - 1000).toISOString();
     },
     sentLinks,
     /** Sets the signed-in results of every flag: `{ key: value }` or full OFREP results. */

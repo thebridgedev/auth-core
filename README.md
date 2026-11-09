@@ -72,6 +72,32 @@ await bridge.password.set(link.token, newPassword); // from #bridge=reset-passwo
 
 Setting a password signs nobody in, and ends every session of the account. Send the person to sign-in afterwards.
 
+### Invites
+
+An invite's email links to your email-links address with the token in the fragment (`#bridge=invite&token=…`). Take it, which also clears it from the address bar and the history, then show the invite:
+
+```ts
+import { takeEmailLink } from '@nebulr-group/bridge-auth-core';
+
+const link = takeEmailLink('invite');
+const preview = await bridge.invites.preview(link.token);
+// { state: 'open', workspace: { name, logo }, account } or { state: 'revoked' | 'used' | 'expired' }
+```
+
+- **No account yet** (`account: false`): sign up from the invite. The link proves the address, so no second email is sent, and the person lands signed in, in the inviting workspace, with the invited role.
+
+  ```ts
+  await bridge.invites.signUp({ token: link.token, password, firstName, lastName });
+  ```
+
+- **An account already** (`account: true`): sign in as usual, then accept. The session moves into the workspace they joined.
+
+  ```ts
+  const { workspace } = await bridge.invites.accept(link.token);
+  ```
+
+Only the person the invite was sent to can accept it: anyone else gets `forbidden` (`code: 'invite_for_another_address'`). A link that no longer works gets `link-invalid` (`code` is `invite_revoked`, `invite_used` or `invite_expired`); a member already gets `conflict` (`already_member`), and a sign-up for an address with an account gets `conflict` (`account_exists`). An invite works for 30 days, and sending it again stops the old link working.
+
 ### Signing out and switching workspace
 
 ```ts
@@ -139,11 +165,13 @@ The facts are for showing. Whether a page or button is open is a flag, and so is
 ```ts
 const me = await bridge.me.get();
 const members = await bridge.team.members.list();
-await bridge.team.invites.create({ email: 'new@acme.test', role: 'MEMBER' });
+await bridge.team.invites.create({ email: 'new@acme.test', role: 'MEMBER' }); // or again, to send a new link
+const open = await bridge.team.invites.list();
+await bridge.team.invites.revoke(open[0].id);
 const roles = await bridge.team.roles.list({ assignable: true });
 ```
 
-The Bridge decides what the person may do on every call. Use a flag to show a team admin's controls.
+The Bridge decides what the person may do on every call. Use a flag to show a team admin's controls. Sending an invite needs an email-links address in your app's settings: without one it is refused with `conflict`, and nothing is sent. A workspace can send 50 invites an hour and 200 a day; past that, `rate-limited`.
 
 ## Live updates
 
@@ -204,7 +232,7 @@ Everything the SDK refuses is a `BridgeError`. Read `kind`:
 | Kind | Means |
 |---|---|
 | `wrong-credentials` | Wrong email or password |
-| `wrong-device`, `link-invalid` | An email link opened elsewhere, or used or expired |
+| `wrong-device`, `link-invalid` | An email link opened elsewhere, or used or expired (an invite's too) |
 | `flow-expired` | A sign-in step took too long |
 | `signed-out`, `reauthenticate` | No session, or the action needs a recent sign-in |
 | `misconfigured` | The SDK is set up wrongly: an address that is not https, a token for a host not in `tokenOrigins`, a redirect |
@@ -222,7 +250,7 @@ Everything the SDK refuses is a `BridgeError`. Read `kind`:
 
 ## Testing
 
-`@nebulr-group/bridge-auth-core/testing` has a fake issuer in memory, with sign-in, sign-up links, refresh rotation, accounts, flags, billing and Live:
+`@nebulr-group/bridge-auth-core/testing` has a fake issuer in memory, with sign-in, sign-up links, invites, refresh rotation, accounts, flags, billing and Live:
 
 ```ts
 import { createFakeIssuer } from '@nebulr-group/bridge-auth-core/testing';
@@ -230,11 +258,12 @@ import { createFakeIssuer } from '@nebulr-group/bridge-auth-core/testing';
 const fake = createFakeIssuer();
 fake.addPerson({ email: 'a@acme.test', password: 'a long password', workspaces: [{ id: 'ws-1', name: 'Acme' }] });
 const bridge = createBridge({ issuer: fake.issuer, fetch: fake.fetch, live: { websocket: fake.websocket } });
+const token = fake.invite('b@acme.test', { id: 'ws-1', name: 'Acme' }); // or fake.lastLink('b@acme.test', 'invite')
 ```
 
 ## Not in this alpha yet
 
-Magic links, passkeys, two-step codes and company sign-in arrive as new sign-in steps; this version refuses them with `unsupported-step`. Invites at sign-in, public sign-in options and the redirect sign-in page come when the issuer offers them.
+Magic links, passkeys, two-step codes and company sign-in arrive as new sign-in steps; this version refuses them with `unsupported-step`. The redirect sign-in page comes when the issuer offers it.
 
 ## License
 

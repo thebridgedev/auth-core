@@ -54,8 +54,8 @@ export const CONTRACT_PATHS: Readonly<Record<EndpointName, string>> = {
   sign_out: '/v2/identity-access/sign-out',
   sessions: '/v2/identity-access/sessions',
   sign_in_options: '/v2/identity-access/apps/{appId}/sign-in-options',
-  invites: '/v2/identity-access/apps/{appId}/invites',
-  invite_preview: '/v2/accounts/apps/{appId}/invites',
+  invites: '/v2/identity-access/invites',
+  invite_preview: '/v2/identity-access/apps/{appId}/invites/preview',
   accounts: '/v2/accounts',
   billing: '/v2/billing',
   flags: '/v2/flags',
@@ -91,8 +91,10 @@ export const ROUTES = {
   passwordForgot: route('POST', 'password_forgot'),
   passwordSet: route('POST', 'password'),
   signInOptions: route('GET', 'sign_in_options'),
-  inviteAccept: route('POST', 'invites', '/accept', 'accepting an invite'),
-  invitePreview: route('GET', 'invite_preview', '/{token}', 'showing an invite before sign-in'),
+  invitePreview: route('POST', 'invite_preview'),
+
+  // Identity and Access: the signed-in person accepts an invite.
+  inviteAccept: route('POST', 'invites', '/accept'),
 
   // Identity and Access: the signed-in person.
   signOut: route('POST', 'sign_out'),

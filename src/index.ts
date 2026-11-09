@@ -25,8 +25,8 @@ export type { BridgeStorage } from './core/storage.js';
 export type { Readable } from './core/util.js';
 
 export type { SessionState, SessionUser, SessionWorkspace, SignedInState, SignedOutReason } from './session.js';
-export { readEmailLink } from './sign-in.js';
-export type { EmailLink, HandoffInput, HandoffStep, SignInInput, SignInOptions, SignInStep, SignUpInput, WorkspaceChoice } from './sign-in.js';
+export { readEmailLink, takeEmailLink } from './sign-in.js';
+export type { AcceptedInvite, EmailLink, EmailLinkWindow, HandoffInput, HandoffStep, InvitePreview, InviteSignUpInput, SignInInput, SignInOptions, SignInStep, SignUpInput, WorkspaceChoice } from './sign-in.js';
 export { HANDOFF_CALLBACK_PATH, handoffReturnUrl, isLoopbackRedirect, readHandoffRequest } from './handoff.js';
 export type { HandoffRequest } from './handoff.js';
 
