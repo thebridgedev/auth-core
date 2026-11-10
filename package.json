@@ -1,6 +1,6 @@
 {
   "name": "@nebulr-group/bridge-auth-core",
-  "version": "1.0.0-alpha.2",
+  "version": "1.0.0-alpha.3",
   "description": "The Bridge client core: sign-in in your own pages, sessions with refresh across tabs, workspaces and teams, flag results, billing, live updates, and server-side token checks that honour revocation.",
   "type": "module",
   "main": "./dist/index.js",

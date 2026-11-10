@@ -101,6 +101,41 @@ describe('sign-up, finished from the email link on the same device', () => {
     await expect(clientOn(fake, { storage }).signUp.finish(link)).resolves.toEqual({ done: true });
   });
 
+  it('with the session in memory, keeps only the verifier in the shared signUpStorage: a new tab finishes after the first is gone', async () => {
+    const { fake } = issuerWithPeople();
+    const shared = memoryStorage();
+    const firstTab = memoryStorage();
+    await clientOn(fake, { storage: firstTab, signUpStorage: shared }).signUp.start({ email: 'erin@acme.test', password: PASSWORD });
+    const key = `bridge:${fake.issuer}:sign-up`;
+    expect(JSON.parse((await shared.get(key))!)).toMatchObject({ verifier: expect.stringMatching(/^[A-Za-z0-9_-]{43,128}$/) });
+    expect(await firstTab.get(key)).toBeNull();
+    // The first tab is closed: its memory is gone. The link opens in a new tab of the same browser.
+    const linkTab = clientOn(fake, { storage: memoryStorage(), signUpStorage: shared });
+    await expect(linkTab.signUp.finish(fake.lastLink('erin@acme.test', 'verify-sign-up')!)).resolves.toEqual({ done: true });
+    expect(linkTab.session.get()).toMatchObject({ status: 'signed-in', user: { email: 'erin@acme.test' } });
+    // Used: the verifier is gone.
+    expect(await shared.get(key)).toBeNull();
+  });
+
+  it('with the session in memory and no signUpStorage, a new tab cannot finish: wrong-device', async () => {
+    const { fake } = issuerWithPeople();
+    await clientOn(fake, { storage: memoryStorage() }).signUp.start({ email: 'fay@acme.test', password: PASSWORD });
+    await expect(clientOn(fake, { storage: memoryStorage() }).signUp.finish(fake.lastLink('fay@acme.test', 'verify-sign-up')!)).rejects.toMatchObject({ kind: 'wrong-device' });
+  });
+
+  it('drops a verifier past its link\'s lifetime, and does not send it', async () => {
+    const { fake } = issuerWithPeople();
+    const storage = memoryStorage();
+    await clientOn(fake, { storage }).signUp.start({ email: 'gus@acme.test', password: PASSWORD });
+    const key = `bridge:${fake.issuer}:sign-up`;
+    const stored = JSON.parse((await storage.get(key))!) as { verifier: string; expiresAt: number };
+    await storage.set(key, JSON.stringify({ ...stored, expiresAt: Date.now() - 1 }));
+    await expect(clientOn(fake, { storage }).signUp.finish(fake.lastLink('gus@acme.test', 'verify-sign-up')!)).rejects.toMatchObject({ kind: 'wrong-device' });
+    expect(await storage.get(key)).toBeNull();
+    const verify = fake.requests.filter((request) => request.path.endsWith('/sign-up/verify')).at(-1)!;
+    expect(verify.body).not.toHaveProperty('code_verifier');
+  });
+
   it('says link-invalid for a used or unknown link', async () => {
     const { fake } = issuerWithPeople();
     await expect(clientOn(fake).signUp.finish('nope')).rejects.toMatchObject({ kind: 'link-invalid' });

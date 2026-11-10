@@ -172,7 +172,8 @@ export interface SignInDeps {
   readonly issuer: string;
   readonly endpoints: () => Endpoints;
   readonly fetch: Fetch;
-  readonly storage: BridgeStorage;
+  /** Where a sign-up's verifier waits for its email link: storage every tab of the origin shares. */
+  readonly signUpStorage: BridgeStorage;
   readonly session: Session;
 }
 
@@ -268,7 +269,7 @@ export function createSignIn(deps: SignInDeps) {
       async start(input: SignUpInput): Promise<{ readonly next: 'verify_email' }> {
         const pkce = await createPkce();
         // The link opens in a new tab: keep the verifier where that tab can read it. The latest sign-up wins.
-        await deps.storage.set(signUpKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + SIGN_UP_KEEP_MS } satisfies StoredSignUp));
+        await deps.signUpStorage.set(signUpKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + SIGN_UP_KEEP_MS } satisfies StoredSignUp));
         await post(ROUTES.signUp, {
           email: input.email,
           password: input.password,
@@ -287,13 +288,15 @@ export function createSignIn(deps: SignInDeps) {
        * still works on the right device.
        */
       async finish(token: string): Promise<SignInStep> {
-        const stored = await readJson<StoredSignUp>(deps.storage, signUpKey);
+        const stored = await readJson<StoredSignUp>(deps.signUpStorage, signUpKey);
         const verifier = stored !== null && stored.expiresAt > Date.now() && typeof stored.verifier === 'string' ? stored.verifier : null;
+        // Past its link's lifetime the verifier is no use to anyone: it is not kept.
+        if (stored !== null && verifier === null) await deps.signUpStorage.remove(signUpKey);
         const answer = await post(ROUTES.signUpVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }) });
         if (verifier === null) throw new BridgeError('wrong-device', 'Open the link on the device you signed up on.', { code: 'wrong_device' });
-        const step = await signInSteps(answer, verifier);
-        await deps.storage.remove(signUpKey);
-        return step;
+        // Bridge took the verifier: it is spent, and the rest needs it only in memory.
+        await deps.signUpStorage.remove(signUpKey);
+        return signInSteps(answer, verifier);
       },
     },
 
