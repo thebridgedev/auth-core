@@ -20,12 +20,13 @@ export interface BridgeOptions {
   /** Where the session is kept between page loads. @default localStorage in a browser, memory elsewhere */
   readonly storage?: BridgeStorage;
   /**
-   * Where a sign-up's PKCE verifier waits for its email link, at most 15
-   * minutes, as long as the link works. The link usually opens in a new tab,
-   * so this must be storage every tab of the page's origin shares: with
-   * `storage: memoryStorage()`, pass `localStorageAdapter()` here, or the
-   * link only works in the tab that started the sign-up. The verifier is
-   * removed once the sign-up finishes, and when found expired.
+   * Where the PKCE verifier of a sign-up, or of a sign-in link, waits for
+   * its email link, at most 15 minutes, as long as the link works. The link
+   * usually opens in a new tab, so this must be storage every tab of the
+   * page's origin shares: with `storage: memoryStorage()`, pass
+   * `localStorageAdapter()` here, or the link only works in the tab that
+   * asked for it. Nothing else is kept here; the verifier is removed once
+   * the link is used, and when found expired.
    * @default `storage`
    */
   readonly signUpStorage?: BridgeStorage;
@@ -244,6 +245,7 @@ export function createBridge(options: BridgeOptions) {
       {
         signIn: flows.signIn,
         signUp: flows.signUp,
+        magicLink: flows.magicLink,
         password: flows.password,
         invites: flows.invites,
         workspaces: accounts.workspaces,

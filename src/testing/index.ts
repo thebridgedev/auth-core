@@ -32,6 +32,8 @@ export interface FakeIssuerOptions {
   readonly refreshGraceSeconds?: number;
   /** The clock, in ms. @default Date.now */
   readonly now?: () => number;
+  /** The sign-in methods the app offers, as its sign-in options list them. @default ['password', 'magicLink'] */
+  readonly methods?: readonly string[];
 }
 
 interface Session {
@@ -131,7 +133,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   const refreshTokens = new Map<string, { session: string; rotatedAt: number | null }>();
   const codes = new Map<string, Code>();
   const flows = new Map<string, { user: string; challenge: string }>();
-  const links = new Map<string, { purpose: 'sign-up' | 'reset'; email: string; challenge?: string; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
+  const methods = options.methods ?? ['password', 'magicLink'];
+  const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link'; email: string; challenge?: string; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
   const sentLinks: { to: string; purpose: string; token: string }[] = [];
   const requests: RecordedRequest[] = [];
   const invites: FakeInvite[] = [];
@@ -176,6 +179,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           sign_in_options: `${at}/sign-in-options`,
           sign_up: `${at}/sign-up`,
           sign_up_verify: `${at}/sign-up/verify`,
+          magic_link: `${at}/magic-link`,
+          magic_link_verify: `${at}/magic-link/verify`,
           password_forgot: `${at}/password/forgot`,
           password: `${at}/password`,
           sign_out: `${v2}/identity-access/sign-out`,
@@ -330,7 +335,28 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (person === undefined || person.password !== body['password']) return oauth(400, 'wrong_credentials');
         return toWorkspace(person, body['code_challenge'], typeof body['workspace'] === 'string' ? body['workspace'] : null);
       }
-      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods: ['password'], password: { minLength: 8, maxLength: 128 } });
+      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}) });
+      if (route === '/magic-link') {
+        if (!methods.includes('magicLink')) return oauth(403, 'method_disabled');
+        if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string') return oauth(400, 'invalid_request');
+        const email = String(body['email']).toLowerCase();
+        if ([...people.values()].some((each) => each.email === email)) {
+          // Only the newest link of an address works.
+          for (const [token, link] of links) if (link.purpose === 'magic-link' && link.email === email) links.delete(token);
+          const token = secret();
+          links.set(token, { purpose: 'magic-link', email, challenge: body['code_challenge'], expiresAt: now() + 15 * 60 * 1000 });
+          sentLinks.push({ to: email, purpose: 'magic-link', token });
+        }
+        return json(202, { next: 'verify_email' });
+      }
+      if (route === '/magic-link/verify') {
+        const link = links.get(String(body['token']));
+        if (link?.purpose !== 'magic-link' || (link.expiresAt ?? 0) <= now()) return oauth(400, 'invalid_link');
+        if (typeof body['code_verifier'] !== 'string' || (await s256(body['code_verifier'])) !== link.challenge) return oauth(400, 'wrong_device', { error_description: 'Open the link on the device you asked for it on.' });
+        links.delete(String(body['token']));
+        const person = [...people.values()].find((each) => each.email === link.email) as FakePerson;
+        return toWorkspace(person, link.challenge as string, null);
+      }
       if (route === '/token') {
         if (body['grant_type'] === 'authorization_code') {
           const code = codes.get(String(body['code']));
