@@ -2,7 +2,7 @@
   "about": "The issuer's metadata exactly as Bridge's discovery endpoint builds it, field for field, with the values of Bridge's own test of it. The revocation lanes are the four every app's copy carries when deployed. The discovery test checks that the SDK reads this document as it is.",
   "source": {
     "file": "microservices/identity-access/src/controllers.ts (discovery) and identity-access.test.ts",
-    "commit": "b3ad0cd5407faa79f310b67dcf058e28b95284b6"
+    "commit": "a13e303b72864c2b521ddf5e1b2ae67f2e54cac7"
   },
   "document": {
     "issuer": "https://bridge.test/identity-access/apps/app-1",
