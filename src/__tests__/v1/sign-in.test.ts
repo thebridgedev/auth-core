@@ -142,6 +142,65 @@ describe('sign-up, finished from the email link on the same device', () => {
   });
 });
 
+describe('sign-in links (magic links), finished on the device that asked', () => {
+  it('asks for a link, then signs in from it in another tab of the same browser; the verifier is kept only until then', async () => {
+    const { fake } = issuerWithPeople();
+    const shared = memoryStorage();
+    await expect(clientOn(fake, { storage: memoryStorage(), signUpStorage: shared }).magicLink.start('alice@acme.test')).resolves.toEqual({ next: 'verify_email' });
+    const key = `bridge:${fake.issuer}:magic-link`;
+    const stored = JSON.parse((await shared.get(key))!) as { verifier: string; expiresAt: number };
+    expect(stored.verifier).toMatch(/^[A-Za-z0-9_-]{43,128}$/);
+    // Kept no longer than the link works.
+    expect(stored.expiresAt).toBeLessThanOrEqual(Date.now() + 15 * 60 * 1000);
+    const request = fake.requests.find((each) => each.path.endsWith('/magic-link'))!;
+    expect(request.body).toEqual({ email: 'alice@acme.test', code_challenge: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/), code_challenge_method: 'S256' });
+    expect(request.body).not.toHaveProperty('code_verifier');
+    const linkTab = clientOn(fake, { storage: memoryStorage(), signUpStorage: shared });
+    const link = fake.lastLink('alice@acme.test', 'magic-link')!;
+    await expect(linkTab.magicLink.finish(link)).resolves.toEqual({ done: true });
+    expect(linkTab.session.get()).toMatchObject({ status: 'signed-in', user: { email: 'alice@acme.test' } });
+    expect(await shared.get(key)).toBeNull();
+    // Used once: a second time it is no link at all.
+    await expect(clientOn(fake, { signUpStorage: shared }).magicLink.finish(link)).rejects.toMatchObject({ kind: 'link-invalid' });
+  });
+
+  it('opened on another device, fails with wrong-device and still works on the right one', async () => {
+    const { fake } = issuerWithPeople();
+    const storage = memoryStorage();
+    await clientOn(fake, { storage }).magicLink.start('bob@acme.test');
+    const link = fake.lastLink('bob@acme.test', 'magic-link')!;
+    await expect(clientOn(fake).magicLink.finish(link)).rejects.toMatchObject({ kind: 'wrong-device' });
+    const step = await clientOn(fake, { storage }).magicLink.finish(link);
+    expect(step).toMatchObject({ done: false, next: 'workspace' });
+  });
+
+  it('drops a verifier past its link\'s lifetime, and does not send it', async () => {
+    const { fake } = issuerWithPeople();
+    const storage = memoryStorage();
+    await clientOn(fake, { storage }).magicLink.start('alice@acme.test');
+    const key = `bridge:${fake.issuer}:magic-link`;
+    const stored = JSON.parse((await storage.get(key))!) as { verifier: string; expiresAt: number };
+    await storage.set(key, JSON.stringify({ ...stored, expiresAt: Date.now() - 1 }));
+    await expect(clientOn(fake, { storage }).magicLink.finish(fake.lastLink('alice@acme.test', 'magic-link')!)).rejects.toMatchObject({ kind: 'wrong-device' });
+    expect(await storage.get(key)).toBeNull();
+    expect(fake.requests.filter((each) => each.path.endsWith('/magic-link/verify')).at(-1)!.body).not.toHaveProperty('code_verifier');
+  });
+
+  it('answers the same for an address with no account, and keeps no verifier when the app does not offer links', async () => {
+    const { fake } = issuerWithPeople();
+    await expect(clientOn(fake).magicLink.start('nobody@acme.test')).resolves.toEqual({ next: 'verify_email' });
+    expect(fake.lastLink('nobody@acme.test', 'magic-link')).toBeNull();
+    const off = issuerWithPeople({ methods: ['password'] }).fake;
+    const storage = memoryStorage();
+    await expect(clientOn(off, { storage }).magicLink.start('alice@acme.test')).rejects.toMatchObject({ kind: 'forbidden', code: 'method_disabled' });
+    expect(await storage.get(`bridge:${off.issuer}:magic-link`)).toBeNull();
+  });
+
+  it('reads a sign-in link from the page address', () => {
+    expect(readEmailLink('#bridge=magic-link&token=abc')).toEqual({ kind: 'magic-link', token: 'abc' });
+  });
+});
+
 describe('forgot and reset password', () => {
   it('sends a link, sets the password, signs nobody in, and ends every session', async () => {
     const { fake } = issuerWithPeople();
@@ -174,7 +233,10 @@ describe('forgot and reset password', () => {
 describe('sign-in options and invites', () => {
   it('reads the sign-in options when the issuer lists them', async () => {
     const { fake } = issuerWithPeople();
-    await expect(clientOn(fake).signIn.options()).resolves.toEqual({ app: { id: fake.appId }, signUp: true, methods: ['password'], password: { minLength: 8, maxLength: 128 } });
+    await expect(clientOn(fake).signIn.options()).resolves.toEqual({ app: { id: fake.appId }, signUp: true, methods: ['password', 'magicLink'], password: { minLength: 8, maxLength: 128 } });
+    // An app that offers no passwords lists no password rules.
+    const linksOnly = issuerWithPeople({ methods: ['magicLink'] }).fake;
+    await expect(clientOn(linksOnly).signIn.options()).resolves.toEqual({ app: { id: linksOnly.appId }, signUp: true, methods: ['magicLink'] });
   });
 
   it('answers not-offered while the issuer does not list them', async () => {

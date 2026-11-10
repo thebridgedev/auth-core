@@ -63,6 +63,26 @@ if (link?.kind === 'verify-email') {
 
 Opened on another device, `finish` fails with `wrong-device`, and the link still works on the device that started the sign-up.
 
+### Sign-in links (magic links)
+
+When the app offers them (`'magicLink'` in `signIn.options().methods`), a person can sign in with a link sent to their email. The answer is the same whether or not the address has an account:
+
+```ts
+await bridge.magicLink.start(email);
+// show "check your email"
+```
+
+The link lands on your page as `#bridge=magic-link&token=…`. Finish there, in the browser that asked:
+
+```ts
+const link = takeEmailLink('magic-link');
+if (link) {
+  const step = await bridge.magicLink.finish(link.token); // signed in, or the workspace step
+}
+```
+
+Each link works once, for 15 minutes. Opened on another device, `finish` fails with `wrong-device`, and the link still works on the device that asked; used again, `link-invalid`. The PKCE verifier waits in `signUpStorage` until the link is opened, at most as long as the link works, and nothing else is kept there.
+
 ### Forgot and reset password
 
 ```ts

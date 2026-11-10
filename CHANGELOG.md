@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.4] - Unreleased
+
+### Added
+
+- **Sign-in links (magic links)**: `magicLink.start(email)` asks for a link that signs in, and `magicLink.finish(token)` signs in from it, on the device that asked. Each link works once, for 15 minutes; on another device `finish` fails with `wrong-device`, and used again with `link-invalid`. The answer to `start` is the same whether or not the address has an account. The verifier waits in `signUpStorage`, at most as long as the link works, and is removed once used or found expired.
+- **`readEmailLink` and `takeEmailLink` read `#bridge=magic-link&token=…`.**
+- **`signUp.start` and `invites.signUp` take no password** when the app offers only sign-in links: `password` is optional and is sent only when given.
+- **`SignInOptions.password` carries the app's password rules** (`minLength`, `maxLength`, `requireUpper`, `requireLower`, `requireDigit`, `requireSymbol`, `blockEmail`), and is absent when the app offers no passwords.
+
 ## [1.0.0-alpha.3] - Unreleased
 
 ### Added

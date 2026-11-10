@@ -14,8 +14,9 @@ import type { Session } from './session.js';
  * the next thing it needs, such as which workspace. A code is bound to this
  * device with PKCE and traded for tokens at once.
  *
- * Today's steps are email and password and the workspace choice. Other steps
- * (a second factor, passkeys, email codes, company login) arrive as new
+ * Today's steps are email and password, an email link that signs in (a magic
+ * link), and the workspace choice. Other steps (a second factor, passkeys,
+ * email codes, company login) arrive as new
  * `next` values; this version refuses one it does not know with
  * `unsupported-step` rather than guessing.
  */
@@ -57,7 +58,8 @@ export interface SignInInput {
 
 export interface SignUpInput {
   readonly email: string;
-  readonly password: string;
+  /** Leave out when the app offers no passwords (only sign-in links): the person signs in by link. */
+  readonly password?: string;
   readonly firstName?: string;
   readonly lastName?: string;
   /** `true` for a new workspace with no name yet, or its name. Leave out for none. */
@@ -87,7 +89,8 @@ export type InvitePreview =
 export interface InviteSignUpInput {
   /** The token from the invite's link. */
   readonly token: string;
-  readonly password: string;
+  /** Leave out when the app offers no passwords (only sign-in links). */
+  readonly password?: string;
   readonly firstName?: string;
   readonly lastName?: string;
   /** The address the invite was sent to. Optional: when given, it must be that address. */
@@ -121,14 +124,27 @@ export interface SignInOptions {
   };
   /** Whether people may sign up. */
   readonly signUp: boolean;
-  /** The sign-in methods on offer, such as `password`. */
+  /** The sign-in methods on offer, such as `password` and `magicLink`. */
   readonly methods: readonly string[];
-  readonly password: { readonly minLength: number; readonly maxLength?: number };
+  /** The password's rules, to show before anyone types. Absent when the app does not offer passwords. */
+  readonly password?: PasswordRules;
+}
+
+/** An app's password rules, as Bridge checks every new password against them. */
+export interface PasswordRules {
+  readonly minLength: number;
+  readonly maxLength?: number;
+  readonly requireUpper?: boolean;
+  readonly requireLower?: boolean;
+  readonly requireDigit?: boolean;
+  readonly requireSymbol?: boolean;
+  /** A password may not contain the person's email address, or the part before its `@`. */
+  readonly blockEmail?: boolean;
 }
 
 /** An email link Bridge sent, as it lands on the app's page: `#bridge=<kind>&token=<token>`. */
 export interface EmailLink {
-  readonly kind: 'verify-email' | 'reset-password' | 'invite';
+  readonly kind: 'verify-email' | 'reset-password' | 'invite' | 'magic-link';
   readonly token: string;
 }
 
@@ -146,6 +162,8 @@ interface StoredSignUp {
 
 /** How long a sign-up's email link works, and so how long its verifier is kept. */
 const SIGN_UP_KEEP_MS = 15 * 60 * 1000;
+/** How long a sign-in link works, and so how long its verifier is kept. */
+const MAGIC_LINK_KEEP_MS = 15 * 60 * 1000;
 
 function choicesOf(value: unknown): WorkspaceChoice[] {
   if (!Array.isArray(value)) return [];
@@ -172,7 +190,7 @@ export interface SignInDeps {
   readonly issuer: string;
   readonly endpoints: () => Endpoints;
   readonly fetch: Fetch;
-  /** Where a sign-up's verifier waits for its email link: storage every tab of the origin shares. */
+  /** Where a sign-up's or a sign-in link's verifier waits for its email link: storage every tab of the origin shares. */
   readonly signUpStorage: BridgeStorage;
   readonly session: Session;
 }
@@ -181,6 +199,18 @@ export function createSignIn(deps: SignInDeps) {
   const post = async (route: (typeof ROUTES)[keyof typeof ROUTES], body: Readonly<Record<string, unknown>>, token?: string) =>
     (await call<CodeAnswer>(deps.fetch, deps.endpoints().url(route), { method: 'POST', body, ...(token === undefined ? {} : { token }) })).body;
   const signUpKey = storageKey(deps.issuer, 'sign-up');
+  const magicLinkKey = storageKey(deps.issuer, 'magic-link');
+
+  /**
+   * A verifier waiting for its email link, read once: past its link's
+   * lifetime it is no use to anyone and is removed; null when there is none.
+   */
+  async function waitingVerifier(key: string): Promise<string | null> {
+    const stored = await readJson<StoredSignUp>(deps.signUpStorage, key);
+    const verifier = stored !== null && stored.expiresAt > Date.now() && typeof stored.verifier === 'string' ? stored.verifier : null;
+    if (stored !== null && verifier === null) await deps.signUpStorage.remove(key);
+    return verifier;
+  }
 
   /**
    * One answer of the challenge endpoint: the code, or the next step. `onCode`
@@ -272,7 +302,7 @@ export function createSignIn(deps: SignInDeps) {
         await deps.signUpStorage.set(signUpKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + SIGN_UP_KEEP_MS } satisfies StoredSignUp));
         await post(ROUTES.signUp, {
           email: input.email,
-          password: input.password,
+          ...(input.password === undefined ? {} : { password: input.password }),
           code_challenge: pkce.challenge,
           code_challenge_method: 'S256',
           ...(input.firstName === undefined ? {} : { firstName: input.firstName }),
@@ -288,14 +318,47 @@ export function createSignIn(deps: SignInDeps) {
        * still works on the right device.
        */
       async finish(token: string): Promise<SignInStep> {
-        const stored = await readJson<StoredSignUp>(deps.signUpStorage, signUpKey);
-        const verifier = stored !== null && stored.expiresAt > Date.now() && typeof stored.verifier === 'string' ? stored.verifier : null;
-        // Past its link's lifetime the verifier is no use to anyone: it is not kept.
-        if (stored !== null && verifier === null) await deps.signUpStorage.remove(signUpKey);
+        const verifier = await waitingVerifier(signUpKey);
         const answer = await post(ROUTES.signUpVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }) });
         if (verifier === null) throw new BridgeError('wrong-device', 'Open the link on the device you signed up on.', { code: 'wrong_device' });
         // Bridge took the verifier: it is spent, and the rest needs it only in memory.
         await deps.signUpStorage.remove(signUpKey);
+        return signInSteps(answer, verifier);
+      },
+    },
+
+    magicLink: {
+      /**
+       * Sends a link that signs in to the address, when it has an account
+       * and the app offers sign-in links. The answer is the same either way.
+       * The link works once, for a short time, and only on this device: the
+       * verifier waits in `signUpStorage` until the link opens, at most as
+       * long as the link works. A newer link replaces an older one.
+       */
+      async start(email: string): Promise<{ readonly next: 'verify_email' }> {
+        const pkce = await createPkce();
+        await deps.signUpStorage.set(magicLinkKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + MAGIC_LINK_KEEP_MS } satisfies StoredSignUp));
+        try {
+          await post(ROUTES.magicLink, { email, code_challenge: pkce.challenge, code_challenge_method: 'S256' });
+        } catch (error) {
+          // Nothing was sent: no verifier waits for a link that will not come.
+          await deps.signUpStorage.remove(magicLinkKey);
+          throw error;
+        }
+        return { next: 'verify_email' };
+      },
+
+      /**
+       * Signs in from a sign-in link, on the device that asked for it. Opened
+       * anywhere else, it fails with `wrong-device`, and the link still works
+       * on the right device. A link used once, or too old, fails with
+       * `link-invalid`.
+       */
+      async finish(token: string): Promise<SignInStep> {
+        const verifier = await waitingVerifier(magicLinkKey);
+        const answer = await post(ROUTES.magicLinkVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }) });
+        if (verifier === null) throw new BridgeError('wrong-device', 'Open the link on the device you asked for it on.', { code: 'wrong_device' });
+        await deps.signUpStorage.remove(magicLinkKey);
         return signInSteps(answer, verifier);
       },
     },
@@ -347,7 +410,7 @@ export function createSignIn(deps: SignInDeps) {
         const pkce = await createPkce();
         const answer = await post(ROUTES.signUp, {
           invite: input.token,
-          password: input.password,
+          ...(input.password === undefined ? {} : { password: input.password }),
           code_challenge: pkce.challenge,
           code_challenge_method: 'S256',
           ...(input.email === undefined ? {} : { email: input.email }),
@@ -395,7 +458,7 @@ export function readEmailLink(hashOrUrl: string): EmailLink | null {
   const kind = params.get('bridge');
   const token = params.get('token');
   if (token === null || token === '') return null;
-  if (kind !== 'verify-email' && kind !== 'reset-password' && kind !== 'invite') return null;
+  if (kind !== 'verify-email' && kind !== 'reset-password' && kind !== 'invite' && kind !== 'magic-link') return null;
   return { kind, token };
 }
 

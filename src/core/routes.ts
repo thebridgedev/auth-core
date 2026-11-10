@@ -29,6 +29,8 @@ export type EndpointName =
   | 'sign_out'
   | 'sessions'
   | 'sign_in_options'
+  | 'magic_link'
+  | 'magic_link_verify'
   | 'invites'
   | 'invite_preview'
   | 'accounts'
@@ -54,6 +56,8 @@ export const CONTRACT_PATHS: Readonly<Record<EndpointName, string>> = {
   sign_out: '/v2/identity-access/sign-out',
   sessions: '/v2/identity-access/sessions',
   sign_in_options: '/v2/identity-access/apps/{appId}/sign-in-options',
+  magic_link: '/v2/identity-access/apps/{appId}/magic-link',
+  magic_link_verify: '/v2/identity-access/apps/{appId}/magic-link/verify',
   invites: '/v2/identity-access/invites',
   invite_preview: '/v2/identity-access/apps/{appId}/invites/preview',
   accounts: '/v2/accounts',
@@ -91,6 +95,8 @@ export const ROUTES = {
   passwordForgot: route('POST', 'password_forgot'),
   passwordSet: route('POST', 'password'),
   signInOptions: route('GET', 'sign_in_options'),
+  magicLink: route('POST', 'magic_link'),
+  magicLinkVerify: route('POST', 'magic_link_verify'),
   invitePreview: route('POST', 'invite_preview'),
 
   // Identity and Access: the signed-in person accepts an invite.
