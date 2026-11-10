@@ -19,6 +19,16 @@ export interface BridgeOptions {
   readonly issuer: string;
   /** Where the session is kept between page loads. @default localStorage in a browser, memory elsewhere */
   readonly storage?: BridgeStorage;
+  /**
+   * Where a sign-up's PKCE verifier waits for its email link, at most 15
+   * minutes, as long as the link works. The link usually opens in a new tab,
+   * so this must be storage every tab of the page's origin shares: with
+   * `storage: memoryStorage()`, pass `localStorageAdapter()` here, or the
+   * link only works in the tab that started the sign-up. The verifier is
+   * removed once the sign-up finishes, and when found expired.
+   * @default `storage`
+   */
+  readonly signUpStorage?: BridgeStorage;
   /** The fetch to call Bridge with. @default the platform fetch */
   readonly fetch?: Fetch;
   /** Live updates. `false` turns them off. */
@@ -121,7 +131,7 @@ export function createBridge(options: BridgeOptions) {
   });
   const flags = new Flags({ issuer, endpoints, fetch: fetchFn, storage, session, onError });
   const live = new Live({ endpoints, fetch: fetchFn, session, onError }, options.live === false ? { enabled: false } : (options.live ?? {}));
-  const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, storage, session });
+  const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session });
   const accounts = createAccounts({ endpoints, fetch: fetchFn, session });
   const billing = createBilling({ endpoints, fetch: fetchFn, session, changed: () => void flags.load() });
 

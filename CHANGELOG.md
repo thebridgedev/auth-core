@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.0.0-alpha.3] - Unreleased
+
+### Added
+
+- **`signUpStorage`** in `createBridge`: where a sign-up's PKCE verifier waits for its email link. The link usually opens in a new tab, so a page that keeps its session in memory (`storage: memoryStorage()`) passes storage every tab shares, such as `localStorageAdapter()`. Then the link finishes the sign-up in a new tab of the same browser, even after the tab that started it is closed, and still answers `wrong-device` on another device. It defaults to `storage`, as before.
+
+### Changed
+
+- **The sign-up verifier is removed as soon as Bridge takes it**, and when it is found past its link's 15 minutes, instead of lingering until the next sign-up.
+
 ## [1.0.0-alpha.2] - Unreleased
 
 ### Added
