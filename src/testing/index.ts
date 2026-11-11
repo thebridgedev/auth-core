@@ -34,6 +34,24 @@ export interface FakeIssuerOptions {
   readonly now?: () => number;
   /** The sign-in methods the app offers, as its sign-in options list them. @default ['password', 'magicLink'] */
   readonly methods?: readonly string[];
+  /**
+   * The app's registered sign-in returns: with any, the app uses the hosted
+   * sign-in page, its metadata lists `sign_in_page` (`<origin>/sign-in/<app>/`)
+   * and `sign_in_requests`, and a request names one of them exactly (a
+   * loopback IP on any port). @default none
+   */
+  readonly returns?: readonly string[];
+}
+
+/** A Child App's sign-in request, held by the issuer: its challenge, return and state. */
+interface SignInRequest {
+  readonly challenge: string;
+  readonly redirectUri: string;
+  readonly state: string;
+  /** Where an email link sent on it goes. */
+  readonly linkAddress: string;
+  readonly expiresAt: number;
+  used: boolean;
 }
 
 interface Session {
@@ -47,6 +65,8 @@ interface Code {
   readonly user: string;
   readonly workspace: string | null;
   readonly challenge: string;
+  /** The registered return it was made for: traded only with the same `redirect_uri`. */
+  readonly redirectUri?: string;
   used: boolean;
   session: string | null;
 }
@@ -132,12 +152,14 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   const accessTokens = new Map<string, { session: string; user: string; workspace: string | null; exp: number }>();
   const refreshTokens = new Map<string, { session: string; rotatedAt: number | null }>();
   const codes = new Map<string, Code>();
-  const flows = new Map<string, { user: string; challenge: string }>();
+  const flows = new Map<string, { user: string; challenge: string; request?: SignInRequest }>();
+  const returns = options.returns ?? [];
+  const signInRequests = new Map<string, SignInRequest>();
   const methods = options.methods ?? ['password', 'magicLink'];
   // Passkeys: each ceremony's challenge, used once; each registered passkey, by its credential id.
-  const passkeyChallenges = new Map<string, { purpose: 'sign-in' | 'register'; pkce?: string; email?: string | null; user?: string; link?: string }>();
+  const passkeyChallenges = new Map<string, { purpose: 'sign-in' | 'register'; pkce?: string; email?: string | null; user?: string; link?: string; request?: SignInRequest }>();
   const passkeys = new Map<string, { id: string; user: string; name: string; createdAt: string; lastUsedAt: string | null }>();
-  const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link' | 'passkey-setup'; email: string; challenge?: string; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
+  const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link' | 'passkey-setup'; email: string; challenge?: string; request?: SignInRequest; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
   const sentLinks: { to: string; purpose: string; token: string }[] = [];
   const requests: RecordedRequest[] = [];
   const invites: FakeInvite[] = [];
@@ -182,6 +204,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           sign_in_options: `${at}/sign-in-options`,
           sign_up: `${at}/sign-up`,
           sign_up_verify: `${at}/sign-up/verify`,
+          ...(returns.length === 0 ? {} : { sign_in_page: `${origin}/sign-in/${appId}/`, sign_in_requests: `${at}/sign-in-requests` }),
           magic_link: `${at}/magic-link`,
           magic_link_verify: `${at}/magic-link/verify`,
           passkey_sign_in_options: `${at}/passkeys/sign-in/options`,
@@ -235,18 +258,38 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     for (const [token, record] of refreshTokens) if (record.session === sessionId) refreshTokens.delete(token);
   }
 
-  function toWorkspace(person: FakePerson, challenge: string, requested: string | null): Response {
+  /** A registered return, exactly, or a registered loopback IP's on any port (RFC 8252, 7.3). */
+  function isReturn(value: unknown): value is string {
+    if (typeof value !== 'string') return false;
+    if (returns.includes(value)) return true;
+    const loopback = /^http:\/\/(127\.0\.0\.1|\[::1\]):[1-9][0-9]{0,4}(\/.*)$/.exec(value);
+    return loopback !== null && returns.includes(`http://${loopback[1]}${loopback[2]}`);
+  }
+
+  /** The request a step names, open now: undefined when it names none, a refusal when it is gone. */
+  function openRequest(body: Record<string, unknown>): SignInRequest | Response | undefined {
+    if (body['request'] === undefined) return undefined;
+    const found = signInRequests.get(String(body['request']));
+    if (found === undefined || found.used || found.expiresAt <= now()) return oauth(400, 'invalid_request_uri', { error_description: 'The sign-in request has expired or was already used.' });
+    return found;
+  }
+
+  function toWorkspace(person: FakePerson, challenge: string, requested: string | null, request?: SignInRequest): Response {
     let workspace = requested;
     if (workspace === null) {
       if (person.workspaces.length > 1) {
         const flow = secret();
-        flows.set(flow, { user: person.id, challenge });
+        flows.set(flow, { user: person.id, challenge, ...(request === undefined ? {} : { request }) });
         return json(200, { next: 'workspace', flow, workspaces: person.workspaces.map((each) => ({ id: each.id, name: each.name, logo: null })) });
       }
       workspace = person.workspaces[0]?.id ?? null;
     }
     if (workspace !== null && !person.workspaces.some((each) => each.id === workspace)) return oauth(403, 'access_denied', { reason: 'not_a_member' });
     const code = secret();
+    if (request !== undefined) {
+      codes.set(code, { user: person.id, workspace, challenge: request.challenge, redirectUri: request.redirectUri, used: false, session: null });
+      return json(200, { code, redirect_uri: request.redirectUri, state: request.state });
+    }
     codes.set(code, { user: person.id, workspace, challenge, used: false, session: null });
     return json(200, { code });
   }
@@ -370,23 +413,37 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           const flow = flows.get(body['flow']);
           flows.delete(body['flow']);
           if (flow === undefined) return oauth(400, 'flow_expired');
-          return toWorkspace(people.get(flow.user) as FakePerson, flow.challenge, String(body['workspace']));
+          return toWorkspace(people.get(flow.user) as FakePerson, flow.challenge, String(body['workspace']), flow.request);
         }
-        if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string') return oauth(400, 'invalid_request');
+        const request = openRequest(body);
+        if (request instanceof Response) return request;
+        if (request === undefined && (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string')) return oauth(400, 'invalid_request');
+        if (request !== undefined && (body['code_challenge'] !== undefined || body['redirect_uri'] !== undefined)) return oauth(400, 'invalid_request');
         const person = [...people.values()].find((each) => each.email === String(body['email']).toLowerCase());
         if (person === undefined || person.password !== body['password']) return oauth(400, 'wrong_credentials');
-        return toWorkspace(person, body['code_challenge'], typeof body['workspace'] === 'string' ? body['workspace'] : null);
+        if (request !== undefined) request.used = true;
+        return toWorkspace(person, request?.challenge ?? String(body['code_challenge']), typeof body['workspace'] === 'string' ? body['workspace'] : null, request);
+      }
+      if (route === '/sign-in-requests' && returns.length > 0) {
+        if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body['code_challenge'])) return oauth(400, 'invalid_request');
+        if (typeof body['state'] !== 'string' || !/^[\x21-\x7e]{8,512}$/.test(body['state'])) return oauth(400, 'invalid_request');
+        if (!isReturn(body['redirect_uri'])) return oauth(400, 'invalid_request', { error_description: "redirect_uri is not one of the app's registered sign-in returns." });
+        const id = secret();
+        signInRequests.set(id, { challenge: body['code_challenge'], redirectUri: body['redirect_uri'], state: body['state'], linkAddress: typeof body['link_address'] === 'string' ? body['link_address'] : `${origin}/sign-in/${appId}/`, expiresAt: now() + 10 * 60 * 1000, used: false });
+        return json(201, { request: id, expires_in: 600 });
       }
       if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}) });
       if (route === '/magic-link') {
         if (!methods.includes('magicLink')) return oauth(403, 'method_disabled');
-        if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string') return oauth(400, 'invalid_request');
+        const request = openRequest(body);
+        if (request instanceof Response) return request;
+        if (request === undefined && (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string')) return oauth(400, 'invalid_request');
         const email = String(body['email']).toLowerCase();
         if ([...people.values()].some((each) => each.email === email)) {
           // Only the newest link of an address works.
           for (const [token, link] of links) if (link.purpose === 'magic-link' && link.email === email) links.delete(token);
           const token = secret();
-          links.set(token, { purpose: 'magic-link', email, challenge: body['code_challenge'], expiresAt: now() + 15 * 60 * 1000 });
+          links.set(token, { purpose: 'magic-link', email, challenge: request?.challenge ?? String(body['code_challenge']), ...(request === undefined ? {} : { request }), expiresAt: now() + 15 * 60 * 1000 });
           sentLinks.push({ to: email, purpose: 'magic-link', token });
         }
         return json(202, { next: 'verify_email' });
@@ -394,15 +451,20 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       if (route === '/magic-link/verify') {
         const link = links.get(String(body['token']));
         if (link?.purpose !== 'magic-link' || (link.expiresAt ?? 0) <= now()) return oauth(400, 'invalid_link');
-        if (typeof body['code_verifier'] !== 'string' || (await s256(body['code_verifier'])) !== link.challenge) return oauth(400, 'wrong_device', { error_description: 'Open the link on the device you asked for it on.' });
+        // A link sent on a sign-in request needs no verifier: its code is the request's app's.
+        if (link.request === undefined && (typeof body['code_verifier'] !== 'string' || (await s256(body['code_verifier'])) !== link.challenge)) return oauth(400, 'wrong_device', { error_description: 'Open the link on the device you asked for it on.' });
+        if (link.request?.used === true) return oauth(400, 'invalid_request_uri', { error_description: 'The sign-in request has expired or was already used.' });
         links.delete(String(body['token']));
+        if (link.request !== undefined) link.request.used = true;
         const person = [...people.values()].find((each) => each.email === link.email) as FakePerson;
-        return toWorkspace(person, link.challenge as string, null);
+        return toWorkspace(person, link.challenge as string, null, link.request);
       }
       if (route.startsWith('/passkeys/') && !methods.includes('passkeys')) return oauth(403, 'method_disabled', { error_description: 'The app does not offer passkey sign-in.' });
       if (route === '/passkeys/sign-in/options') {
-        if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string') return oauth(400, 'invalid_request');
-        return passkeyOptions('sign-in', { pkce: body['code_challenge'], email: typeof body['email'] === 'string' ? body['email'].toLowerCase() : null });
+        const request = openRequest(body);
+        if (request instanceof Response) return request;
+        if (request === undefined && (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string')) return oauth(400, 'invalid_request');
+        return passkeyOptions('sign-in', { pkce: request?.challenge ?? String(body['code_challenge']), email: typeof body['email'] === 'string' ? body['email'].toLowerCase() : null, ...(request === undefined ? {} : { request }) });
       }
       if (route === '/passkeys/sign-in') {
         const record = spentChallenge(body['response'], 'sign-in');
@@ -412,7 +474,9 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         const person = people.get(passkey.user) as FakePerson;
         if (record.email != null && record.email !== person.email) return oauth(400, 'passkey_refused', { error_description: 'The passkey could not be verified.' });
         passkey.lastUsedAt = new Date(now()).toISOString();
-        return toWorkspace(person, record.pkce as string, typeof body['workspace'] === 'string' ? body['workspace'] : null);
+        if (record.request?.used === true) return oauth(400, 'invalid_request_uri');
+        if (record.request !== undefined) record.request.used = true;
+        return toWorkspace(person, record.pkce as string, typeof body['workspace'] === 'string' ? body['workspace'] : null, record.request);
       }
       if (route === '/passkeys/setup-link') {
         const email = String(body['email']).toLowerCase();
@@ -439,7 +503,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       if (route === '/token') {
         if (body['grant_type'] === 'authorization_code') {
           const code = codes.get(String(body['code']));
-          if (code === undefined || code.used || (await s256(String(body['code_verifier']))) !== code.challenge) {
+          if (code === undefined || code.used || (await s256(String(body['code_verifier']))) !== code.challenge || (code.redirectUri !== undefined && body['redirect_uri'] !== code.redirectUri)) {
             if (code?.used && code.session !== null) endSession(code.session);
             return oauth(400, 'invalid_grant', { error_description: 'The code is not valid.' });
           }
@@ -491,8 +555,10 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       if (route === '/sign-up') {
         const email = String(body['email']).toLowerCase();
         const token = secret();
+        const request = openRequest(body);
+        if (request instanceof Response) return request;
         if (![...people.values()].some((each) => each.email === email)) {
-          links.set(token, { purpose: 'sign-up', email, challenge: String(body['code_challenge']), signUp: { password: String(body['password']), firstName: (body['firstName'] as string) ?? null, lastName: (body['lastName'] as string) ?? null, workspace: (body['workspace'] as string | boolean) ?? null } });
+          links.set(token, { purpose: 'sign-up', email, challenge: String(body['code_challenge']), ...(request === undefined ? {} : { request }), signUp: { password: String(body['password']), firstName: (body['firstName'] as string) ?? null, lastName: (body['lastName'] as string) ?? null, workspace: (body['workspace'] as string | boolean) ?? null } });
           sentLinks.push({ to: email, purpose: 'verify-sign-up', token });
         } else {
           sentLinks.push({ to: email, purpose: 'account-exists', token: '' });
@@ -503,10 +569,12 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         const link = links.get(String(body['token']));
         if (link?.purpose !== 'sign-up' || link.signUp === undefined) return oauth(400, 'invalid_link');
         if (typeof body['code_verifier'] !== 'string' || (await s256(body['code_verifier'])) !== link.challenge) return oauth(400, 'wrong_device', { error_description: 'Open the link on the device you signed up on.' });
+        if (link.request?.used === true) return oauth(400, 'invalid_request_uri');
         links.delete(String(body['token']));
+        if (link.request !== undefined) link.request.used = true;
         const workspaces = link.signUp.workspace === null ? [] : [{ id: id('ws'), name: typeof link.signUp.workspace === 'string' ? link.signUp.workspace : '', role: 'OWNER' }];
         const person = addPerson({ email: link.email, password: link.signUp.password, firstName: link.signUp.firstName, lastName: link.signUp.lastName, workspaces });
-        return toWorkspace(person, link.challenge as string, workspaces[0]?.id ?? null);
+        return toWorkspace(person, link.challenge as string, workspaces[0]?.id ?? null, link.request);
       }
       if (route === '/password/forgot') {
         const email = String(body['email']).toLowerCase();

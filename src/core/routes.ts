@@ -29,6 +29,7 @@ export type EndpointName =
   | 'sign_out'
   | 'sessions'
   | 'sign_in_options'
+  | 'sign_in_requests'
   | 'magic_link'
   | 'magic_link_verify'
   | 'passkey_sign_in_options'
@@ -62,6 +63,7 @@ export const CONTRACT_PATHS: Readonly<Record<EndpointName, string>> = {
   sign_out: '/v2/identity-access/sign-out',
   sessions: '/v2/identity-access/sessions',
   sign_in_options: '/v2/identity-access/apps/{appId}/sign-in-options',
+  sign_in_requests: '/v2/identity-access/apps/{appId}/sign-in-requests',
   magic_link: '/v2/identity-access/apps/{appId}/magic-link',
   magic_link_verify: '/v2/identity-access/apps/{appId}/magic-link/verify',
   passkey_sign_in_options: '/v2/identity-access/apps/{appId}/passkeys/sign-in/options',
@@ -107,6 +109,7 @@ export const ROUTES = {
   passwordForgot: route('POST', 'password_forgot'),
   passwordSet: route('POST', 'password'),
   signInOptions: route('GET', 'sign_in_options'),
+  signInRequest: route('POST', 'sign_in_requests'),
   magicLink: route('POST', 'magic_link'),
   magicLinkVerify: route('POST', 'magic_link_verify'),
   passkeySignInOptions: route('POST', 'passkey_sign_in_options'),

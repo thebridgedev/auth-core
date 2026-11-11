@@ -260,6 +260,28 @@ export async function handle(request: Request) {
 
 The low-level checker is at `@nebulr-group/bridge-auth-core/verifier`.
 
+## Hosted mode: sign in on Bridge's page
+
+Instead of building sign-in pages, the app can send people to the page Bridge hosts for it and get them back signed in. Register the page in the app's addresses first: its origin as a browser origin, and your return (for example `https://app.example.com/auth/callback`) as a sign-in return. `bridge.metadata().signInPage` is then set.
+
+It is the authorization code flow with PKCE (RFC 7636): `hosted.start` makes the PKCE pair and a `state`, keeps them in this browser (in `signUpStorage`), and has Bridge hold the request (challenge, return, state) behind an id. The page signs the person in by any method the app offers and sends the browser back with `code`, `state` and `iss`; `hosted.finish` checks them and trades the code with the verifier and the same return. A sign-in link the page sends opens in any tab of this browser.
+
+```ts
+// The sign-in button:
+location.assign(await bridge.hosted.start({ redirectUri: 'https://app.example.com/auth/callback' }));
+
+// On https://app.example.com/auth/callback:
+await bridge.hosted.finish(location.href); // refuses another state, another issuer, or a return this browser did not start
+```
+
+`hosted.start({ redirectUri, linkAddress })` also names where an email link sent on the way goes (default: Bridge's page).
+
+A page that signs people in for other apps, like Bridge's own, calls `bridge.request.use(id)` with the `request` from its address. Every sign-in step then sends the request instead of its own challenge, and a finished step is `{ done: true, handoff }`: send the browser to `handoff`. The page never holds the app's verifier.
+
+## Which page an email's link opens
+
+An app with several sign-in pages (its own and Bridge's hosted page, say) names which of its registered email-links addresses its emails link to: `createBridge({ linkAddress: 'https://app.example.com/auth' })`. Sign-up, sign-in link and recovery emails then link there. Bridge refuses an address the app did not register. Without it, the app's first email-links address.
+
 ## Signing in for a program on the same machine
 
 A sign-in page can sign a person in for a command-line tool on their machine. The tool opens the page with its PKCE challenge and its loopback callback. The page signs in with that challenge and sends the code back with `state` and `iss` (the issuer, RFC 9207); only the tool can trade the code for tokens.

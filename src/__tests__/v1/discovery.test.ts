@@ -137,7 +137,8 @@ describe("discovery: Bridge's own discovery document", () => {
   });
 
   it('every name Bridge lists is one the SDK reads, so a renamed key fails here', () => {
-    for (const name of Object.keys(doc.bridge_endpoints['2'] ?? {})) expect(Object.keys(CONTRACT_PATHS)).toContain(name);
+    // `sign_in_page` is a page, not an API route: the SDK reads it as `signInPage`.
+    for (const name of Object.keys(doc.bridge_endpoints['2'] ?? {})) if (name !== 'sign_in_page') expect(Object.keys(CONTRACT_PATHS)).toContain(name);
   });
 
   it('offers every route the SDK calls, the invites included', () => {
@@ -146,6 +147,9 @@ describe("discovery: Bridge's own discovery document", () => {
     expect(missing).toEqual([]);
     expect(endpoints.url(ROUTES.invitePreview)).toBe('https://bridge.test/v2/identity-access/apps/app-1/invites/preview');
     expect(endpoints.url(ROUTES.inviteAccept)).toBe('https://bridge.test/v2/identity-access/invites/accept');
+    // An app that registered Bridge's hosted sign-in page: the page, and where its sign-in requests start.
+    expect(endpoints.metadata.signInPage).toBe('https://bridge.test/sign-in/app-1/');
+    expect(endpoints.url(ROUTES.signInRequest)).toBe('https://bridge.test/v2/identity-access/apps/app-1/sign-in-requests');
   });
 
   it('the addresses it gives are the contract\'s paths', () => {
