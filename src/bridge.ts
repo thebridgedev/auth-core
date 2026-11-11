@@ -10,6 +10,7 @@ import { Flags } from './flags.js';
 import { Live, MANY_CHANGED, type LiveNotice, type LiveOptions, type LiveStatus } from './live.js';
 import { Session, type ChannelLike, type LockManagerLike, type SessionEvents, type SessionState } from './session.js';
 import { browserCeremonies, type WebAuthnCeremonies } from './passkeys.js';
+import { createHosted } from './hosted.js';
 import { createSignIn } from './sign-in.js';
 
 export interface BridgeOptions {
@@ -32,6 +33,14 @@ export interface BridgeOptions {
    * @default `storage`
    */
   readonly signUpStorage?: BridgeStorage;
+  /**
+   * Where the links in sign-up, sign-in link and recovery emails go: one of
+   * the app's registered email-links addresses, exactly, usually the page
+   * that runs these flows. Needed when the app has several sign-in pages
+   * (its own and Bridge's hosted page). Bridge refuses an address the app
+   * did not register. @default the app's first email-links address
+   */
+  readonly linkAddress?: string;
   /** The browser's side of passkey ceremonies. @default `@simplewebauthn/browser` */
   readonly webauthn?: WebAuthnCeremonies;
   /** The fetch to call Bridge with. @default the platform fetch */
@@ -136,7 +145,8 @@ export function createBridge(options: BridgeOptions) {
   });
   const flags = new Flags({ issuer, endpoints, fetch: fetchFn, storage, session, onError });
   const live = new Live({ endpoints, fetch: fetchFn, session, onError }, options.live === false ? { enabled: false } : (options.live ?? {}));
-  const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies() });
+  const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
+  const hosted = createHosted({ issuer, endpoints, fetch: fetchFn, storage: options.signUpStorage ?? storage, session });
   const accounts = createAccounts({ endpoints, fetch: fetchFn, session });
   const billing = createBilling({ endpoints, fetch: fetchFn, session, changed: () => void flags.load() });
 
@@ -253,6 +263,10 @@ export function createBridge(options: BridgeOptions) {
         passkeys: flows.passkeys,
         password: flows.password,
         invites: flows.invites,
+        /** Another app's sign-in request, for Bridge's hosted page: see `request.use`. */
+        request: flows.request,
+        /** Hosted mode: sign in on the page Bridge hosts for the app, and come back signed in. */
+        hosted,
         workspaces: accounts.workspaces,
         me: accounts.me,
         team: accounts.team,

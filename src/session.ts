@@ -320,9 +320,10 @@ export class Session {
   }
 
   /** Trades an authorization code and its PKCE verifier for tokens: the last step of every sign-in. */
-  async exchangeCode(code: string, verifier: string): Promise<void> {
+  async exchangeCode(code: string, verifier: string, redirectUri?: string): Promise<void> {
     const endings = this.endings;
-    const answer = await this.tokenCall({ grant_type: 'authorization_code', code, code_verifier: verifier });
+    // A code made for a registered return is traded only with that same return (RFC 6749, 4.1.3).
+    const answer = await this.tokenCall({ grant_type: 'authorization_code', code, code_verifier: verifier, ...(redirectUri === undefined ? {} : { redirect_uri: redirectUri }) });
     await this.adoptUnlessEnded(answer, null, endings);
   }
 

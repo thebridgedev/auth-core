@@ -114,6 +114,8 @@ export interface PasskeyDeps {
   readonly post: (route: (typeof ROUTES)[keyof typeof ROUTES], body: Readonly<Record<string, unknown>>) => Promise<CodeAnswer | undefined>;
   readonly waitingVerifier: (key: string) => Promise<string | null>;
   readonly signInSteps: <T>(answer: CodeAnswer | undefined, verifier: string) => Promise<T> | T;
+  /** What binds a sign-in's code: this device's challenge, or the sign-in request the page signs in for. */
+  readonly proofOf: (pkce: { readonly challenge: string }) => Readonly<Record<string, string>>;
 }
 
 export function createPasskeys<Step>(deps: PasskeyDeps) {
@@ -151,7 +153,7 @@ export function createPasskeys<Step>(deps: PasskeyDeps) {
      */
     async signIn(input: PasskeySignInInput = {}): Promise<Step> {
       const pkce = await createPkce();
-      const options = optionsOf(await deps.post(ROUTES.passkeySignInOptions, { code_challenge: pkce.challenge, code_challenge_method: 'S256', ...(input.email === undefined ? {} : { email: input.email }) }));
+      const options = optionsOf(await deps.post(ROUTES.passkeySignInOptions, { ...deps.proofOf(pkce), ...(input.email === undefined ? {} : { email: input.email }) }));
       const response = await ceremony(() => deps.ceremonies.get(options, input.autofill === true));
       const answer = await deps.post(ROUTES.passkeySignIn, { response, ...(input.workspace === undefined ? {} : { workspace: input.workspace }) });
       return deps.signInSteps<Step>(answer, pkce.verifier);

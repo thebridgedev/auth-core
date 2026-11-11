@@ -31,7 +31,15 @@ export interface WorkspaceChoice {
 }
 
 export type SignInStep =
-  | { readonly done: true }
+  | {
+      readonly done: true;
+      /**
+       * Set when the sign-in was for another app's sign-in request (see
+       * `request`): the address to send the browser to, the app's registered
+       * return with `code`, `state` and `iss`. No session was made here.
+       */
+      readonly handoff?: string;
+    }
   | {
       readonly done: false;
       readonly next: 'workspace';
@@ -151,6 +159,9 @@ export interface EmailLink {
 
 interface CodeAnswer {
   readonly code?: unknown;
+  /** With `state`, on a code made for a sign-in request: where the code goes. */
+  readonly redirect_uri?: unknown;
+  readonly state?: unknown;
   readonly next?: unknown;
   readonly flow?: unknown;
   readonly workspaces?: unknown;
@@ -182,6 +193,15 @@ function choicesOf(value: unknown): WorkspaceChoice[] {
   });
 }
 
+/** The app's return with the code, its `state` and the issuer that answered (RFC 6749, 4.1.2; RFC 9207). */
+function requestReturnUrl(redirectUri: string, code: string, state: string, issuer: string): string {
+  const url = new URL(redirectUri);
+  url.searchParams.set('code', code);
+  url.searchParams.set('state', state);
+  url.searchParams.set('iss', issuer);
+  return url.toString();
+}
+
 function unknownStep(next: unknown): BridgeError {
   const step = typeof next === 'string' ? next : 'unknown';
   return new BridgeError('unsupported-step', `Bridge asked for a sign-in step this SDK version does not offer: "${step}".`, { step });
@@ -196,6 +216,8 @@ export interface SignInDeps {
   readonly session: Session;
   /** The browser's side of a passkey ceremony. */
   readonly ceremonies: WebAuthnCeremonies;
+  /** Which of the app's email-links addresses an email's link goes to; the app's first when absent. */
+  readonly linkAddress?: string;
 }
 
 export function createSignIn(deps: SignInDeps) {
@@ -203,6 +225,12 @@ export function createSignIn(deps: SignInDeps) {
     (await call<CodeAnswer>(deps.fetch, deps.endpoints().url(route), { method: 'POST', body, ...(token === undefined ? {} : { token }) })).body;
   const signUpKey = storageKey(deps.issuer, 'sign-up');
   const magicLinkKey = storageKey(deps.issuer, 'magic-link');
+  /** The sign-in request this page signs in for, if any (see `request.use`). */
+  let request: string | null = null;
+  /** What binds a step's code: this device's challenge, or the request, whose challenge is the other app's. */
+  const proofOf = (pkce: { readonly challenge: string }): Record<string, string> => (request === null ? { code_challenge: pkce.challenge, code_challenge_method: 'S256' } : { request });
+  /** Where an email's link goes: on a request, where the request says; otherwise this page's address, if set. */
+  const linkOf = (): Record<string, string> => (request === null && deps.linkAddress !== undefined ? { link_address: deps.linkAddress } : {});
 
   /**
    * A verifier waiting for its email link, read once: past its link's
@@ -229,6 +257,8 @@ export function createSignIn(deps: SignInDeps) {
     return stepOf<SignInStep>(
       answer,
       async (code) => {
+        // A code made for a sign-in request is the other app's: it goes to the app's return, and is never traded here.
+        if (typeof answer?.redirect_uri === 'string' && typeof answer.state === 'string') return { done: true, handoff: requestReturnUrl(answer.redirect_uri, code, answer.state, deps.issuer) };
         await deps.session.exchangeCode(code, verifier);
         return { done: true };
       },
@@ -262,8 +292,7 @@ export function createSignIn(deps: SignInDeps) {
         const answer = await post(ROUTES.signIn, {
           email: input.email,
           password: input.password,
-          code_challenge: pkce.challenge,
-          code_challenge_method: 'S256',
+          ...proofOf(pkce),
           ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
         });
         return signInSteps(answer, pkce.verifier);
@@ -303,11 +332,14 @@ export function createSignIn(deps: SignInDeps) {
         const pkce = await createPkce();
         // The link opens in a new tab: keep the verifier where that tab can read it. The latest sign-up wins.
         await deps.signUpStorage.set(signUpKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + SIGN_UP_KEEP_MS } satisfies StoredSignUp));
+        // On a sign-in request, this device's challenge still binds the link to it: only the code is the other app's.
         await post(ROUTES.signUp, {
           email: input.email,
           ...(input.password === undefined ? {} : { password: input.password }),
           code_challenge: pkce.challenge,
           code_challenge_method: 'S256',
+          ...(request === null ? {} : { request }),
+          ...linkOf(),
           ...(input.firstName === undefined ? {} : { firstName: input.firstName }),
           ...(input.lastName === undefined ? {} : { lastName: input.lastName }),
           ...(input.workspace === undefined || input.workspace === false ? {} : { workspace: input.workspace }),
@@ -339,10 +371,15 @@ export function createSignIn(deps: SignInDeps) {
        * long as the link works. A newer link replaces an older one.
        */
       async start(email: string): Promise<{ readonly next: 'verify_email' }> {
+        // On a sign-in request the link carries the request, so it opens in any tab and needs no verifier here.
+        if (request !== null) {
+          await post(ROUTES.magicLink, { email, request });
+          return { next: 'verify_email' };
+        }
         const pkce = await createPkce();
         await deps.signUpStorage.set(magicLinkKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + MAGIC_LINK_KEEP_MS } satisfies StoredSignUp));
         try {
-          await post(ROUTES.magicLink, { email, code_challenge: pkce.challenge, code_challenge_method: 'S256' });
+          await post(ROUTES.magicLink, { email, code_challenge: pkce.challenge, code_challenge_method: 'S256', ...linkOf() });
         } catch (error) {
           // Nothing was sent: no verifier waits for a link that will not come.
           await deps.signUpStorage.remove(magicLinkKey);
@@ -360,18 +397,41 @@ export function createSignIn(deps: SignInDeps) {
       async finish(token: string): Promise<SignInStep> {
         const verifier = await waitingVerifier(magicLinkKey);
         const answer = await post(ROUTES.magicLinkVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }) });
+        // A link sent for a sign-in request answers with the other app's code, in any tab.
+        if (typeof answer?.redirect_uri === 'string') return signInSteps(answer, '');
         if (verifier === null) throw new BridgeError('wrong-device', 'Open the link on the device you asked for it on.', { code: 'wrong_device' });
         await deps.signUpStorage.remove(magicLinkKey);
         return signInSteps(answer, verifier);
       },
     },
 
-    passkeys: createPasskeys<SignInStep>({ ...deps, post, waitingVerifier, signInSteps: (answer, verifier) => signInSteps(answer, verifier) as never }),
+    passkeys: createPasskeys<SignInStep>({ ...deps, post, waitingVerifier, proofOf, signInSteps: (answer, verifier) => signInSteps(answer, verifier) as never }),
+
+    request: {
+      /**
+       * Signs in for another app's sign-in request, as Bridge's hosted page
+       * does: the app started the request with its own PKCE challenge, its
+       * registered return and its `state`, and sent the browser here with
+       * the request's id. From now on every sign-in step sends the request
+       * instead of this device's challenge, and a finished one ends with
+       * `handoff`, the address to send the browser to, instead of a session.
+       * This page never holds the app's verifier, so only the app can trade
+       * the code. A sign-in link sent on a request opens in any tab.
+       */
+      async use(id: string): Promise<void> {
+        if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{16,100}$/.test(id)) throw new BridgeError('invalid', 'A sign-in request id is 16 to 100 base64url characters.');
+        request = id;
+      },
+      /** The request this page signs in for, or null. */
+      async current(): Promise<string | null> {
+        return request;
+      },
+    },
 
     password: {
       /** Sends a reset link when the address has an account. The answer is the same either way. */
       async forgot(email: string): Promise<void> {
-        await post(ROUTES.passwordForgot, { email });
+        await post(ROUTES.passwordForgot, { email, ...linkOf() });
       },
       /** Sets a new password from a reset link. Signs nobody in, and ends every session of the account. */
       async set(token: string, password: string): Promise<void> {

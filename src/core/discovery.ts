@@ -34,6 +34,8 @@ export interface IssuerMetadata {
   readonly revocationLanes: Readonly<Partial<Record<RevocationLane, string>>>;
   /** True when the endpoints were worked out from the standard fields because the metadata lists none (see below). */
   readonly derived: boolean;
+  /** The sign-in page Bridge hosts for the app, ending in `/`, when the app registered it; null otherwise. */
+  readonly signInPage: string | null;
 }
 
 /** The issuer's endpoints, ready to call. */
@@ -54,6 +56,13 @@ const STANDARD_FIELDS: Readonly<Partial<Record<EndpointName, string>>> = {
 };
 
 const ENDPOINT_NAMES = Object.keys(CONTRACT_PATHS) as EndpointName[];
+
+/** A hosted page's address: https (http only on this machine), ending in `/`, with no query or fragment. */
+function pageUrl(value: unknown): string | null {
+  const url = absoluteUrl(value);
+  if (url === null || typeof value !== 'string' || !value.endsWith('/') || value.includes('?') || value.includes('#')) return null;
+  return value;
+}
 
 function trimSlash(value: string): string {
   return value.replace(/\/+$/, '');
@@ -132,6 +141,7 @@ export function readMetadata(issuer: string, document: unknown): IssuerMetadata 
     endpoints: Object.freeze(endpoints),
     revocationLanes: Object.freeze(lanes),
     derived: false,
+    signInPage: pageUrl(listed['sign_in_page']),
   });
 }
 
@@ -162,12 +172,12 @@ function derivedMetadata(issuer: string, doc: Readonly<Record<string, unknown>>)
     endpoints[name] = url ?? at(CONTRACT_PATHS[name]);
   }
   // An issuer that publishes no endpoint list predates these: refused as `not-offered` rather than called.
-  for (const pending of ['sign_in_options', 'invites', 'invite_preview', 'live_connection'] as const) delete endpoints[pending];
+  for (const pending of ['sign_in_options', 'invites', 'invite_preview', 'live_connection', 'sign_in_requests'] as const) delete endpoints[pending];
   const lanes: Partial<Record<RevocationLane, string>> = {};
   for (const lane of REVOCATION_LANES) {
     lanes[lane] = at(`/v2/${lane}/apps/{appId}/revocations/${lane}`);
   }
-  return Object.freeze({ issuer, appId, audience: null, endpoints: Object.freeze(endpoints), revocationLanes: Object.freeze(lanes), derived: true });
+  return Object.freeze({ issuer, appId, audience: null, endpoints: Object.freeze(endpoints), revocationLanes: Object.freeze(lanes), derived: true, signInPage: null });
 }
 
 export function endpointsFrom(metadata: IssuerMetadata): Endpoints {

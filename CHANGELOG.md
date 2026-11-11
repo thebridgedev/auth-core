@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.6] - Unreleased
+
+### Added
+
+- **Hosted mode**: `hosted.start({ redirectUri, linkAddress? })` starts a sign-in on the page Bridge hosts for the app (the authorization code flow with PKCE, the request held by Bridge) and answers the page's address; `hosted.finish(location)` checks `iss` and `state` on the return and trades the code with the verifier and the same `redirect_uri`. `hosted.offered()` says whether the app registered the page. `isHostedReturn(location)` tells a return apart.
+- **Signing in for another app's sign-in request**: `request.use(id)` makes every sign-in step (password, sign-in link, passkey, sign-up) send the request instead of the page's own challenge. A finished step is then `{ done: true, handoff }`, the app's return with `code`, `state` and `iss`; no session is made. A sign-in link sent on a request finishes in any tab, with no verifier; a sign-up link still finishes only where the sign-up started.
+- **`linkAddress`** in `createBridge`: which of the app's registered email-links addresses sign-up, sign-in link and recovery emails link to, for an app with several sign-in pages.
+- **`IssuerMetadata.signInPage`**: the hosted page's address, when the app registered it. The fake issuer in `/testing` serves sign-in requests and lists the page when given `returns`.
+
+### Changed
+
+- **A code made for a registered return is traded with that `redirect_uri`** (`hosted.finish`).
+
 ## [1.0.0-alpha.5] - Unreleased
 
 ### Added
