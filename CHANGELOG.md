@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.7] - Unreleased
+
+### Changed
+
+- **A sign-in link sent on a sign-in request is bound to the browser that asked for it**, as a sign-up link is. `magicLink.start` keeps a verifier in `signUpStorage` and sends its challenge with the request; `magicLink.finish` opens the link only in a tab of that browser, and fails with `wrong-device` anywhere else (a mail scanner that opens links, or a person who never asked), leaving the link and the request unused. The code is still the requesting app's. A link that lands on the app's own page opens there with the app's verifier for its hosted sign-in. Needs a Bridge server that accepts the challenge on a request.
+
 ## [1.0.0-alpha.6] - Unreleased
 
 ### Added
