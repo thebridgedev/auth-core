@@ -134,7 +134,10 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   const codes = new Map<string, Code>();
   const flows = new Map<string, { user: string; challenge: string }>();
   const methods = options.methods ?? ['password', 'magicLink'];
-  const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link'; email: string; challenge?: string; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
+  // Passkeys: each ceremony's challenge, used once; each registered passkey, by its credential id.
+  const passkeyChallenges = new Map<string, { purpose: 'sign-in' | 'register'; pkce?: string; email?: string | null; user?: string; link?: string }>();
+  const passkeys = new Map<string, { id: string; user: string; name: string; createdAt: string; lastUsedAt: string | null }>();
+  const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link' | 'passkey-setup'; email: string; challenge?: string; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
   const sentLinks: { to: string; purpose: string; token: string }[] = [];
   const requests: RecordedRequest[] = [];
   const invites: FakeInvite[] = [];
@@ -181,6 +184,12 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           sign_up_verify: `${at}/sign-up/verify`,
           magic_link: `${at}/magic-link`,
           magic_link_verify: `${at}/magic-link/verify`,
+          passkey_sign_in_options: `${at}/passkeys/sign-in/options`,
+          passkey_sign_in: `${at}/passkeys/sign-in`,
+          passkey_setup_link: `${at}/passkeys/setup-link`,
+          passkey_setup_options: `${at}/passkeys/setup/options`,
+          passkey_setup: `${at}/passkeys/setup`,
+          passkeys: `${v2}/identity-access/passkeys`,
           password_forgot: `${at}/password/forgot`,
           password: `${at}/password`,
           sign_out: `${v2}/identity-access/sign-out`,
@@ -298,6 +307,39 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
 
   const unauthorized = () => problem(401, 'credential-refused', 'The token is not valid.');
 
+  /** A ceremony's options, its challenge kept to be used once. */
+  function passkeyOptions(purpose: 'sign-in' | 'register', record: { pkce?: string; email?: string | null; user?: string; link?: string }): Response {
+    const challenge = secret();
+    passkeyChallenges.set(challenge, { purpose, ...record });
+    if (purpose === 'sign-in') return json(200, { options: { challenge, rpId: 'localhost', userVerification: 'required', timeout: 300_000, allowCredentials: [] } });
+    const person = people.get(record.user as string) as FakePerson;
+    const excludeCredentials = [...passkeys.values()].filter((each) => each.user === person.id).map((each) => ({ id: each.id, type: 'public-key' }));
+    return json(200, { options: { challenge, rp: { id: 'localhost', name: 'localhost' }, user: { id: base64url(person.id), name: person.email, displayName: person.email }, pubKeyCredParams: [{ type: 'public-key', alg: -7 }], timeout: 300_000, attestation: 'none', excludeCredentials, authenticatorSelection: { residentKey: 'required', userVerification: 'required' } } });
+  }
+
+  /** Spends the challenge an authenticator's answer signed, once: its record, or null. */
+  function spentChallenge(response: unknown, purpose: 'sign-in' | 'register') {
+    const client = (response as { response?: { clientDataJSON?: unknown } } | null)?.response?.clientDataJSON;
+    let challenge: unknown;
+    try {
+      challenge = (JSON.parse(atob(String(client).replace(/-/g, '+').replace(/_/g, '/'))) as { challenge?: unknown }).challenge;
+    } catch {
+      return null;
+    }
+    const record = passkeyChallenges.get(String(challenge));
+    passkeyChallenges.delete(String(challenge));
+    return record?.purpose === purpose ? record : null;
+  }
+
+  /** Keeps the passkey an authenticator made, or refuses one registered already. */
+  function keepPasskey(response: unknown, user: string, name: unknown): Response | { id: string } {
+    const credential = String((response as { id?: unknown } | null)?.id);
+    if (passkeys.has(credential)) return oauth(409, 'passkey_exists', { error_description: 'This device has a passkey for the app already.' });
+    passkeys.set(credential, { id: credential, user, name: typeof name === 'string' && name !== '' ? name : 'Passkey', createdAt: new Date(now()).toISOString(), lastUsedAt: null });
+    return { id: credential };
+  }
+  const passkeyView = (each: { id: string; name: string; createdAt: string; lastUsedAt: string | null }) => ({ id: each.id, name: each.name, createdAt: each.createdAt, lastUsedAt: each.lastUsedAt, deviceType: 'multiDevice', backedUp: true, aaguid: '00000000-0000-0000-0000-000000000000' });
+
   function channelsFor(who: { session: Session; person: FakePerson } | null) {
     const channels = [{ kind: 'app', name: `/app/${appId}` }];
     if (who !== null) {
@@ -355,6 +397,43 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (typeof body['code_verifier'] !== 'string' || (await s256(body['code_verifier'])) !== link.challenge) return oauth(400, 'wrong_device', { error_description: 'Open the link on the device you asked for it on.' });
         links.delete(String(body['token']));
         const person = [...people.values()].find((each) => each.email === link.email) as FakePerson;
+        return toWorkspace(person, link.challenge as string, null);
+      }
+      if (route.startsWith('/passkeys/') && !methods.includes('passkeys')) return oauth(403, 'method_disabled', { error_description: 'The app does not offer passkey sign-in.' });
+      if (route === '/passkeys/sign-in/options') {
+        if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string') return oauth(400, 'invalid_request');
+        return passkeyOptions('sign-in', { pkce: body['code_challenge'], email: typeof body['email'] === 'string' ? body['email'].toLowerCase() : null });
+      }
+      if (route === '/passkeys/sign-in') {
+        const record = spentChallenge(body['response'], 'sign-in');
+        if (record === null) return oauth(400, 'invalid_challenge', { error_description: 'The passkey request expired or was used already. Start again.' });
+        const passkey = passkeys.get(String((body['response'] as { id?: unknown }).id));
+        if (passkey === undefined) return oauth(400, 'unknown_passkey', { error_description: 'This passkey is not registered for the app.' });
+        const person = people.get(passkey.user) as FakePerson;
+        if (record.email != null && record.email !== person.email) return oauth(400, 'passkey_refused', { error_description: 'The passkey could not be verified.' });
+        passkey.lastUsedAt = new Date(now()).toISOString();
+        return toWorkspace(person, record.pkce as string, typeof body['workspace'] === 'string' ? body['workspace'] : null);
+      }
+      if (route === '/passkeys/setup-link') {
+        const email = String(body['email']).toLowerCase();
+        if ([...people.values()].some((each) => each.email === email)) {
+          const token = secret();
+          links.set(token, { purpose: 'passkey-setup', email, challenge: String(body['code_challenge']), expiresAt: now() + 24 * 3600 * 1000 });
+          sentLinks.push({ to: email, purpose: 'passkey-setup', token });
+        }
+        return json(202, { next: 'verify_email' });
+      }
+      if (route === '/passkeys/setup/options' || route === '/passkeys/setup') {
+        const link = links.get(String(body['token']));
+        if (link?.purpose !== 'passkey-setup' || (link.expiresAt ?? 0) <= now()) return oauth(400, 'invalid_link');
+        if (typeof body['code_verifier'] !== 'string' || (await s256(body['code_verifier'])) !== link.challenge) return oauth(400, 'wrong_device', { error_description: 'Open the link on the device you asked for it on.' });
+        const person = [...people.values()].find((each) => each.email === link.email) as FakePerson;
+        if (route === '/passkeys/setup/options') return passkeyOptions('register', { user: person.id, link: String(body['token']) });
+        const record = spentChallenge(body['response'], 'register');
+        if (record?.link !== body['token']) return oauth(400, 'invalid_challenge');
+        const kept = keepPasskey(body['response'], person.id, body['name']);
+        if (kept instanceof Response) return kept;
+        links.delete(String(body['token']));
         return toWorkspace(person, link.challenge as string, null);
       }
       if (route === '/token') {
@@ -475,6 +554,26 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     const { person, session } = who;
     const workspaceRequired = () => (session.workspace === null ? problem(403, 'workspace-required', 'Choose a workspace first.') : null);
 
+    if (path === '/v2/identity-access/passkeys' && method === 'GET') return json(200, [...passkeys.values()].filter((each) => each.user === person.id).reverse().map(passkeyView));
+    if (path === '/v2/identity-access/passkeys/options' && method === 'POST') {
+      if (!methods.includes('passkeys')) return oauth(403, 'method_disabled');
+      return passkeyOptions('register', { user: person.id });
+    }
+    if (path === '/v2/identity-access/passkeys' && method === 'POST') {
+      const record = spentChallenge(body['response'], 'register');
+      if (record?.user !== person.id || record.link !== undefined) return oauth(400, 'invalid_challenge');
+      const kept = keepPasskey(body['response'], person.id, body['name']);
+      return kept instanceof Response ? kept : json(201, passkeyView(passkeys.get(kept.id) as { id: string; name: string; createdAt: string; lastUsedAt: string | null }));
+    }
+    const passkeyMatch = path.match(/^\/v2\/identity-access\/passkeys\/([^/]+)$/);
+    if (passkeyMatch !== null && method === 'DELETE') {
+      const found = passkeys.get(decodeURIComponent(passkeyMatch[1] as string));
+      if (found?.user !== person.id) return problem(404, 'not-found', '');
+      const mine = [...passkeys.values()].filter((each) => each.user === person.id);
+      if (mine.length === 1 && !methods.includes('password') && !methods.includes('magicLink')) return oauth(409, 'last_sign_in_method', { error_description: 'This passkey is the only way left to sign in. Add another first.' });
+      passkeys.delete(found.id);
+      return new Response(null, { status: 204 });
+    }
     if (path === '/v2/accounts/me' && method === 'GET') {
       return json(200, { id: person.id, email: person.email, firstName: person.firstName, lastName: person.lastName, phoneNumber: null, onboarded: false, consentsToPrivacyPolicy: false, suspended: false, workspaces: person.workspaces.map((each) => ({ id: each.id, name: each.name, logo: null, member: `mem-${each.id}`, role: each.role, status: 'active' })) });
     }
@@ -707,3 +806,49 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
 }
 
 export type FakeIssuer = ReturnType<typeof createFakeIssuer>;
+
+/**
+ * A stand-in for the browser's passkey dialog, for tests: pass it as
+ * `webauthn` to `createBridge`. It makes a passkey on `create` and answers
+ * `get` with the newest one it made (or the one `use` picked), the way a
+ * person picking their passkey would. `cancelNext()` makes the next
+ * ceremony fail as a closed dialog does. It signs nothing: use it with the
+ * fake issuer, never against Bridge.
+ */
+export function fakeWebAuthn(options: { supported?: boolean; autofill?: boolean } = {}) {
+  const made: string[] = [];
+  let picked: string | null = null;
+  let cancel = false;
+  const client = (type: string, challenge: unknown) => base64url(JSON.stringify({ type, challenge, origin: 'http://localhost' }));
+  const refuseIfCancelled = () => {
+    if (!cancel) return;
+    cancel = false;
+    throw Object.assign(new Error('The operation either timed out or was not allowed.'), { name: 'NotAllowedError' });
+  };
+  return {
+    made,
+    supported: () => options.supported ?? true,
+    autofillSupported: () => Promise.resolve(options.autofill ?? true),
+    create(given: Record<string, unknown>): Promise<Record<string, unknown>> {
+      refuseIfCancelled();
+      const id = secret();
+      made.push(id);
+      return Promise.resolve({ id, rawId: id, type: 'public-key', response: { clientDataJSON: client('webauthn.create', given['challenge']), attestationObject: 'fake' }, clientExtensionResults: {} });
+    },
+    get(given: Record<string, unknown>): Promise<Record<string, unknown>> {
+      refuseIfCancelled();
+      const id = picked ?? made.at(-1);
+      if (id === undefined) return Promise.reject(Object.assign(new Error('No passkey on this device.'), { name: 'NotAllowedError' }));
+      return Promise.resolve({ id, rawId: id, type: 'public-key', response: { clientDataJSON: client('webauthn.get', given['challenge']), authenticatorData: 'fake', signature: 'fake' }, clientExtensionResults: {} });
+    },
+    cancel(): void {},
+    /** The next ceremony fails as if the person closed the dialog. */
+    cancelNext(): void {
+      cancel = true;
+    },
+    /** Answers sign-ins with this passkey (a credential id from `made`), as a person picking it would. */
+    use(id: string): void {
+      picked = id;
+    },
+  };
+}

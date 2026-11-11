@@ -48,7 +48,11 @@ export type BridgeErrorKind =
   /** The issuer does not offer this yet. */
   | 'not-offered'
   /** The SDK is set up wrongly, or the issuer's metadata is not usable. */
-  | 'misconfigured';
+  | 'misconfigured'
+  /** The person closed the passkey dialog, or it timed out. */
+  | 'cancelled'
+  /** This browser cannot use passkeys, or could not use this one. */
+  | 'not-supported';
 
 /** An RFC 9457 problem, as Bridge sent it. */
 export interface Problem {
@@ -112,6 +116,11 @@ const CODE_KINDS: Readonly<Record<string, BridgeErrorKind>> = {
   invalid_client: 'misconfigured',
   unsupported_grant_type: 'misconfigured',
   invalid_request: 'invalid',
+  // Passkeys: one that could not be verified, one Bridge does not know, a ceremony that took too long or was used.
+  passkey_refused: 'wrong-credentials',
+  unknown_passkey: 'wrong-credentials',
+  invalid_challenge: 'flow-expired',
+  origin_not_allowed: 'origin-not-allowed',
   // An invite's link that no longer works: revoked, used, or out of date (also what a link that names no invite gets).
   invite_revoked: 'link-invalid',
   invite_used: 'link-invalid',

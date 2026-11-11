@@ -31,6 +31,12 @@ export type EndpointName =
   | 'sign_in_options'
   | 'magic_link'
   | 'magic_link_verify'
+  | 'passkey_sign_in_options'
+  | 'passkey_sign_in'
+  | 'passkey_setup_link'
+  | 'passkey_setup_options'
+  | 'passkey_setup'
+  | 'passkeys'
   | 'invites'
   | 'invite_preview'
   | 'accounts'
@@ -58,6 +64,12 @@ export const CONTRACT_PATHS: Readonly<Record<EndpointName, string>> = {
   sign_in_options: '/v2/identity-access/apps/{appId}/sign-in-options',
   magic_link: '/v2/identity-access/apps/{appId}/magic-link',
   magic_link_verify: '/v2/identity-access/apps/{appId}/magic-link/verify',
+  passkey_sign_in_options: '/v2/identity-access/apps/{appId}/passkeys/sign-in/options',
+  passkey_sign_in: '/v2/identity-access/apps/{appId}/passkeys/sign-in',
+  passkey_setup_link: '/v2/identity-access/apps/{appId}/passkeys/setup-link',
+  passkey_setup_options: '/v2/identity-access/apps/{appId}/passkeys/setup/options',
+  passkey_setup: '/v2/identity-access/apps/{appId}/passkeys/setup',
+  passkeys: '/v2/identity-access/passkeys',
   invites: '/v2/identity-access/invites',
   invite_preview: '/v2/identity-access/apps/{appId}/invites/preview',
   accounts: '/v2/accounts',
@@ -97,6 +109,11 @@ export const ROUTES = {
   signInOptions: route('GET', 'sign_in_options'),
   magicLink: route('POST', 'magic_link'),
   magicLinkVerify: route('POST', 'magic_link_verify'),
+  passkeySignInOptions: route('POST', 'passkey_sign_in_options'),
+  passkeySignIn: route('POST', 'passkey_sign_in'),
+  passkeySetupLink: route('POST', 'passkey_setup_link'),
+  passkeySetupOptions: route('POST', 'passkey_setup_options'),
+  passkeySetup: route('POST', 'passkey_setup'),
   invitePreview: route('POST', 'invite_preview'),
 
   // Identity and Access: the signed-in person accepts an invite.
@@ -106,6 +123,10 @@ export const ROUTES = {
   signOut: route('POST', 'sign_out'),
   sessions: route('GET', 'sessions'),
   sessionEnd: route('DELETE', 'sessions', '/{sessionId}'),
+  passkeys: route('GET', 'passkeys'),
+  passkeyOptions: route('POST', 'passkeys', '/options'),
+  passkeyAdd: route('POST', 'passkeys'),
+  passkeyRemove: route('DELETE', 'passkeys', '/{passkeyId}'),
 
   // Accounts.
   me: route('GET', 'accounts', '/me'),

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { CONTRACT_PATHS, LANE_CONTRACT_PATHS, REVOCATION_LANES, ROUTES } from '../../core/routes.js';
+import { fakeWebAuthn } from '../../testing/index.js';
 import { clientOn, issuerWithPeople, PASSWORD } from './helpers.js';
 
 /**
@@ -54,7 +55,7 @@ describe('contract: the SDK calls only what Bridge promises at version 2', () =>
   });
 
   it('every route before sign-in is public, and every signed-in route takes a person', () => {
-    const beforeSignIn = ['signIn', 'token', 'revoke', 'introspect', 'jwks', 'signInOptions', 'signUp', 'signUpVerify', 'passwordForgot', 'passwordSet', 'magicLink', 'magicLinkVerify', 'invitePreview', 'flagsVisitorEvaluate', 'liveVisitorChannels', 'liveVisitorHistory', 'liveConnection'];
+    const beforeSignIn = ['signIn', 'token', 'revoke', 'introspect', 'jwks', 'signInOptions', 'signUp', 'signUpVerify', 'passwordForgot', 'passwordSet', 'magicLink', 'magicLinkVerify', 'passkeySignInOptions', 'passkeySignIn', 'passkeySetupLink', 'passkeySetupOptions', 'passkeySetup', 'invitePreview', 'flagsVisitorEvaluate', 'liveVisitorChannels', 'liveVisitorHistory', 'liveConnection'];
     for (const { name, key } of routes) {
       const endpoint = promised.get(key);
       if (endpoint === undefined) continue;
@@ -120,6 +121,28 @@ describe('contract: every field the SDK sends is one Bridge accepts', () => {
     for (const key of ['POST /v2/identity-access/apps/{appId}/sign-in', 'POST /v2/identity-access/apps/{appId}/token', 'POST /v2/identity-access/apps/{appId}/sign-up', 'POST /v2/identity-access/apps/{appId}/sign-up/verify', 'POST /v2/identity-access/apps/{appId}/password', 'PATCH /v2/accounts/me', 'POST /v2/accounts/invites', 'POST /v2/billing/payer/plan', 'POST /v2/flags/ofrep/v1/evaluate/flags', 'POST /v2/identity-access/apps/{appId}/invites/preview', 'POST /v2/identity-access/invites/accept']) {
       expect(checked).toContain(key);
     }
+  });
+
+  it('across passkeys: adding, listing, signing in, a setup link and removing', async () => {
+    const { fake } = issuerWithPeople({ methods: ['password', 'magicLink', 'passkeys'] });
+    const device = fakeWebAuthn();
+    const client = clientOn(fake, { webauthn: device });
+    await client.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    const added = await client.passkeys.add('Laptop');
+    await client.passkeys.list();
+    await client.signOut();
+    await client.passkeys.signIn({ email: 'alice@acme.test', workspace: 'ws-acme' });
+    await client.passkeys.setupLink.request('alice@acme.test');
+    await client.passkeys.setupLink.finish(fake.lastLink('alice@acme.test', 'passkey-setup')!, 'Phone');
+    await client.passkeys.remove(added.id);
+    const checked = new Set<string>();
+    for (const request of fake.requests.filter((each) => each.path.includes('passkeys'))) {
+      const endpoint = endpointOf(request.method, request.path, fake.appId);
+      expect(endpoint, `${request.method} ${request.path}`).toBeDefined();
+      for (const field of request.body === undefined ? [] : Object.keys(request.body as object)) expect([`${request.method} ${endpoint!.path}`, field, endpoint!.fields.includes(field)]).toEqual([`${request.method} ${endpoint!.path}`, field, true]);
+      checked.add(`${request.method} ${endpoint!.path}`);
+    }
+    expect(checked.size).toBe(9);
   });
 
   it("usage reports go in the one field Bridge's usage endpoint takes", () => {
