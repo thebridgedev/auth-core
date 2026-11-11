@@ -42,7 +42,8 @@ describe('the package', () => {
       target: 'es2022',
     });
     const inputs = Object.keys(result.metafile.inputs).map((path) => relative(root, resolve(root, path)));
-    expect(inputs.filter((path) => !path.startsWith('src/') && !path.startsWith('node_modules/jose/'))).toEqual([]);
+    // The passkey dialog's library is browser code with no Node built-in, imported only when a passkey is used.
+    expect(inputs.filter((path) => !path.startsWith('src/') && !path.startsWith('node_modules/jose/') && !path.startsWith('node_modules/@simplewebauthn/browser/'))).toEqual([]);
   });
 
   it('the browser entry carries no token verifier and no rule engine', async () => {

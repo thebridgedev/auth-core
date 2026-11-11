@@ -83,6 +83,33 @@ if (link) {
 
 Each link works once, for 15 minutes. Opened on another device, `finish` fails with `wrong-device`, and the link still works on the device that asked; used again, `link-invalid`. The PKCE verifier waits in `signUpStorage` until the link is opened, at most as long as the link works, and nothing else is kept there.
 
+### Passkeys
+
+When the app offers them (`'passkeys'` in `signIn.options().methods`) and the browser can use them (`await bridge.passkeys.supported()`), a person signs in with Face ID, Touch ID, Windows Hello, a phone or a security key. Bridge accepts a ceremony only from a page address listed among the app's browser addresses, always asks for the person's fingerprint, face or PIN, and keeps only the passkey's public key.
+
+```ts
+const step = await bridge.passkeys.signIn();                 // the browser's dialog; any of the person's passkeys
+await bridge.passkeys.signIn({ email });                     // only that address's passkey
+await bridge.passkeys.signIn({ autofill: true });            // waits for a pick from an <input autocomplete="username webauthn">
+```
+
+Signed in, recently (otherwise `reauthenticate`):
+
+```ts
+await bridge.passkeys.add('Work laptop');   // from this device; one it has already fails with `conflict`
+await bridge.passkeys.list();               // name, added, last used, whether it syncs
+await bridge.passkeys.remove(id);           // never the last way to sign in (`conflict`, code `last_sign_in_method`)
+```
+
+A setup link is the way to a first passkey, or back in. It lands as `#bridge=passkey-setup&token=…`, works once, for 24 hours, only in the browser that asked; its PKCE verifier waits in `signUpStorage` that long at most. Start `finish` on a click: Safari opens the dialog only then.
+
+```ts
+await bridge.passkeys.setupLink.request(email);          // the same answer for any address
+const step = await bridge.passkeys.setupLink.finish(takeEmailLink('passkey-setup')!.token);
+```
+
+A closed dialog fails with `cancelled`, a browser without passkeys with `not-supported`, a passkey the app does not know with `wrong-credentials` (code `unknown_passkey`). The browser's side runs on `@simplewebauthn/browser`, loaded only when a passkey is used; pass `webauthn` to `createBridge` to replace it, and `fakeWebAuthn()` from `/testing` in tests.
+
 ### Forgot and reset password
 
 ```ts

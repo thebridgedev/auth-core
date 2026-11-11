@@ -2,7 +2,7 @@
   "about": "The issuer's metadata exactly as Bridge's discovery endpoint builds it, field for field, with the values of Bridge's own test of it. The revocation lanes are the four every app's copy carries when deployed. The discovery test checks that the SDK reads this document as it is.",
   "source": {
     "file": "microservices/identity-access/src/controllers.ts (discovery) and identity-access.test.ts",
-    "commit": "a13e303b72864c2b521ddf5e1b2ae67f2e54cac7"
+    "commit": "e78bc9271d75d66f3f3066adf6ea70168b1a68cd"
   },
   "document": {
     "issuer": "https://bridge.test/identity-access/apps/app-1",
@@ -56,6 +56,12 @@
         "password": "https://bridge.test/v2/identity-access/apps/app-1/password",
         "magic_link": "https://bridge.test/v2/identity-access/apps/app-1/magic-link",
         "magic_link_verify": "https://bridge.test/v2/identity-access/apps/app-1/magic-link/verify",
+        "passkey_sign_in_options": "https://bridge.test/v2/identity-access/apps/app-1/passkeys/sign-in/options",
+        "passkey_sign_in": "https://bridge.test/v2/identity-access/apps/app-1/passkeys/sign-in",
+        "passkey_setup_link": "https://bridge.test/v2/identity-access/apps/app-1/passkeys/setup-link",
+        "passkey_setup_options": "https://bridge.test/v2/identity-access/apps/app-1/passkeys/setup/options",
+        "passkey_setup": "https://bridge.test/v2/identity-access/apps/app-1/passkeys/setup",
+        "passkeys": "https://bridge.test/v2/identity-access/passkeys",
         "sign_out": "https://bridge.test/v2/identity-access/sign-out",
         "sessions": "https://bridge.test/v2/identity-access/sessions",
         "accounts": "https://bridge.test/v2/accounts",

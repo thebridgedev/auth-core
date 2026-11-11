@@ -4,6 +4,7 @@ import { call, type Fetch } from './core/http.js';
 import { ROUTES } from './core/routes.js';
 import { readJson, storageKey, type BridgeStorage } from './core/storage.js';
 import { createPkce, isS256Challenge } from './core/util.js';
+import { createPasskeys, type WebAuthnCeremonies } from './passkeys.js';
 import type { Session } from './session.js';
 
 /**
@@ -15,7 +16,7 @@ import type { Session } from './session.js';
  * device with PKCE and traded for tokens at once.
  *
  * Today's steps are email and password, an email link that signs in (a magic
- * link), and the workspace choice. Other steps (a second factor, passkeys,
+ * link), a passkey, and the workspace choice. Other steps (a second factor,
  * email codes, company login) arrive as new
  * `next` values; this version refuses one it does not know with
  * `unsupported-step` rather than guessing.
@@ -144,7 +145,7 @@ export interface PasswordRules {
 
 /** An email link Bridge sent, as it lands on the app's page: `#bridge=<kind>&token=<token>`. */
 export interface EmailLink {
-  readonly kind: 'verify-email' | 'reset-password' | 'invite' | 'magic-link';
+  readonly kind: 'verify-email' | 'reset-password' | 'invite' | 'magic-link' | 'passkey-setup';
   readonly token: string;
 }
 
@@ -193,6 +194,8 @@ export interface SignInDeps {
   /** Where a sign-up's or a sign-in link's verifier waits for its email link: storage every tab of the origin shares. */
   readonly signUpStorage: BridgeStorage;
   readonly session: Session;
+  /** The browser's side of a passkey ceremony. */
+  readonly ceremonies: WebAuthnCeremonies;
 }
 
 export function createSignIn(deps: SignInDeps) {
@@ -363,6 +366,8 @@ export function createSignIn(deps: SignInDeps) {
       },
     },
 
+    passkeys: createPasskeys<SignInStep>({ ...deps, post, waitingVerifier, signInSteps: (answer, verifier) => signInSteps(answer, verifier) as never }),
+
     password: {
       /** Sends a reset link when the address has an account. The answer is the same either way. */
       async forgot(email: string): Promise<void> {
@@ -458,7 +463,7 @@ export function readEmailLink(hashOrUrl: string): EmailLink | null {
   const kind = params.get('bridge');
   const token = params.get('token');
   if (token === null || token === '') return null;
-  if (kind !== 'verify-email' && kind !== 'reset-password' && kind !== 'invite' && kind !== 'magic-link') return null;
+  if (kind !== 'verify-email' && kind !== 'reset-password' && kind !== 'invite' && kind !== 'magic-link' && kind !== 'passkey-setup') return null;
   return { kind, token };
 }
 

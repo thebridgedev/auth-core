@@ -152,8 +152,8 @@ describe("discovery: Bridge's own discovery document", () => {
     const endpoints = endpointsFrom(readMetadata(doc.issuer, doc));
     for (const route of Object.values(ROUTES)) {
       if (!endpoints.offers(route)) continue;
-      const path = new URL(endpoints.url(route, { memberId: 'm', inviteId: 'i', session: 's', sessionId: 's', key: 'k', token: 't' })).pathname;
-      const expected = (CONTRACT_PATHS[route.at] + route.path).replace('{appId}', String(doc['bridge_app'])).replace(/\{[a-zA-Z]+\}/g, (name) => ({ '{memberId}': 'm', '{inviteId}': 'i', '{session}': 's', '{sessionId}': 's', '{key}': 'k', '{token}': 't' })[name] ?? name);
+      const path = new URL(endpoints.url(route, { memberId: 'm', inviteId: 'i', session: 's', sessionId: 's', key: 'k', token: 't', passkeyId: 'p' })).pathname;
+      const expected = (CONTRACT_PATHS[route.at] + route.path).replace('{appId}', String(doc['bridge_app'])).replace(/\{[a-zA-Z]+\}/g, (name) => ({ '{memberId}': 'm', '{inviteId}': 'i', '{session}': 's', '{sessionId}': 's', '{key}': 'k', '{token}': 't', '{passkeyId}': 'p' })[name] ?? name);
       expect(path).toBe(expected);
     }
   });

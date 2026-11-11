@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.5] - Unreleased
+
+### Added
+
+- **Passkeys**: `passkeys.signIn({ email?, workspace?, autofill? })` signs in with a passkey (a discoverable one, or only that address's; `autofill` waits for a pick from an input's autofill list); `passkeys.add(name?)`, `passkeys.list()` and `passkeys.remove(id)` for the signed-in person; `passkeys.setupLink.request(email)` and `passkeys.setupLink.finish(token, name?)` make one from an emailed link on the device that asked, and sign in. `passkeys.supported()`, `passkeys.autofillSupported()` and `passkeys.cancel()` for the page.
+- **The browser's side** runs on `@simplewebauthn/browser` (13.3.0), imported only when a passkey is used. `createBridge({ webauthn })` replaces it; `fakeWebAuthn()` in `/testing` stands in for the dialog, and the fake issuer serves passkeys when `methods` lists `'passkeys'`.
+- **New error kinds**: `cancelled` (the dialog was closed or timed out) and `not-supported`. A passkey that could not be verified, or that the app does not know, is `wrong-credentials` (codes `passkey_refused`, `unknown_passkey`); a passkey request that expired is `flow-expired`.
+- **`readEmailLink` and `takeEmailLink` read `#bridge=passkey-setup&token=…`.** Its verifier waits in `signUpStorage` as long as the link works (24 hours), and is removed once used or found expired.
+
 ## [1.0.0-alpha.4] - Unreleased
 
 ### Added

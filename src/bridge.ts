@@ -9,6 +9,7 @@ import { Emitter, type Readable } from './core/util.js';
 import { Flags } from './flags.js';
 import { Live, MANY_CHANGED, type LiveNotice, type LiveOptions, type LiveStatus } from './live.js';
 import { Session, type ChannelLike, type LockManagerLike, type SessionEvents, type SessionState } from './session.js';
+import { browserCeremonies, type WebAuthnCeremonies } from './passkeys.js';
 import { createSignIn } from './sign-in.js';
 
 export interface BridgeOptions {
@@ -26,10 +27,13 @@ export interface BridgeOptions {
    * page's origin shares: with `storage: memoryStorage()`, pass
    * `localStorageAdapter()` here, or the link only works in the tab that
    * asked for it. Nothing else is kept here; the verifier is removed once
-   * the link is used, and when found expired.
+   * the link is used, and when found expired. A passkey setup link's
+   * verifier waits here too, as long as that link works (24 hours).
    * @default `storage`
    */
   readonly signUpStorage?: BridgeStorage;
+  /** The browser's side of passkey ceremonies. @default `@simplewebauthn/browser` */
+  readonly webauthn?: WebAuthnCeremonies;
   /** The fetch to call Bridge with. @default the platform fetch */
   readonly fetch?: Fetch;
   /** Live updates. `false` turns them off. */
@@ -132,7 +136,7 @@ export function createBridge(options: BridgeOptions) {
   });
   const flags = new Flags({ issuer, endpoints, fetch: fetchFn, storage, session, onError });
   const live = new Live({ endpoints, fetch: fetchFn, session, onError }, options.live === false ? { enabled: false } : (options.live ?? {}));
-  const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session });
+  const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies() });
   const accounts = createAccounts({ endpoints, fetch: fetchFn, session });
   const billing = createBilling({ endpoints, fetch: fetchFn, session, changed: () => void flags.load() });
 
@@ -246,6 +250,7 @@ export function createBridge(options: BridgeOptions) {
         signIn: flows.signIn,
         signUp: flows.signUp,
         magicLink: flows.magicLink,
+        passkeys: flows.passkeys,
         password: flows.password,
         invites: flows.invites,
         workspaces: accounts.workspaces,

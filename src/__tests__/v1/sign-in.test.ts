@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { memoryStorage } from '../../core/storage.js';
 import { handoffReturnUrl, isLoopbackRedirect, readHandoffRequest } from '../../handoff.js';
 import { readEmailLink, takeEmailLink, type EmailLinkWindow } from '../../sign-in.js';
+import { fakeWebAuthn } from '../../testing/index.js';
 import { clientOn, issuerWithPeople, PASSWORD, tokenCalls } from './helpers.js';
 
 const challengeOf = (verifier: string) => createHash('sha256').update(verifier).digest('base64url');
@@ -198,6 +199,86 @@ describe('sign-in links (magic links), finished on the device that asked', () =>
 
   it('reads a sign-in link from the page address', () => {
     expect(readEmailLink('#bridge=magic-link&token=abc')).toEqual({ kind: 'magic-link', token: 'abc' });
+  });
+});
+
+describe('passkeys', () => {
+  const withPasskeys = () => issuerWithPeople({ methods: ['password', 'magicLink', 'passkeys'] });
+  /** Alice signed in on a device whose authenticator holds a passkey she added. */
+  async function aliceWithPasskey(fake: ReturnType<typeof withPasskeys>['fake'], device = fakeWebAuthn()) {
+    const client = clientOn(fake, { webauthn: device });
+    await client.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    const added = await client.passkeys.add('Work laptop');
+    return { client, device, added };
+  }
+
+  it('adds a passkey while signed in, lists it, and signs in with it: a code bound to this device, no address typed', async () => {
+    const { fake } = withPasskeys();
+    const { device, added, client } = await aliceWithPasskey(fake);
+    expect(added).toMatchObject({ name: 'Work laptop', deviceType: 'multiDevice' });
+    expect(await client.passkeys.list()).toEqual([added]);
+    const fresh = clientOn(fake, { webauthn: device });
+    await expect(fresh.passkeys.signIn()).resolves.toEqual({ done: true });
+    expect(fresh.session.get()).toMatchObject({ status: 'signed-in', user: { email: 'alice@acme.test' } });
+    const options = fake.requests.filter((each) => each.path.endsWith('/passkeys/sign-in/options')).at(-1)!;
+    expect(options.body).toEqual({ code_challenge: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/), code_challenge_method: 'S256' });
+    const exchange = tokenCalls(fake, 'authorization_code').at(-1)!.body as { code_verifier: string };
+    expect(challengeOf(exchange.code_verifier)).toBe((options.body as { code_challenge: string }).code_challenge);
+  });
+
+  it('naming an address signs in only with that address\'s passkey, and asks which workspace for someone in several', async () => {
+    const { fake } = withPasskeys();
+    const { device } = await aliceWithPasskey(fake);
+    await expect(clientOn(fake, { webauthn: device }).passkeys.signIn({ email: 'bob@acme.test' })).rejects.toMatchObject({ kind: 'wrong-credentials', code: 'passkey_refused' });
+    const bobDevice = fakeWebAuthn();
+    const bob = clientOn(fake, { webauthn: bobDevice });
+    await bob.signIn.start({ email: 'bob@acme.test', password: PASSWORD, workspace: 'ws-acme' });
+    await bob.passkeys.add();
+    const step = await clientOn(fake, { webauthn: bobDevice }).passkeys.signIn({ email: 'bob@acme.test' });
+    expect(step).toMatchObject({ done: false, next: 'workspace' });
+    if (!step.done) await expect(step.choose('ws-globex')).resolves.toEqual({ done: true });
+  });
+
+  it('says plainly what went wrong: a closed dialog, a passkey Bridge does not know, a browser without passkeys, an app that does not offer them', async () => {
+    const { fake } = withPasskeys();
+    const { device } = await aliceWithPasskey(fake);
+    device.cancelNext();
+    await expect(clientOn(fake, { webauthn: device }).passkeys.signIn()).rejects.toMatchObject({ kind: 'cancelled' });
+    const stranger = fakeWebAuthn();
+    await stranger.create({ challenge: 'x' });
+    await expect(clientOn(fake, { webauthn: stranger }).passkeys.signIn()).rejects.toMatchObject({ kind: 'wrong-credentials', code: 'unknown_passkey' });
+    await expect(clientOn(fake, { webauthn: fakeWebAuthn({ supported: false }) }).passkeys.signIn()).rejects.toMatchObject({ kind: 'not-supported' });
+    const off = issuerWithPeople().fake;
+    await expect(clientOn(off, { webauthn: device }).passkeys.signIn()).rejects.toMatchObject({ kind: 'forbidden', code: 'method_disabled' });
+  });
+
+  it('refuses the same device twice, and removes a passkey', async () => {
+    const { fake } = withPasskeys();
+    const { client, device, added } = await aliceWithPasskey(fake);
+    // The same credential sent again, as a browser that ignored the exclusion list would: Bridge refuses it.
+    const sameDevice = { ...device, create: (options: Record<string, unknown>) => device.create(options).then((made) => ({ ...made, id: added.id, rawId: added.id })) };
+    const other = clientOn(fake, { webauthn: sameDevice });
+    await other.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    await expect(other.passkeys.add()).rejects.toMatchObject({ kind: 'conflict', code: 'passkey_exists' });
+    await client.passkeys.remove(added.id);
+    expect((await client.passkeys.list()).some((each) => each.id === added.id)).toBe(false);
+  });
+
+  it('sets up a passkey from an emailed link on the device that asked, keeping the verifier only for the link\'s lifetime, and signs in', async () => {
+    const { fake } = withPasskeys();
+    const shared = memoryStorage();
+    const device = fakeWebAuthn();
+    await expect(clientOn(fake, { storage: memoryStorage(), signUpStorage: shared, webauthn: device }).passkeys.setupLink.request('alice@acme.test')).resolves.toEqual({ next: 'verify_email' });
+    const key = `bridge:${fake.issuer}:passkey-setup`;
+    const stored = JSON.parse((await shared.get(key))!) as { verifier: string; expiresAt: number };
+    expect(stored.expiresAt).toBeLessThanOrEqual(Date.now() + 24 * 3600 * 1000);
+    const token = fake.lastLink('alice@acme.test', 'passkey-setup')!;
+    expect(readEmailLink(`#bridge=passkey-setup&token=${token}`)).toEqual({ kind: 'passkey-setup', token });
+    await expect(clientOn(fake, { webauthn: device }).passkeys.setupLink.finish(token)).rejects.toMatchObject({ kind: 'wrong-device' });
+    const linkTab = clientOn(fake, { storage: memoryStorage(), signUpStorage: shared, webauthn: device });
+    await expect(linkTab.passkeys.setupLink.finish(token, 'Phone')).resolves.toEqual({ done: true });
+    expect(await shared.get(key)).toBeNull();
+    await expect(clientOn(fake, { webauthn: device }).passkeys.signIn()).resolves.toEqual({ done: true });
   });
 });
 
