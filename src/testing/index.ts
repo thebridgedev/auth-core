@@ -437,13 +437,14 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (!methods.includes('magicLink')) return oauth(403, 'method_disabled');
         const request = openRequest(body);
         if (request instanceof Response) return request;
-        if (request === undefined && (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string')) return oauth(400, 'invalid_request');
+        // The asking device's challenge, on a sign-in request too: it binds the link to that device.
+        if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string') return oauth(400, 'invalid_request');
         const email = String(body['email']).toLowerCase();
         if ([...people.values()].some((each) => each.email === email)) {
           // Only the newest link of an address works.
           for (const [token, link] of links) if (link.purpose === 'magic-link' && link.email === email) links.delete(token);
           const token = secret();
-          links.set(token, { purpose: 'magic-link', email, challenge: request?.challenge ?? String(body['code_challenge']), ...(request === undefined ? {} : { request }), expiresAt: now() + 15 * 60 * 1000 });
+          links.set(token, { purpose: 'magic-link', email, challenge: String(body['code_challenge']), ...(request === undefined ? {} : { request }), expiresAt: now() + 15 * 60 * 1000 });
           sentLinks.push({ to: email, purpose: 'magic-link', token });
         }
         return json(202, { next: 'verify_email' });
@@ -451,13 +452,14 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       if (route === '/magic-link/verify') {
         const link = links.get(String(body['token']));
         if (link?.purpose !== 'magic-link' || (link.expiresAt ?? 0) <= now()) return oauth(400, 'invalid_link');
-        // A link sent on a sign-in request needs no verifier: its code is the request's app's.
-        if (link.request === undefined && (typeof body['code_verifier'] !== 'string' || (await s256(body['code_verifier'])) !== link.challenge)) return oauth(400, 'wrong_device', { error_description: 'Open the link on the device you asked for it on.' });
+        // Only the device that asked opens it; a link sent on a sign-in request also opens with that request's app's verifier.
+        const presented = typeof body['code_verifier'] === 'string' ? await s256(body['code_verifier']) : null;
+        if (presented === null || (presented !== link.challenge && presented !== link.request?.challenge)) return oauth(400, 'wrong_device', { error_description: 'Open the link on the device you asked for it on.' });
         if (link.request?.used === true) return oauth(400, 'invalid_request_uri', { error_description: 'The sign-in request has expired or was already used.' });
         links.delete(String(body['token']));
         if (link.request !== undefined) link.request.used = true;
         const person = [...people.values()].find((each) => each.email === link.email) as FakePerson;
-        return toWorkspace(person, link.challenge as string, null, link.request);
+        return toWorkspace(person, link.request?.challenge ?? (link.challenge as string), null, link.request);
       }
       if (route.startsWith('/passkeys/') && !methods.includes('passkeys')) return oauth(403, 'method_disabled', { error_description: 'The app does not offer passkey sign-in.' });
       if (route === '/passkeys/sign-in/options') {

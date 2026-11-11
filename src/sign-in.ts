@@ -225,6 +225,8 @@ export function createSignIn(deps: SignInDeps) {
     (await call<CodeAnswer>(deps.fetch, deps.endpoints().url(route), { method: 'POST', body, ...(token === undefined ? {} : { token }) })).body;
   const signUpKey = storageKey(deps.issuer, 'sign-up');
   const magicLinkKey = storageKey(deps.issuer, 'magic-link');
+  /** Where hosted mode keeps the app's own verifier for its sign-in request (see `hosted.ts`). */
+  const hostedKey = storageKey(deps.issuer, 'hosted');
   /** The sign-in request this page signs in for, if any (see `request.use`). */
   let request: string | null = null;
   /** What binds a step's code: this device's challenge, or the request, whose challenge is the other app's. */
@@ -368,18 +370,16 @@ export function createSignIn(deps: SignInDeps) {
        * and the app offers sign-in links. The answer is the same either way.
        * The link works once, for a short time, and only on this device: the
        * verifier waits in `signUpStorage` until the link opens, at most as
-       * long as the link works. A newer link replaces an older one.
+       * long as the link works. A newer link replaces an older one. On a
+       * sign-in request the link is bound to this device the same way, and
+       * its code is the other app's.
        */
       async start(email: string): Promise<{ readonly next: 'verify_email' }> {
-        // On a sign-in request the link carries the request, so it opens in any tab and needs no verifier here.
-        if (request !== null) {
-          await post(ROUTES.magicLink, { email, request });
-          return { next: 'verify_email' };
-        }
         const pkce = await createPkce();
         await deps.signUpStorage.set(magicLinkKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + MAGIC_LINK_KEEP_MS } satisfies StoredSignUp));
         try {
-          await post(ROUTES.magicLink, { email, code_challenge: pkce.challenge, code_challenge_method: 'S256', ...linkOf() });
+          // On a sign-in request, this device's challenge still binds the link to it: only the code is the other app's.
+          await post(ROUTES.magicLink, { email, code_challenge: pkce.challenge, code_challenge_method: 'S256', ...(request === null ? linkOf() : { request }) });
         } catch (error) {
           // Nothing was sent: no verifier waits for a link that will not come.
           await deps.signUpStorage.remove(magicLinkKey);
@@ -395,12 +395,15 @@ export function createSignIn(deps: SignInDeps) {
        * `link-invalid`.
        */
       async finish(token: string): Promise<SignInStep> {
-        const verifier = await waitingVerifier(magicLinkKey);
+        const own = await waitingVerifier(magicLinkKey);
+        // A link sent for this app's hosted sign-in, landed on the app's own page: the app's verifier for its request opens it.
+        const verifier = own ?? (await waitingVerifier(hostedKey));
         const answer = await post(ROUTES.magicLinkVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }) });
-        // A link sent for a sign-in request answers with the other app's code, in any tab.
-        if (typeof answer?.redirect_uri === 'string') return signInSteps(answer, '');
         if (verifier === null) throw new BridgeError('wrong-device', 'Open the link on the device you asked for it on.', { code: 'wrong_device' });
-        await deps.signUpStorage.remove(magicLinkKey);
+        // Bridge took the verifier: it is spent. The app's own verifier stays, for its return to trade the code with.
+        if (own !== null) await deps.signUpStorage.remove(magicLinkKey);
+        // A link sent for a sign-in request answers with the other app's code, which goes to its return.
+        if (typeof answer?.redirect_uri === 'string') return signInSteps(answer, '');
         return signInSteps(answer, verifier);
       },
     },
@@ -416,7 +419,8 @@ export function createSignIn(deps: SignInDeps) {
        * instead of this device's challenge, and a finished one ends with
        * `handoff`, the address to send the browser to, instead of a session.
        * This page never holds the app's verifier, so only the app can trade
-       * the code. A sign-in link sent on a request opens in any tab.
+       * the code. A sign-in link sent on a request opens in any tab of this
+       * browser, and nowhere else.
        */
       async use(id: string): Promise<void> {
         if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{16,100}$/.test(id)) throw new BridgeError('invalid', 'A sign-in request id is 16 to 100 base64url characters.');

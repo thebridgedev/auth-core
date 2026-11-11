@@ -64,21 +64,41 @@ describe('hosted mode: the app starts a sign-in request, the hosted page signs i
     await expect(clientOn(fake).hosted.finish(back)).rejects.toMatchObject({ kind: 'invalid' });
   });
 
-  it('a sign-in link sent on the request finishes in another tab with no verifier, and the request gives one code', async () => {
+  it('a sign-in link sent on the request opens in any tab of the browser that asked, never elsewhere, and the request gives one code', async () => {
     const { fake, app, page } = setUp();
     const address = await app.hosted.start({ redirectUri: RETURN });
-    const hosted = page();
+    // The page's tabs share the storage the link's verifier waits in.
+    const shared = memoryStorage();
+    const hosted = clientOn(fake, { storage: memoryStorage(), signUpStorage: shared });
     await hosted.request.use(requestOf(address));
     await expect(hosted.magicLink.start('alice@acme.test')).resolves.toEqual({ next: 'verify_email' });
-    expect(fake.requests.filter((each) => each.path.endsWith('/magic-link')).pop()!.body).toEqual({ email: 'alice@acme.test', request: requestOf(address) });
+    // This device's challenge binds the link to it; the request binds the code to the app.
+    expect(fake.requests.filter((each) => each.path.endsWith('/magic-link')).pop()!.body).toEqual({ email: 'alice@acme.test', request: requestOf(address), code_challenge: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/), code_challenge_method: 'S256' });
     const link = fake.lastLink('alice@acme.test', 'magic-link')!;
-    // A new tab of the page: it has never seen the request.
-    const step = await page().magicLink.finish(link);
+    // Another browser, such as a mail scanner's, holds no verifier: refused, and nothing is spent.
+    await expect(page().magicLink.finish(link)).rejects.toMatchObject({ kind: 'wrong-device' });
+    // A new tab of the browser that asked: it has never seen the request.
+    const step = await clientOn(fake, { storage: memoryStorage(), signUpStorage: shared }).magicLink.finish(link);
     expect(step).toEqual({ done: true, handoff: expect.any(String) });
+    // The page's verifier was spent with the link.
+    expect(await shared.get(`bridge:${fake.issuer}:magic-link`)).toBeNull();
     await app.hosted.finish((step as { handoff: string }).handoff);
     expect(app.session.get()).toMatchObject({ status: 'signed-in', user: { email: 'alice@acme.test' } });
     // The request is spent: signing in on it again gives nothing.
     await expect(hosted.signIn.start({ email: 'alice@acme.test', password: PASSWORD })).rejects.toMatchObject({ code: 'invalid_request_uri' });
+  });
+
+  it('a sign-in link sent on the request that lands on the app\'s own page opens there with the app\'s verifier', async () => {
+    const { fake, app } = setUp();
+    const address = await app.hosted.start({ redirectUri: RETURN, linkAddress: 'https://app.acme.test/account' });
+    const hosted = clientOn(fake, { storage: memoryStorage(), signUpStorage: memoryStorage() });
+    await hosted.request.use(requestOf(address));
+    await hosted.magicLink.start('alice@acme.test');
+    const step = await app.magicLink.finish(fake.lastLink('alice@acme.test', 'magic-link')!);
+    expect(step).toEqual({ done: true, handoff: expect.any(String) });
+    // The app's verifier stays for its return, which trades the code with it.
+    await app.hosted.finish((step as { handoff: string }).handoff);
+    expect(app.session.get()).toMatchObject({ status: 'signed-in', user: { email: 'alice@acme.test' } });
   });
 
   it('a sign-up on the request keeps its link bound to the page that started it, and its code is the app\'s', async () => {
@@ -131,6 +151,7 @@ describe('hosted mode: the app starts a sign-in request, the hosted page signs i
     expect(fake.requests.filter((each) => each.path.endsWith('/sign-in-requests')).pop()!.body).toMatchObject({ link_address: own });
     await sdk.request.use(requestOf(address));
     await sdk.magicLink.start('alice@acme.test');
-    expect(fake.requests.filter((each) => each.path.endsWith('/magic-link')).pop()!.body).toEqual({ email: 'alice@acme.test', request: requestOf(address) });
+    expect(fake.requests.filter((each) => each.path.endsWith('/magic-link')).pop()!.body).not.toHaveProperty('link_address');
+    expect(fake.requests.filter((each) => each.path.endsWith('/magic-link')).pop()!.body).toMatchObject({ email: 'alice@acme.test', request: requestOf(address) });
   });
 });
