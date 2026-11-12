@@ -35,7 +35,12 @@ export type BridgeErrorKind =
   | 'conflict'
   /** The request itself is malformed. `message` says why. */
   | 'invalid'
-  /** Too many requests. `retryAfterSeconds` says when to try again. */
+  /**
+   * Too many requests. `retryAfterSeconds` says when to try again. At sign-in, `code` is `too_many_attempts` (the
+   * account or this network address is paused: show `login.error.tooManyAttempts` with {@link waitMinutes}, or `login.error.tooManyAttemptsOneMinute` when it is 1) or
+   * `account_locked` (locked until the password is reset: `login.error.accountLocked`). Bridge answers both the same
+   * whether or not the email has an account.
+   */
   | 'rate-limited'
   /** Bridge could not decide right now. Never treat this as a yes; try again later. */
   | 'unavailable'
@@ -116,6 +121,9 @@ const CODE_KINDS: Readonly<Record<string, BridgeErrorKind>> = {
   invalid_client: 'misconfigured',
   unsupported_grant_type: 'misconfigured',
   invalid_request: 'invalid',
+  // Sign-in protection: paused (with Retry-After) or locked until the password is reset.
+  too_many_attempts: 'rate-limited',
+  account_locked: 'rate-limited',
   // Passkeys: one that could not be verified, one Bridge does not know, a ceremony that took too long or was used.
   passkey_refused: 'wrong-credentials',
   unknown_passkey: 'wrong-credentials',
@@ -145,6 +153,16 @@ function kindOfStatus(status: number): BridgeErrorKind {
   if (status === 409 || status === 412 || status === 422) return 'conflict';
   if (status === 429) return 'rate-limited';
   return 'unavailable';
+}
+
+/**
+ * The whole minutes to wait before trying again, rounded up and never 0, for a refusal that says when
+ * (`retryAfterSeconds`); null for any other error. For "Too many attempts. Try again in N minutes.", and
+ * "... in 1 minute." (`login.error.tooManyAttemptsOneMinute`) when it is 1.
+ */
+export function waitMinutes(error: unknown): number | null {
+  if (!isBridgeError(error) || error.retryAfterSeconds === null) return null;
+  return Math.max(1, Math.ceil(error.retryAfterSeconds / 60));
 }
 
 /** `Retry-After` as seconds: a number of seconds, or an HTTP date. */

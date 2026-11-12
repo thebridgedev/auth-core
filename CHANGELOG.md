@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.8] - Unreleased
+
+### Added
+
+- **Sign-in protection's answers**: a sign-in refused because the account or the network address is paused is a `rate-limited` error with `code: 'too_many_attempts'` and `retryAfterSeconds`; a locked account is `code: 'account_locked'`. `waitMinutes(error)` gives the whole minutes to wait, and the catalogue has `login.error.tooManyAttempts` ("Too many attempts. Try again in {minutes} minutes."), its singular `login.error.tooManyAttemptsOneMinute` ("... in 1 minute.") for a wait of 1 minute, and `login.error.accountLocked` in every language. Bridge answers both the same whether or not the email has an account.
+
 ## [1.0.0-alpha.7] - Unreleased
 
 ### Changed
