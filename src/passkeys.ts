@@ -72,7 +72,7 @@ interface CodeAnswer {
 }
 
 /** The browser's errors, as BridgeErrors: a dialog closed or timed out is `cancelled`; a device that has one already is `conflict`. */
-function ceremonyError(error: unknown): BridgeError {
+export function ceremonyError(error: unknown): BridgeError {
   if (error instanceof BridgeError) return error;
   const { name, code } = (error ?? {}) as { name?: unknown; code?: unknown };
   if (name === 'NotAllowedError' || name === 'AbortError' || code === 'ERROR_CEREMONY_ABORTED') return new BridgeError('cancelled', 'No passkey was used.', { cause: error });

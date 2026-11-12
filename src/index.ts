@@ -27,6 +27,8 @@ export type { Readable } from './core/util.js';
 export type { SessionState, SessionUser, SessionWorkspace, SignedInState, SignedOutReason } from './session.js';
 export { readEmailLink, takeEmailLink } from './sign-in.js';
 export { browserCeremonies } from './passkeys.js';
+export { needsRecheck } from './recheck.js';
+export type { Recheck, RecheckMethod } from './recheck.js';
 export type { PasskeyInfo, PasskeySignInInput, WebAuthnCeremonies } from './passkeys.js';
 export type { AcceptedInvite, EmailLink, EmailLinkWindow, HandoffInput, HandoffStep, InvitePreview, InviteSignUpInput, SignInInput, SignInOptions, SignInStep, SignUpInput, WorkspaceChoice } from './sign-in.js';
 export { HANDOFF_CALLBACK_PATH, handoffReturnUrl, isLoopbackRedirect, readHandoffRequest } from './handoff.js';

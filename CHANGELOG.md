@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.9] - Unreleased
+
+### Added
+
+- **Confirming it is you**: an action that wants a recent sign-in fails with `reauthenticate`; instead of signing the person out, `recheck` lets them confirm it is them in the session they are in. `recheck.methods()` lists the ways the app offers (`password`, `passkeys`, `magicLink`); `recheck.password(password)`, `recheck.passkey()` (only the person's own passkeys are offered) and `recheck.email()` (a link to their own address, which opens on this device's sign-in link page and renews the session; `recheck.emailOpened()` resolves in the waiting tab) each renew the session, whose next token carries the new sign-in time. `recheck.guard(action, confirm)` runs an action, asks once on `reauthenticate`, and runs it again. `needsRecheck(error)` tells the refusal apart. A sign-in link opened for a confirmation finishes as `{ done: true, rechecked: true }` and makes no new session. Nothing on the client remembers that the person was checked: the token's `auth_time` is the only proof. The fake issuer (`/testing`) takes `recheck: { routes, maxAgeSeconds }` and `signedInLongAgo()`. Needs a Bridge server that offers the `recheck` endpoint.
+
 ## [1.0.0-alpha.8] - Unreleased
 
 ### Added

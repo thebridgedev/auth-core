@@ -172,7 +172,7 @@ function derivedMetadata(issuer: string, doc: Readonly<Record<string, unknown>>)
     endpoints[name] = url ?? at(CONTRACT_PATHS[name]);
   }
   // An issuer that publishes no endpoint list predates these: refused as `not-offered` rather than called.
-  for (const pending of ['sign_in_options', 'invites', 'invite_preview', 'live_connection', 'sign_in_requests'] as const) delete endpoints[pending];
+  for (const pending of ['sign_in_options', 'invites', 'invite_preview', 'live_connection', 'sign_in_requests', 'recheck'] as const) delete endpoints[pending];
   const lanes: Partial<Record<RevocationLane, string>> = {};
   for (const lane of REVOCATION_LANES) {
     lanes[lane] = at(`/v2/${lane}/apps/{appId}/revocations/${lane}`);

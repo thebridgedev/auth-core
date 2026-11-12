@@ -110,6 +110,25 @@ const step = await bridge.passkeys.setupLink.finish(takeEmailLink('passkey-setup
 
 A closed dialog fails with `cancelled`, a browser without passkeys with `not-supported`, a passkey the app does not know with `wrong-credentials` (code `unknown_passkey`). The browser's side runs on `@simplewebauthn/browser`, loaded only when a passkey is used; pass `webauthn` to `createBridge` to replace it, and `fakeWebAuthn()` from `/testing` in tests.
 
+### Confirming it is you
+
+Some actions want a recent sign-in (making a key, changing sign-in settings, removing a workspace). Called later, they fail with `reauthenticate`. Do not sign the person out: ask them to confirm it is them, then try again.
+
+```ts
+const result = await bridge.recheck.guard(
+  () => createKey(form),            // the action, run again once after confirming
+  () => askToConfirm(),             // your dialog: resolves once confirmed, rejects on cancel
+);
+
+// Inside the dialog, with a way the app offers (bridge.recheck.methods()):
+await bridge.recheck.password(password);
+await bridge.recheck.passkey();                 // only the person's own passkeys are offered
+await bridge.recheck.email();                   // a link to their own address
+await bridge.recheck.emailOpened({ signal });   // resolves when the link is opened in this browser
+```
+
+Each renews the session the person is in; its next token carries the new sign-in time. A link opened on the sign-in link page finishes as `{ done: true, rechecked: true }`: it makes no new session. Wrong passwords count as a sign-in's do.
+
 ### Forgot and reset password
 
 ```ts

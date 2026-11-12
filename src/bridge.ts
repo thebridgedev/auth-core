@@ -10,6 +10,7 @@ import { Flags } from './flags.js';
 import { Live, MANY_CHANGED, type LiveNotice, type LiveOptions, type LiveStatus } from './live.js';
 import { Session, type ChannelLike, type LockManagerLike, type SessionEvents, type SessionState } from './session.js';
 import { browserCeremonies, type WebAuthnCeremonies } from './passkeys.js';
+import { createRecheck } from './recheck.js';
 import { createHosted } from './hosted.js';
 import { createSignIn } from './sign-in.js';
 
@@ -146,6 +147,7 @@ export function createBridge(options: BridgeOptions) {
   const flags = new Flags({ issuer, endpoints, fetch: fetchFn, storage, session, onError });
   const live = new Live({ endpoints, fetch: fetchFn, session, onError }, options.live === false ? { enabled: false } : (options.live ?? {}));
   const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
+  const recheck = createRecheck({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const hosted = createHosted({ issuer, endpoints, fetch: fetchFn, storage: options.signUpStorage ?? storage, session });
   const accounts = createAccounts({ endpoints, fetch: fetchFn, session });
   const billing = createBilling({ endpoints, fetch: fetchFn, session, changed: () => void flags.load() });
@@ -267,6 +269,8 @@ export function createBridge(options: BridgeOptions) {
         request: flows.request,
         /** Hosted mode: sign in on the page Bridge hosts for the app, and come back signed in. */
         hosted,
+        /** Confirming it is you, for an action that wants a recent sign-in, without signing out. */
+        recheck,
         workspaces: accounts.workspaces,
         me: accounts.me,
         team: accounts.team,
