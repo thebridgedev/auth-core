@@ -41,6 +41,12 @@ export interface FakeIssuerOptions {
    * loopback IP on any port). @default none
    */
   readonly returns?: readonly string[];
+  /**
+   * Routes that want a recent sign-in, as `"METHOD /v2/path"`: called with a
+   * token whose sign-in is older than `maxAgeSeconds` they answer 401
+   * `identity-recheck`, as Bridge's do. See `signedInLongAgo`. @default none
+   */
+  readonly recheck?: { readonly routes: readonly string[]; readonly maxAgeSeconds?: number };
 }
 
 /** A Child App's sign-in request, held by the issuer: its challenge, return and state. */
@@ -59,6 +65,8 @@ interface Session {
   readonly user: string;
   workspace: string | null;
   ended: boolean;
+  /** When the person last signed in or confirmed it is them, in ms: the tokens' `auth_time`. */
+  authTime: number;
 }
 
 interface Code {
@@ -149,17 +157,19 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
 
   const people = new Map<string, FakePerson>();
   const sessions = new Map<string, Session>();
-  const accessTokens = new Map<string, { session: string; user: string; workspace: string | null; exp: number }>();
+  const accessTokens = new Map<string, { session: string; user: string; workspace: string | null; exp: number; authTime: number }>();
   const refreshTokens = new Map<string, { session: string; rotatedAt: number | null }>();
   const codes = new Map<string, Code>();
   const flows = new Map<string, { user: string; challenge: string; request?: SignInRequest }>();
   const returns = options.returns ?? [];
   const signInRequests = new Map<string, SignInRequest>();
   const methods = options.methods ?? ['password', 'magicLink'];
+  const recentOnly = new Set(options.recheck?.routes ?? []);
+  const recentMs = (options.recheck?.maxAgeSeconds ?? 300) * 1000;
   // Passkeys: each ceremony's challenge, used once; each registered passkey, by its credential id.
-  const passkeyChallenges = new Map<string, { purpose: 'sign-in' | 'register'; pkce?: string; email?: string | null; user?: string; link?: string; request?: SignInRequest }>();
+  const passkeyChallenges = new Map<string, { purpose: 'sign-in' | 'register' | 'recheck'; pkce?: string; email?: string | null; user?: string; link?: string; request?: SignInRequest }>();
   const passkeys = new Map<string, { id: string; user: string; name: string; createdAt: string; lastUsedAt: string | null }>();
-  const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link' | 'passkey-setup'; email: string; challenge?: string; request?: SignInRequest; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
+  const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link' | 'passkey-setup' | 'recheck'; email: string; session?: string; challenge?: string; request?: SignInRequest; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
   const sentLinks: { to: string; purpose: string; token: string }[] = [];
   const requests: RecordedRequest[] = [];
   const invites: FakeInvite[] = [];
@@ -213,6 +223,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           passkey_setup_options: `${at}/passkeys/setup/options`,
           passkey_setup: `${at}/passkeys/setup`,
           passkeys: `${v2}/identity-access/passkeys`,
+          recheck: `${v2}/identity-access/recheck`,
           password_forgot: `${at}/password/forgot`,
           password: `${at}/password`,
           sign_out: `${v2}/identity-access/sign-out`,
@@ -237,11 +248,11 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     const membership = person.workspaces.find((each) => each.id === session.workspace) ?? null;
     const exp = Math.floor(now() / 1000) + accessSeconds;
     const access = fakeJwt('at+jwt', {
-      iss: issuer, aud: `${origin}/api`, sub: person.id, aid: appId, sid: session.id, jti: secret(), exp,
+      iss: issuer, aud: `${origin}/api`, sub: person.id, aid: appId, sid: session.id, jti: secret(), exp, auth_time: Math.floor(session.authTime / 1000),
       ...(membership === null ? {} : { tid: membership.id, wst: 'active' }),
       email: person.email, email_verified: true,
     });
-    accessTokens.set(access, { session: session.id, user: person.id, workspace: session.workspace, exp: exp * 1000 });
+    accessTokens.set(access, { session: session.id, user: person.id, workspace: session.workspace, exp: exp * 1000, authTime: session.authTime });
     const idToken = fakeJwt('JWT', { iss: issuer, aud: appId, sub: person.id, aid: appId, sid: session.id, email: person.email, email_verified: true, exp });
     const body: Record<string, unknown> = { access_token: access, token_type: 'Bearer', expires_in: accessSeconds, id_token: idToken, ...(membership === null ? {} : { workspace: membership.id }) };
     if (withRefresh) {
@@ -339,29 +350,33 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     invite.state = 'accepted';
   }
 
-  function personOf(headers: Headers): { session: Session; person: FakePerson } | null {
+  function personOf(headers: Headers): { session: Session; person: FakePerson; authTime: number } | null {
     const token = headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
     const record = accessTokens.get(token);
     if (record === undefined || record.exp <= now()) return null;
     const session = sessions.get(record.session);
     if (session === undefined || session.ended) return null;
-    return { session: { ...session, workspace: record.workspace }, person: people.get(record.user) as FakePerson };
+    return { session: { ...session, workspace: record.workspace }, person: people.get(record.user) as FakePerson, authTime: record.authTime };
   }
 
   const unauthorized = () => problem(401, 'credential-refused', 'The token is not valid.');
 
   /** A ceremony's options, its challenge kept to be used once. */
-  function passkeyOptions(purpose: 'sign-in' | 'register', record: { pkce?: string; email?: string | null; user?: string; link?: string }): Response {
+  function passkeyOptions(purpose: 'sign-in' | 'register' | 'recheck', record: { pkce?: string; email?: string | null; user?: string; link?: string }): Response {
     const challenge = secret();
     passkeyChallenges.set(challenge, { purpose, ...record });
     if (purpose === 'sign-in') return json(200, { options: { challenge, rpId: 'localhost', userVerification: 'required', timeout: 300_000, allowCredentials: [] } });
+    if (purpose === 'recheck') {
+      const allowCredentials = [...passkeys.values()].filter((each) => each.user === record.user).map((each) => ({ id: each.id, type: 'public-key' }));
+      return json(200, { options: { challenge, rpId: 'localhost', userVerification: 'required', timeout: 300_000, allowCredentials } });
+    }
     const person = people.get(record.user as string) as FakePerson;
     const excludeCredentials = [...passkeys.values()].filter((each) => each.user === person.id).map((each) => ({ id: each.id, type: 'public-key' }));
     return json(200, { options: { challenge, rp: { id: 'localhost', name: 'localhost' }, user: { id: base64url(person.id), name: person.email, displayName: person.email }, pubKeyCredParams: [{ type: 'public-key', alg: -7 }], timeout: 300_000, attestation: 'none', excludeCredentials, authenticatorSelection: { residentKey: 'required', userVerification: 'required' } } });
   }
 
   /** Spends the challenge an authenticator's answer signed, once: its record, or null. */
-  function spentChallenge(response: unknown, purpose: 'sign-in' | 'register') {
+  function spentChallenge(response: unknown, purpose: 'sign-in' | 'register' | 'recheck') {
     const client = (response as { response?: { clientDataJSON?: unknown } } | null)?.response?.clientDataJSON;
     let challenge: unknown;
     try {
@@ -451,6 +466,16 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       }
       if (route === '/magic-link/verify') {
         const link = links.get(String(body['token']));
+        // A link to confirm it is you: on the device that asked, it renews its session and makes none.
+        if (link?.purpose === 'recheck' && (link.expiresAt ?? 0) > now()) {
+          const presented = typeof body['code_verifier'] === 'string' ? await s256(body['code_verifier']) : null;
+          if (presented !== link.challenge) return oauth(400, 'wrong_device', { error_description: 'Open the link on the device you asked for it on.' });
+          links.delete(String(body['token']));
+          const renewed = sessions.get(link.session as string);
+          if (renewed === undefined || renewed.ended) return oauth(400, 'invalid_link');
+          renewed.authTime = now();
+          return json(200, { rechecked: true }, { 'cache-control': 'no-store' });
+        }
         if (link?.purpose !== 'magic-link' || (link.expiresAt ?? 0) <= now()) return oauth(400, 'invalid_link');
         // Only the device that asked opens it; a link sent on a sign-in request also opens with that request's app's verifier.
         const presented = typeof body['code_verifier'] === 'string' ? await s256(body['code_verifier']) : null;
@@ -510,7 +535,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
             return oauth(400, 'invalid_grant', { error_description: 'The code is not valid.' });
           }
           code.used = true;
-          const session: Session = { id: id('ses'), user: code.user, workspace: code.workspace, ended: false };
+          const session: Session = { id: id('ses'), user: code.user, workspace: code.workspace, ended: false, authTime: now() };
           sessions.set(session.id, session);
           code.session = session.id;
           return issueTokens(session);
@@ -622,6 +647,37 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     const who = personOf(headers);
     if (who === null) return unauthorized();
     const { person, session } = who;
+    if (recentOnly.has(`${method} ${path}`) && now() - who.authTime > recentMs) return problem(401, 'identity-recheck', 'Sign in again to confirm it is you.');
+    if (path === '/v2/identity-access/recheck' && method === 'POST') {
+      const confirmed = () => {
+        const open = sessions.get(session.id);
+        if (open !== undefined) open.authTime = now();
+        return new Response(null, { status: 204 });
+      };
+      if (typeof body['password'] === 'string') {
+        if (!methods.includes('password')) return oauth(403, 'method_disabled');
+        return body['password'] === person.password ? confirmed() : oauth(400, 'wrong_credentials');
+      }
+      const record = spentChallenge(body['passkey'], 'recheck');
+      if (record?.user !== person.id) return oauth(400, 'invalid_challenge', { error_description: 'The passkey request expired or was used already. Start again.' });
+      const passkey = passkeys.get(String((body['passkey'] as { id?: unknown } | null)?.id));
+      if (passkey?.user !== person.id) return oauth(400, 'unknown_passkey', { error_description: 'This passkey is not registered for the app.' });
+      passkey.lastUsedAt = new Date(now()).toISOString();
+      return confirmed();
+    }
+    if (path === '/v2/identity-access/recheck/passkey-options' && method === 'POST') {
+      if (!methods.includes('passkeys')) return oauth(403, 'method_disabled');
+      if (![...passkeys.values()].some((each) => each.user === person.id)) return oauth(409, 'no_passkey', { error_description: 'You have no passkey for the app yet. Confirm it is you another way.' });
+      return passkeyOptions('recheck', { user: person.id });
+    }
+    if (path === '/v2/identity-access/recheck/email' && method === 'POST') {
+      if (!methods.includes('magicLink')) return oauth(403, 'method_disabled');
+      if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string') return oauth(400, 'invalid_request');
+      const token = secret();
+      links.set(token, { purpose: 'recheck', email: person.email, challenge: body['code_challenge'], session: session.id, expiresAt: now() + 15 * 60 * 1000 });
+      sentLinks.push({ to: person.email, purpose: 'magic-link', token });
+      return json(202, { next: 'verify_email' });
+    }
     const workspaceRequired = () => (session.workspace === null ? problem(403, 'workspace-required', 'Choose a workspace first.') : null);
 
     if (path === '/v2/identity-access/passkeys' && method === 'GET') return json(200, [...passkeys.values()].filter((each) => each.user === person.id).reverse().map(passkeyView));
@@ -827,6 +883,15 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       for (const each of invites) if (each.email === email.toLowerCase()) each.expiresAt = new Date(now() - 1000).toISOString();
     },
     sentLinks,
+    /**
+     * Every session, and every token already given, signed in an hour ago:
+     * routes in `recheck` refuse them until the person confirms it is them.
+     */
+    signedInLongAgo(): void {
+      const then = now() - 3_600_000;
+      for (const each of sessions.values()) each.authTime = then;
+      for (const each of accessTokens.values()) each.authTime = then;
+    },
     /** Sets the signed-in results of every flag: `{ key: value }` or full OFREP results. */
     setFlags(results: Record<string, unknown>, visitor: Record<string, unknown> = {}): void {
       const shape = (entries: Record<string, unknown>) => Object.entries(entries).map(([key, value]) => (value !== null && typeof value === 'object' && 'reason' in (value as object) ? { key, ...(value as object) } : { key, value, reason: 'TARGETING_MATCH', variant: String(value), metadata: {} }));

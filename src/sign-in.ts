@@ -39,6 +39,11 @@ export type SignInStep =
        * return with `code`, `state` and `iss`. No session was made here.
        */
       readonly handoff?: string;
+      /**
+       * Set when the link was one to confirm it is you (`recheck.email`): the
+       * session already open here was renewed, and no new one was made.
+       */
+      readonly rechecked?: true;
     }
   | {
       readonly done: false;
@@ -159,6 +164,8 @@ export interface EmailLink {
 
 interface CodeAnswer {
   readonly code?: unknown;
+  /** A link to confirm it is you, opened: no code, the open session renewed. */
+  readonly rechecked?: unknown;
   /** With `state`, on a code made for a sign-in request: where the code goes. */
   readonly redirect_uri?: unknown;
   readonly state?: unknown;
@@ -402,6 +409,11 @@ export function createSignIn(deps: SignInDeps) {
         if (verifier === null) throw new BridgeError('wrong-device', 'Open the link on the device you asked for it on.', { code: 'wrong_device' });
         // Bridge took the verifier: it is spent. The app's own verifier stays, for its return to trade the code with.
         if (own !== null) await deps.signUpStorage.remove(magicLinkKey);
+        // A link to confirm it is you: the session open here was renewed. Its next tokens reach every tab.
+        if (answer?.rechecked === true) {
+          await deps.session.refresh({ force: true });
+          return { done: true, rechecked: true };
+        }
         // A link sent for a sign-in request answers with the other app's code, which goes to its return.
         if (typeof answer?.redirect_uri === 'string') return signInSteps(answer, '');
         return signInSteps(answer, verifier);

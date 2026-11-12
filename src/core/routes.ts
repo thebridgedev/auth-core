@@ -38,6 +38,7 @@ export type EndpointName =
   | 'passkey_setup_options'
   | 'passkey_setup'
   | 'passkeys'
+  | 'recheck'
   | 'invites'
   | 'invite_preview'
   | 'accounts'
@@ -72,6 +73,7 @@ export const CONTRACT_PATHS: Readonly<Record<EndpointName, string>> = {
   passkey_setup_options: '/v2/identity-access/apps/{appId}/passkeys/setup/options',
   passkey_setup: '/v2/identity-access/apps/{appId}/passkeys/setup',
   passkeys: '/v2/identity-access/passkeys',
+  recheck: '/v2/identity-access/recheck',
   invites: '/v2/identity-access/invites',
   invite_preview: '/v2/identity-access/apps/{appId}/invites/preview',
   accounts: '/v2/accounts',
@@ -124,6 +126,10 @@ export const ROUTES = {
 
   // Identity and Access: the signed-in person.
   signOut: route('POST', 'sign_out'),
+  // Confirming it is you: a password or a passkey's answer, a passkey's options, or a link to the person's address.
+  recheck: route('POST', 'recheck', '', 'confirming it is you'),
+  recheckPasskeyOptions: route('POST', 'recheck', '/passkey-options', 'confirming it is you'),
+  recheckEmail: route('POST', 'recheck', '/email', 'confirming it is you'),
   sessions: route('GET', 'sessions'),
   sessionEnd: route('DELETE', 'sessions', '/{sessionId}'),
   passkeys: route('GET', 'passkeys'),
