@@ -37,7 +37,7 @@ export type BridgeErrorKind =
   | 'invalid'
   /**
    * Too many requests. `retryAfterSeconds` says when to try again. At sign-in, `code` is `too_many_attempts` (the
-   * account or this network address is paused: show `login.error.tooManyAttempts` with {@link waitMinutes}) or
+   * account or this network address is paused: show `login.error.tooManyAttempts` with {@link waitMinutes}, or `login.error.tooManyAttemptsOneMinute` when it is 1) or
    * `account_locked` (locked until the password is reset: `login.error.accountLocked`). Bridge answers both the same
    * whether or not the email has an account.
    */
@@ -157,7 +157,8 @@ function kindOfStatus(status: number): BridgeErrorKind {
 
 /**
  * The whole minutes to wait before trying again, rounded up and never 0, for a refusal that says when
- * (`retryAfterSeconds`); null for any other error. For "Too many attempts. Try again in N minutes."
+ * (`retryAfterSeconds`); null for any other error. For "Too many attempts. Try again in N minutes.", and
+ * "... in 1 minute." (`login.error.tooManyAttemptsOneMinute`) when it is 1.
  */
 export function waitMinutes(error: unknown): number | null {
   if (!isBridgeError(error) || error.retryAfterSeconds === null) return null;

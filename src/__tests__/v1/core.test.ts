@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import { BridgeError, errorFromAnswer, parseRetryAfter, waitMinutes } from '../../core/errors.js';
+import { LOCALES } from '../../i18n/messages.js';
 import { call, platformFetch, withoutRedirects } from '../../core/http.js';
 import { fillPath } from '../../core/routes.js';
 import { localStorageAdapter, memoryStorage, readJson, storageKey } from '../../core/storage.js';
@@ -82,6 +83,14 @@ describe('errors: one BridgeError for both answer shapes', () => {
     expect(locked).toMatchObject({ kind: 'rate-limited', code: 'account_locked', retryAfterSeconds: null });
     expect(waitMinutes(locked)).toBeNull();
     expect(waitMinutes(new Error('x'))).toBeNull();
+  });
+
+  it('says a wait of 1 minute in the singular, in every language', () => {
+    for (const [locale, messages] of Object.entries(LOCALES)) {
+      expect(messages['login.error.tooManyAttempts'], locale).toContain('{minutes}');
+      expect(messages['login.error.tooManyAttemptsOneMinute'], locale).not.toContain('{minutes}');
+    }
+    expect(LOCALES['en']?.['login.error.tooManyAttemptsOneMinute']).toBe('Too many attempts. Try again in 1 minute.');
   });
 
   it('gives a 404 that carries nothing the not-found kind', () => {

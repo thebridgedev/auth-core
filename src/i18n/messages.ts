@@ -112,8 +112,10 @@ export interface Messages {
   'error.unavailable': string;
   'error.network': string;
   'error.rateLimited': string;
-  /** Sign-in protection paused the account or the address. Interpolates {minutes}. */
+  /** Sign-in protection paused the account or the address. Interpolates {minutes}, 2 or more. */
   'login.error.tooManyAttempts': string;
+  /** Sign-in protection paused the account or the address, for 1 minute: the singular of `login.error.tooManyAttempts`. */
+  'login.error.tooManyAttemptsOneMinute': string;
   /** Sign-in protection locked the account until its password is reset. */
   'login.error.accountLocked': string;
   /** Hand-off sign-in for a program on this machine. Interpolates {program}. */
@@ -206,6 +208,7 @@ export const en: Messages = {
   'error.network': 'Could not connect. Check your connection and try again.',
   'error.rateLimited': 'Too many attempts. Please wait a moment and try again.',
   'login.error.tooManyAttempts': 'Too many attempts. Try again in {minutes} minutes.',
+  'login.error.tooManyAttemptsOneMinute': 'Too many attempts. Try again in 1 minute.',
   'login.error.accountLocked': 'Too many attempts. This account is locked. Reset your password to sign in again.',
   'handoff.heading': 'Sign in to {program}',
   'handoff.done': 'You are signed in. You can close this tab and go back to {program}.',
@@ -308,6 +311,7 @@ export const sv: Messages = {
   'error.network': 'Det gick inte att ansluta. Kontrollera anslutningen och försök igen.',
   'error.rateLimited': 'För många försök. Vänta en stund och försök igen.',
   'login.error.tooManyAttempts': 'För många försök. Försök igen om {minutes} minuter.',
+  'login.error.tooManyAttemptsOneMinute': 'För många försök. Försök igen om 1 minut.',
   'login.error.accountLocked': 'För många försök. Kontot är låst. Återställ ditt lösenord för att logga in igen.',
   'handoff.heading': 'Logga in i {program}',
   'handoff.done': 'Du är inloggad. Du kan stänga fliken och gå tillbaka till {program}.',
@@ -389,6 +393,7 @@ export const da: Messages = {
   'error.network': 'Der kunne ikke oprettes forbindelse. Tjek din forbindelse, og prøv igen.',
   'error.rateLimited': 'For mange forsøg. Vent et øjeblik, og prøv igen.',
   'login.error.tooManyAttempts': 'For mange forsøg. Prøv igen om {minutes} minutter.',
+  'login.error.tooManyAttemptsOneMinute': 'For mange forsøg. Prøv igen om 1 minut.',
   'login.error.accountLocked': 'For mange forsøg. Kontoen er låst. Nulstil din adgangskode for at logge ind igen.',
   'handoff.heading': 'Log ind på {program}',
   'handoff.done': 'Du er logget ind. Du kan lukke fanen og gå tilbage til {program}.',
@@ -470,6 +475,7 @@ export const nb: Messages = {
   'error.network': 'Kunne ikke koble til. Sjekk tilkoblingen og prøv igjen.',
   'error.rateLimited': 'For mange forsøk. Vent litt og prøv igjen.',
   'login.error.tooManyAttempts': 'For mange forsøk. Prøv igjen om {minutes} minutter.',
+  'login.error.tooManyAttemptsOneMinute': 'For mange forsøk. Prøv igjen om 1 minutt.',
   'login.error.accountLocked': 'For mange forsøk. Kontoen er låst. Tilbakestill passordet for å logge inn igjen.',
   'handoff.heading': 'Logg inn på {program}',
   'handoff.done': 'Du er logget inn. Du kan lukke fanen og gå tilbake til {program}.',
@@ -551,6 +557,7 @@ export const nl: Messages = {
   'error.network': 'Kan geen verbinding maken. Controleer je verbinding en probeer het opnieuw.',
   'error.rateLimited': 'Te veel pogingen. Wacht even en probeer het opnieuw.',
   'login.error.tooManyAttempts': 'Te veel pogingen. Probeer het over {minutes} minuten opnieuw.',
+  'login.error.tooManyAttemptsOneMinute': 'Te veel pogingen. Probeer het over 1 minuut opnieuw.',
   'login.error.accountLocked': 'Te veel pogingen. Dit account is vergrendeld. Stel je wachtwoord opnieuw in om weer in te loggen.',
   'handoff.heading': 'Inloggen bij {program}',
   'handoff.done': 'Je bent ingelogd. Je kunt dit tabblad sluiten en teruggaan naar {program}.',
@@ -632,6 +639,7 @@ export const de: Messages = {
   'error.network': 'Keine Verbindung möglich. Prüfe deine Verbindung und versuche es erneut.',
   'error.rateLimited': 'Zu viele Versuche. Warte einen Moment und versuche es erneut.',
   'login.error.tooManyAttempts': 'Zu viele Versuche. Versuchen Sie es in {minutes} Minuten erneut.',
+  'login.error.tooManyAttemptsOneMinute': 'Zu viele Versuche. Versuchen Sie es in 1 Minute erneut.',
   'login.error.accountLocked': 'Zu viele Versuche. Dieses Konto ist gesperrt. Setzen Sie Ihr Passwort zurück, um sich wieder anzumelden.',
   'handoff.heading': 'Bei {program} anmelden',
   'handoff.done': 'Du bist angemeldet. Du kannst diesen Tab schließen und zu {program} zurückkehren.',
@@ -713,6 +721,7 @@ export const fi: Messages = {
   'error.network': 'Yhteyttä ei saatu. Tarkista yhteys ja yritä uudelleen.',
   'error.rateLimited': 'Liian monta yritystä. Odota hetki ja yritä uudelleen.',
   'login.error.tooManyAttempts': 'Liian monta yritystä. Yritä uudelleen {minutes} minuutin kuluttua.',
+  'login.error.tooManyAttemptsOneMinute': 'Liian monta yritystä. Yritä uudelleen 1 minuutin kuluttua.',
   'login.error.accountLocked': 'Liian monta yritystä. Tili on lukittu. Vaihda salasana kirjautuaksesi uudelleen.',
   'handoff.heading': 'Kirjaudu sovellukseen {program}',
   'handoff.done': 'Olet kirjautunut sisään. Voit sulkea välilehden ja palata sovellukseen {program}.',
@@ -794,6 +803,7 @@ export const fr: Messages = {
   'error.network': 'Connexion impossible. Vérifie ta connexion et réessaie.',
   'error.rateLimited': 'Trop de tentatives. Patiente un instant et réessaie.',
   'login.error.tooManyAttempts': 'Trop de tentatives. Réessayez dans {minutes} minutes.',
+  'login.error.tooManyAttemptsOneMinute': 'Trop de tentatives. Réessayez dans 1 minute.',
   'login.error.accountLocked': 'Trop de tentatives. Ce compte est verrouillé. Réinitialisez votre mot de passe pour vous reconnecter.',
   'handoff.heading': 'Se connecter à {program}',
   'handoff.done': 'Tu es connecté. Tu peux fermer cet onglet et revenir à {program}.',
@@ -875,6 +885,7 @@ export const es: Messages = {
   'error.network': 'No se pudo conectar. Comprueba tu conexión e inténtalo de nuevo.',
   'error.rateLimited': 'Demasiados intentos. Espera un momento e inténtalo de nuevo.',
   'login.error.tooManyAttempts': 'Demasiados intentos. Inténtalo de nuevo en {minutes} minutos.',
+  'login.error.tooManyAttemptsOneMinute': 'Demasiados intentos. Inténtalo de nuevo en 1 minuto.',
   'login.error.accountLocked': 'Demasiados intentos. Esta cuenta está bloqueada. Restablece tu contraseña para volver a iniciar sesión.',
   'handoff.heading': 'Iniciar sesión en {program}',
   'handoff.done': 'Has iniciado sesión. Puedes cerrar esta pestaña y volver a {program}.',
@@ -956,6 +967,7 @@ export const it: Messages = {
   'error.network': 'Impossibile connettersi. Controlla la connessione e riprova.',
   'error.rateLimited': 'Troppi tentativi. Attendi un momento e riprova.',
   'login.error.tooManyAttempts': 'Troppi tentativi. Riprova tra {minutes} minuti.',
+  'login.error.tooManyAttemptsOneMinute': 'Troppi tentativi. Riprova tra 1 minuto.',
   'login.error.accountLocked': 'Troppi tentativi. Questo account è bloccato. Reimposta la password per accedere di nuovo.',
   'handoff.heading': 'Accedi a {program}',
   'handoff.done': 'Hai effettuato l’accesso. Puoi chiudere questa scheda e tornare a {program}.',
@@ -1037,6 +1049,7 @@ export const pt: Messages = {
   'error.network': 'Não foi possível ligar. Verifica a tua ligação e tenta novamente.',
   'error.rateLimited': 'Demasiadas tentativas. Aguarda um momento e tenta novamente.',
   'login.error.tooManyAttempts': 'Demasiadas tentativas. Tenta novamente dentro de {minutes} minutos.',
+  'login.error.tooManyAttemptsOneMinute': 'Demasiadas tentativas. Tenta novamente dentro de 1 minuto.',
   'login.error.accountLocked': 'Demasiadas tentativas. Esta conta está bloqueada. Redefine a tua palavra-passe para voltar a iniciar sessão.',
   'handoff.heading': 'Iniciar sessão em {program}',
   'handoff.done': 'Tens sessão iniciada. Podes fechar este separador e voltar a {program}.',
@@ -1118,6 +1131,7 @@ export const pl: Messages = {
   'error.network': 'Nie udało się połączyć. Sprawdź połączenie i spróbuj ponownie.',
   'error.rateLimited': 'Zbyt wiele prób. Odczekaj chwilę i spróbuj ponownie.',
   'login.error.tooManyAttempts': 'Zbyt wiele prób. Spróbuj ponownie za {minutes} min.',
+  'login.error.tooManyAttemptsOneMinute': 'Zbyt wiele prób. Spróbuj ponownie za minutę.',
   'login.error.accountLocked': 'Zbyt wiele prób. To konto jest zablokowane. Zresetuj hasło, aby zalogować się ponownie.',
   'handoff.heading': 'Zaloguj się do {program}',
   'handoff.done': 'Jesteś zalogowany. Możesz zamknąć tę kartę i wrócić do {program}.',
