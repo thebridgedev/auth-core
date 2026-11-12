@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { BridgeError, errorFromAnswer, parseRetryAfter } from '../../core/errors.js';
+import { BridgeError, errorFromAnswer, parseRetryAfter, waitMinutes } from '../../core/errors.js';
 import { call, platformFetch, withoutRedirects } from '../../core/http.js';
 import { fillPath } from '../../core/routes.js';
 import { localStorageAdapter, memoryStorage, readJson, storageKey } from '../../core/storage.js';
@@ -71,6 +71,17 @@ describe('errors: one BridgeError for both answer shapes', () => {
     expect(errorFromAnswer(429, {}, headers({ 'retry-after': '7' })).retryAfterSeconds).toBe(7);
     expect(parseRetryAfter(new Date(10_000).toUTCString(), 0)).toBe(10);
     expect(parseRetryAfter('soon')).toBeNull();
+  });
+
+  it('reads sign-in protection: paused with the minutes to wait, or locked, the same for every email', () => {
+    const paused = errorFromAnswer(429, { error: 'too_many_attempts', error_description: 'Too many attempts. Try again in 12 minutes.', retry_after: 701 }, headers({ 'retry-after': '701' }));
+    expect(paused).toMatchObject({ kind: 'rate-limited', code: 'too_many_attempts', retryAfterSeconds: 701, message: 'Too many attempts. Try again in 12 minutes.' });
+    expect(waitMinutes(paused)).toBe(12);
+    expect(waitMinutes(errorFromAnswer(429, { error: 'too_many_attempts' }, headers({ 'retry-after': '5' })))).toBe(1);
+    const locked = errorFromAnswer(429, { error: 'account_locked', error_description: 'Locked.' });
+    expect(locked).toMatchObject({ kind: 'rate-limited', code: 'account_locked', retryAfterSeconds: null });
+    expect(waitMinutes(locked)).toBeNull();
+    expect(waitMinutes(new Error('x'))).toBeNull();
   });
 
   it('gives a 404 that carries nothing the not-found kind', () => {

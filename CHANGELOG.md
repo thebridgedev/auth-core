@@ -2,6 +2,10 @@
 
 ## [1.0.0-alpha.7] - Unreleased
 
+### Added
+
+- **Sign-in protection's answers**: a sign-in refused because the account or the network address is paused is a `rate-limited` error with `code: 'too_many_attempts'` and `retryAfterSeconds`; a locked account is `code: 'account_locked'`. `waitMinutes(error)` gives the whole minutes to wait, and the catalogue has `login.error.tooManyAttempts` ("Too many attempts. Try again in {minutes} minutes.") and `login.error.accountLocked` in every language. Bridge answers both the same whether or not the email has an account.
+
 ### Changed
 
 - **A sign-in link sent on a sign-in request is bound to the browser that asked for it**, as a sign-up link is. `magicLink.start` keeps a verifier in `signUpStorage` and sends its challenge with the request; `magicLink.finish` opens the link only in a tab of that browser, and fails with `wrong-device` anywhere else (a mail scanner that opens links, or a person who never asked), leaving the link and the request unused. The code is still the requesting app's. A link that lands on the app's own page opens there with the app's verifier for its hosted sign-in. Needs a Bridge server that accepts the challenge on a request.
