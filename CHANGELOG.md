@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-alpha.10] - Unreleased
+
+### Fixed
+
+- **A plan change reaches an open page.** After a `billing.*` notice the client fetches flag results again, and while the answer is still the one it holds (Bridge's copy of the plan follows the notice by a moment) it asks again after 1, 2 and 4 seconds, stopping once the answer changes. Before, a single fetch could see the old plan and nothing asked again.
+- **A token Bridge refuses after a change is renewed.** Bridge refuses tokens issued before a workspace's plan or a person's role changed. Flags now renews the session once on a 401 and asks again, where it used to keep the old results silently. Live renews it, at most once a minute, when listing or joining the person's channels is refused, and joins again; before, the workspace's and account's channels stayed unjoined until the token expired. The fake issuer (`/testing`) has `refuseTokensSoFar()`.
+
 ## [1.0.0-alpha.9] - Unreleased
 
 ### Added

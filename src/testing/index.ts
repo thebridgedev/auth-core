@@ -157,7 +157,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
 
   const people = new Map<string, FakePerson>();
   const sessions = new Map<string, Session>();
-  const accessTokens = new Map<string, { session: string; user: string; workspace: string | null; exp: number; authTime: number }>();
+  const accessTokens = new Map<string, { session: string; user: string; workspace: string | null; exp: number; authTime: number; refused?: true }>();
   const refreshTokens = new Map<string, { session: string; rotatedAt: number | null }>();
   const codes = new Map<string, Code>();
   const flows = new Map<string, { user: string; challenge: string; request?: SignInRequest }>();
@@ -353,7 +353,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   function personOf(headers: Headers): { session: Session; person: FakePerson; authTime: number } | null {
     const token = headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
     const record = accessTokens.get(token);
-    if (record === undefined || record.exp <= now()) return null;
+    if (record === undefined || record.exp <= now() || record.refused === true) return null;
     const session = sessions.get(record.session);
     if (session === undefined || session.ended) return null;
     return { session: { ...session, workspace: record.workspace }, person: people.get(record.user) as FakePerson, authTime: record.authTime };
@@ -891,6 +891,14 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       const then = now() - 3_600_000;
       for (const each of sessions.values()) each.authTime = then;
       for (const each of accessTokens.values()) each.authTime = then;
+    },
+    /**
+     * Refuses every access token given so far, as Bridge does once a
+     * workspace's plan or a person's role changes: calls and joins with one
+     * answer 401 until the SDK renews it. Refresh tokens keep working.
+     */
+    refuseTokensSoFar(): void {
+      for (const each of accessTokens.values()) each.refused = true;
     },
     /** Sets the signed-in results of every flag: `{ key: value }` or full OFREP results. */
     setFlags(results: Record<string, unknown>, visitor: Record<string, unknown> = {}): void {

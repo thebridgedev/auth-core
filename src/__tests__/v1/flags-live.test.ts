@@ -139,6 +139,72 @@ describe('Live: notices over the socket, and history', () => {
     expect(heard[0]).toMatchObject({ type: 'flags.revision_changed', record: 'revisions/2' });
   });
 
+  it('follows a plan change: renews the token Bridge refuses after it, and asks again until the new results arrive', async () => {
+    const { fake, client } = await liveClient();
+    fake.setFlags({ reports: false });
+    await client.flags.load();
+    expect(client.flags.enabled('reports')).toBe(false);
+    const before = evaluations(fake).length;
+    const refreshes = () => fake.requests.filter((request) => request.path.endsWith('/token')).length;
+    const renewalsBefore = refreshes();
+    // Bridge saved the plan change: tokens issued before it are refused, and the results follow a moment after the notice.
+    fake.refuseTokensSoFar();
+    fake.publish(`/workspace/${fake.appId}/ws-acme/1`, { type: 'billing.access_changed', record: 'payers/ws-acme', workspace: 'ws-acme' });
+    setTimeout(() => fake.setFlags({ reports: true }), 300);
+    await until(() => client.flags.enabled('reports'), 5_000);
+    expect(refreshes()).toBeGreaterThan(renewalsBefore);
+    // The first answer was the old one (a 304), so it asked again.
+    expect(evaluations(fake).length - before).toBeGreaterThanOrEqual(3);
+  });
+
+  it('stops asking again once the answer after a plan change is new', async () => {
+    const { fake, client } = await liveClient();
+    await client.flags.load();
+    const before = evaluations(fake).length;
+    fake.setFlags({ reports: true });
+    fake.publish(`/workspace/${fake.appId}/ws-acme/1`, { type: 'billing.access_changed', record: 'payers/ws-acme', workspace: 'ws-acme' });
+    await until(() => client.flags.enabled('reports'));
+    await new Promise((resolve) => setTimeout(resolve, 1_300));
+    expect(evaluations(fake).length - before).toBe(1);
+  });
+
+  it('joins again with a renewed token when its join is refused because the token predates a change', async () => {
+    const { fake } = issuerWithPeople();
+    // The change is saved between listing the person's channels and joining them, as a plan change can be.
+    let refuseAfterListing = true;
+    const fetchFn: typeof fake.fetch = async (input, init) => {
+      const answer = await fake.fetch(input, init);
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (refuseAfterListing && url.endsWith('/v2/live/channels')) {
+        refuseAfterListing = false;
+        fake.refuseTokensSoFar();
+      }
+      return answer;
+    };
+    const client = clientOn(fake, { fetch: fetchFn, live: { websocket: fake.websocket as never } });
+    await client.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    const heard: string[] = [];
+    client.live.on('*', (notice) => heard.push(notice.type));
+    await until(() => {
+      fake.publish(`/workspace/${fake.appId}/ws-acme/1`, { type: 'record.after' });
+      return heard.includes('record.after');
+    }, 5_000);
+  });
+
+  it('lists its channels again with a renewed token when the listing refuses a token that predates a change', async () => {
+    const { fake, client } = await liveClient();
+    fake.refuseTokensSoFar();
+    // The socket drops: listing the channels again refuses the old token.
+    const socket = fake.sockets.at(-1)!;
+    socket.onclose?.();
+    const heard: string[] = [];
+    client.live.on('*', (notice) => heard.push(notice.type));
+    await until(() => {
+      if (fake.sockets.at(-1) !== socket) fake.publish(`/workspace/${fake.appId}/ws-acme/1`, { type: 'record.after' });
+      return heard.includes('record.after');
+    }, 5_000);
+  });
+
   it('fills a gap from history, in order and once', async () => {
     const { fake, client } = await liveClient();
     const heard: string[] = [];

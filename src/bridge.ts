@@ -166,7 +166,9 @@ export function createBridge(options: BridgeOptions) {
   session.events.on('workspace-changed', whoChanged);
   live.on('*', (notice) => {
     events.emit('notice', notice);
-    if (FLAG_NOTICES.has(notice.type) || notice.type.startsWith('billing.')) void flags.load();
+    // What the workspace may do changed (its plan): the results follow once Bridge's copy of it does, a moment later.
+    if (notice.type.startsWith('billing.')) void flags.reloadAfterChange();
+    else if (FLAG_NOTICES.has(notice.type)) void flags.load();
     // This session was ended elsewhere: find out now rather than at the next refresh.
     if (notice.type === 'identity.signed_out') void session.refresh({ force: true }).catch(() => undefined);
   });
