@@ -3,7 +3,7 @@ import { isBridgeError } from './core/errors.js';
 import { call, type Fetch } from './core/http.js';
 import { ROUTES } from './core/routes.js';
 import { storageKey, type BridgeStorage } from './core/storage.js';
-import { Store, randomId, type Readable } from './core/util.js';
+import { Store, randomId, sleep, type Readable } from './core/util.js';
 import type { Session } from './session.js';
 
 /**
@@ -69,6 +69,13 @@ export interface FlagsDeps {
 export type Hint = string | number | boolean | null;
 
 const NO_RESULTS: ReadonlyMap<string, FlagResult> = new Map();
+
+/**
+ * After Bridge says something the results depend on changed (a plan, for
+ * instance), its answer can lag the notice by a moment: an unchanged answer
+ * is asked again after each of these waits.
+ */
+const AFTER_CHANGE_RETRY_MS = [1_000, 2_000, 4_000] as const;
 
 /** Reads an OFREP bulk answer. */
 export function resultsOf(body: unknown): Map<string, FlagResult> {
@@ -205,6 +212,24 @@ export class Flags {
     return this.inflight;
   }
 
+  /**
+   * Fetches results again after Bridge said something they depend on
+   * changed, such as the workspace's plan. While the answer is still the one
+   * already held, it asks again a few times, waiting longer each time, and
+   * stops once the answer changes or the person or workspace does.
+   */
+  async reloadAfterChange(): Promise<void> {
+    const context = this.contextNow();
+    const before = this.etag;
+    await this.load();
+    for (const wait of AFTER_CHANGE_RETRY_MS) {
+      if (before === null || this.etag !== before || this.contextNow() !== context) return;
+      await sleep(wait);
+      if (this.contextNow() !== context) return;
+      await this.load();
+    }
+  }
+
   /** Drops results that were for another person or workspace. */
   reset(): void {
     this.etag = null;
@@ -213,7 +238,7 @@ export class Flags {
     this.statusStore.set('idle');
   }
 
-  private async fetchOnce(): Promise<void> {
+  private async fetchOnce(renewed = false): Promise<void> {
     const signedIn = this.deps.session.state.get().status === 'signed-in';
     const context = this.contextNow();
     let endpoints: Endpoints;
@@ -246,7 +271,17 @@ export class Flags {
       if (!answer.notModified) this.results.set(resultsOf(answer.body));
       this.statusStore.set('ready');
     } catch (error) {
-      if (isBridgeError(error, 'signed-out') && signedIn) return;
+      if (isBridgeError(error, 'signed-out') && signedIn) {
+        // A token issued before a change to what the person may do (their plan, their role) is refused once Bridge has
+        // saved the change: renew it once and ask again. A session that cannot be renewed has ended, and signs out.
+        if (renewed || this.deps.session.state.get().status !== 'signed-in') return;
+        try {
+          await this.deps.session.refresh({ force: true });
+        } catch {
+          return;
+        }
+        return this.fetchOnce(true);
+      }
       // Results already held stay: they are Bridge's answers for this same person, workspace and session (a change of any
       // of them dropped them). None held: every flag gives its fallback.
       this.statusStore.set('error');

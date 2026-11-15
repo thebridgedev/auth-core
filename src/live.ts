@@ -91,6 +91,8 @@ const SOCKET_PROTOCOL = 'aws-appsync-event-ws';
 const NO_TOKEN = 'anonymous';
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
+/** At most one renewal of the token for a refused join in this long: a join refused again after it stays refused. */
+const JOIN_RENEWAL_MS = 60_000;
 
 function defaultWebSocket(): WebSocketFactory | null {
   const Socket = (globalThis as { WebSocket?: new (url: string, protocols: string[]) => WebSocketLike }).WebSocket;
@@ -130,6 +132,7 @@ export class Live {
   private keepAliveMs = 300_000;
   private run = 0;
   private running = false;
+  private joinRenewedAt = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly deps: LiveDeps, options: LiveOptions = {}) {
     this.enabled = options.enabled ?? true;
@@ -177,6 +180,7 @@ export class Live {
     } catch (error) {
       if (run !== this.run) return;
       if (!isBridgeError(error, 'signed-out')) this.deps.onError(error);
+      else if (await this.renewAndJoinAgain(run)) return;
       this.scheduleReconnect(run);
     }
   }
@@ -202,6 +206,24 @@ export class Live {
         // Already closed.
       }
     }
+  }
+
+  /**
+   * A signed-in person's token issued before a change to what they may do
+   * (their plan, their role) is refused once Bridge has saved the change: on
+   * their channels, and on listing them. Renews the token, at most once a
+   * minute, and joins again; false when it did not.
+   */
+  private async renewAndJoinAgain(run: number): Promise<boolean> {
+    if (!this.signedIn() || Date.now() - this.joinRenewedAt <= JOIN_RENEWAL_MS) return false;
+    this.joinRenewedAt = Date.now();
+    const renewed = await this.deps.session.refresh({ force: true }).then(
+      () => true,
+      () => false,
+    );
+    if (!renewed || run !== this.run || !this.running) return false;
+    void this.start();
+    return true;
   }
 
   private signedIn(): boolean {
@@ -277,6 +299,7 @@ export class Live {
       case 'subscribe_error': {
         const channel = typeof message.id === 'string' ? this.subscriptions.get(message.id) : undefined;
         if (channel !== undefined) this.subscriptions.delete(message.id as string);
+        if (await this.renewAndJoinAgain(run)) return;
         // Refused or not decided right now: poll history instead, and try the socket again later.
         if (this.subscriptions.size === 0) {
           this.disconnect();
