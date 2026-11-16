@@ -26,7 +26,7 @@ interface Setup {
   usageAnswers: number[];
 }
 
-async function setUp(options: Partial<BridgeServerOptions> & { metadata?: Record<string, unknown>; listNow?: () => number; metadataFailures?: number; jwksRedirect?: boolean } = {}): Promise<Setup> {
+async function setUp(options: Partial<BridgeServerOptions> & { metadata?: Record<string, unknown>; listNow?: () => number; metadataFailures?: number; jwksRedirect?: boolean; flags?: unknown[] | 'down' } = {}): Promise<Setup> {
   let metadataFailures = options.metadataFailures ?? 0;
   const ring = await makeKeyRing();
   const laneKeys: Record<string, LaneKey> = {};
@@ -63,10 +63,13 @@ async function setUp(options: Partial<BridgeServerOptions> & { metadata?: Record
       const status = usageAnswers.shift() ?? 201;
       return status === 201 ? Response.json({ counted: 1, deduped: 0, outcomes: [] }, { status }) : new Response(null, { status });
     }
-    if (request.url === `${ORIGIN}/v2/flags/ofrep/v1/evaluate/flags`) return Response.json({ flags: [{ key: 'reports', value: true, reason: 'TARGETING_MATCH' }] });
+    if (request.url === `${ORIGIN}/v2/flags/ofrep/v1/evaluate/flags`) {
+      if (options.flags === 'down') return new Response(null, { status: 503 });
+      return Response.json({ flags: options.flags ?? [{ key: 'reports', value: true, reason: 'TARGETING_MATCH' }] });
+    }
     return list.fetch(input, init);
   }) as typeof fetch;
-  const { metadata: _metadata, listNow: _listNow, metadataFailures: _failures, jwksRedirect: _redirect, ...serverOptions } = options;
+  const { metadata: _metadata, listNow: _listNow, metadataFailures: _failures, jwksRedirect: _redirect, flags: _flags, ...serverOptions } = options;
   const server = createBridgeServer({ issuer: ISSUER, fetch: fetchFn, appKey: 'app-key-1', usageFlushMs: 60_000, ...serverOptions });
   return { ring, list, requests, server, usageAnswers };
 }
@@ -201,6 +204,93 @@ describe('server: flags for the caller', () => {
     expect(sent.headers.get('authorization')).toBe(`Bearer ${token}`);
     expect(sent.body).toEqual({ context: { plan_page: 'pricing' } });
     expect((await server.flags.forRequest({ headers: {} })).enabled('reports')).toBe(false);
+    await server.close();
+  });
+});
+
+const ACTIVE = { key: 'bridge-workspace-active', value: true, reason: 'STATIC' };
+const PAID = { key: 'bridge-workspace-paid', value: true, reason: 'STATIC' };
+const LOCKED = { key: 'bridge-workspace-paid', value: false, reason: 'STATIC', metadata: { access: 'payment_due' } };
+
+describe('server: a workspace that is not active or not paid can only be read', () => {
+  const write = (token: string) => ({ ...withBearer(token), method: 'POST' });
+  const refusal = (result: Awaited<ReturnType<ReturnType<typeof createBridgeServer>['check']>>) =>
+    result.ok ? null : { kind: result.error.kind, status: result.error.status, code: result.error.code, problem: result.error.problem };
+  const flagCalls = (requests: Setup['requests']) => requests.filter((request) => request.url.endsWith('/evaluate/flags')).length;
+
+  it.each(['suspended', 'deletion_scheduled'])('refuses a write in a %s workspace with 403, without asking for flags', async (standing) => {
+    const { server, ring, requests } = await setUp({ flags: [ACTIVE, PAID] });
+    const result = await server.check(write(await personToken(ring, { wst: standing })));
+    expect(refusal(result)).toMatchObject({ kind: 'forbidden', status: 403, code: 'workspace-not-active', problem: { type: 'urn:bridge:problem:workspace-not-active', status: 403, standing } });
+    expect(flagCalls(requests)).toBe(0);
+    await server.close();
+  });
+
+  it('refuses a write with 402 when the workspace is locked for payment, naming the access', async () => {
+    const { server, ring } = await setUp({ flags: [ACTIVE, LOCKED] });
+    const result = await server.check(write(await personToken(ring)));
+    expect(refusal(result)).toMatchObject({
+      kind: 'plan-required',
+      status: 402,
+      code: 'billing-locked',
+      problem: { type: 'urn:bridge:problem:billing-locked', status: 402, reason: 'billing_locked', billing: { access: 'payment_due' } },
+    });
+    await server.close();
+  });
+
+  it('refuses a write when Bridge\'s live answer says the workspace is not active, though the token still says active', async () => {
+    const { server, ring } = await setUp({ flags: [{ ...ACTIVE, value: false }, PAID] });
+    expect(refusal(await server.check(write(await personToken(ring))))).toMatchObject({ status: 403, code: 'workspace-not-active' });
+    await server.close();
+  });
+
+  it('refuses a write with 503 when the payment result is missing, or is an error', async () => {
+    const missing = await setUp({ flags: [ACTIVE] });
+    expect(refusal(await missing.server.check(write(await personToken(missing.ring))))).toMatchObject({ kind: 'unavailable', status: 503, code: 'workspace-state-unavailable' });
+    await missing.server.close();
+    const failed = await setUp({ flags: [ACTIVE, { key: 'bridge-workspace-paid', errorCode: 'GENERAL', errorDetails: 'no facts' }] });
+    expect(refusal(await failed.server.check(write(await personToken(failed.ring))))).toMatchObject({ status: 503 });
+    await failed.server.close();
+  });
+
+  it('refuses a write with 503 when the flag results cannot be fetched', async () => {
+    const { server, ring } = await setUp({ flags: 'down' });
+    expect(refusal(await server.check(write(await personToken(ring))))).toMatchObject({ kind: 'unavailable', status: 503, code: 'workspace-state-unavailable' });
+    await server.close();
+  });
+
+  it('lets a write through in an active, paid workspace, and hands back the flag results it read', async () => {
+    const { server, ring, requests } = await setUp({ flags: [ACTIVE, PAID, { key: 'reports', value: true, reason: 'STATIC' }] });
+    const result = await server.check(write(await personToken(ring)));
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.flags?.enabled('reports')).toBe(true);
+    expect(flagCalls(requests)).toBe(1);
+    await server.close();
+  });
+
+  it.each(['GET', 'HEAD', 'OPTIONS', 'get'])('never refuses a %s, even in a suspended, locked workspace', async (method) => {
+    const { server, ring, requests } = await setUp({ flags: [{ ...ACTIVE, value: false }, LOCKED] });
+    const result = await server.check({ ...withBearer(await personToken(ring, { wst: 'suspended' })), method });
+    expect(result.ok).toBe(true);
+    expect(flagCalls(requests)).toBe(0);
+    await server.close();
+  });
+
+  it('takes the method from the options when the request carries none, and from a Fetch Request', async () => {
+    const { server, ring } = await setUp({ flags: [ACTIVE, LOCKED] });
+    const token = await personToken(ring);
+    expect(refusal(await server.check(withBearer(token), { method: 'DELETE' }))).toMatchObject({ status: 402 });
+    const request = new Request('https://app.test/notes', { method: 'PUT', headers: { authorization: `Bearer ${token}` } });
+    expect(refusal(await server.check(request))).toMatchObject({ status: 402 });
+    expect((await server.check(withBearer(token))).ok).toBe(true);
+    await server.close();
+  });
+
+  it('does not touch a token that names no workspace', async () => {
+    const { server, ring } = await setUp({ flags: [{ ...ACTIVE, value: false }, LOCKED] });
+    const now = Math.floor(Date.now() / 1000);
+    const noWorkspace = await mint(ring.app, { aid: APP, sid: 'ses-1', privileges: [], client_id: APP, auth_time: now, jti: 'jti-2' }, { issuer: ISSUER, audience: AUDIENCE, subject: 'usr-alice', typ: 'at+jwt' });
+    expect((await server.check(write(noWorkspace))).ok).toBe(true);
     await server.close();
   });
 });

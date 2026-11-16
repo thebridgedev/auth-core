@@ -270,6 +270,7 @@ export async function handle(request: Request) {
 ```
 
 - **Revocation.** Token checks follow your app's revocation list. A session that ended, a member who was removed or a key that was revoked is refused within seconds. While the list cannot be read, checks answer `unavailable`, never yes. For writes and sensitive actions, pass `{ strict: true }` for a tighter limit.
+- **Writes in a workspace that is not in good standing.** When the request is a write (any method but `GET`, `HEAD` and `OPTIONS`; read from the `Request`, or pass `{ method }`) by a signed-in person, `check` and `verify` also look at the workspace. A workspace that is suspended or scheduled for deletion refuses with 403 (`workspace-not-active`, `error.problem.standing` says which); one locked for payment refuses with 402 (`billing-locked`); and while The Bridge cannot say, the write is refused with 503, never allowed. Reads always pass. The refusal is a `BridgeError` whose `problem` is the RFC 9457 body to send back. Keys are not affected.
 - **Keys.** A request with `x-api-key` is checked as a key and becomes the same kind of Actor.
 - **No roles in the Actor.** Gate with flags.
 - **Usage** is counted only from servers. A batch that fails is sent again with the same ids, so nothing is counted twice. A batch The Bridge refuses as malformed is logged and dropped, so it never holds up the rest. While The Bridge cannot be reached, at most `maxQueuedReports` (10,000) wait; past that, the oldest are dropped and logged. Call `bridge.usage.flush()` before a short-lived process ends.

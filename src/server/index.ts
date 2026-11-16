@@ -43,7 +43,7 @@ export interface Actor {
   /** The sign-in session the token belongs to, for a person. */
   readonly sessionId: string | null;
   readonly appId: string;
-  /** The workspace's standing, such as `active`. A workspace that is not active should only read. */
+  /** The workspace's standing, such as `active`. A workspace that is not active can only be read: `check` refuses a person's writes there. */
   readonly standing: string | null;
 }
 
@@ -77,11 +77,58 @@ export interface BridgeServerOptions {
 export interface VerifyOptions {
   /** Refuse unless the revocation list is at most `strictLagMs` behind. For writes and sensitive actions. */
   readonly strict?: boolean;
+  /**
+   * The request's HTTP method, when the request object carries none. A write (any method but `GET`, `HEAD` and
+   * `OPTIONS`) by a signed-in person is refused while their workspace is not active (403) or is locked for payment
+   * (402), and while that cannot be told (503). Reads are never refused for these. Without a method nothing is
+   * enforced: pass it, or pass a request that has one. Call `check` only for routes that need a credential: a public
+   * route that ignores a failed check ignores these refusals too.
+   */
+  readonly method?: string;
 }
 
-/** A request, or anything with its headers: a Fetch `Request`, Node's `IncomingMessage`, or `{ headers }`. */
+/** Bridge's own locked flags: whether the person's workspace is active, and whether it is not locked for payment. */
+export const WORKSPACE_FLAGS = Object.freeze({
+  active: 'bridge-workspace-active',
+  paid: 'bridge-workspace-paid',
+});
+
+const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+function problemError(kind: 'forbidden' | 'plan-required' | 'unavailable', status: number, slug: string, title: string, detail: string, extensions: Record<string, unknown> = {}): BridgeError {
+  return new BridgeError(kind, detail, { status, code: slug, problem: { type: `urn:bridge:problem:${slug}`, title, status, detail, ...extensions } });
+}
+
+/** A write in a suspended or deletion-scheduled workspace: 403. */
+function notActive(standing: string): BridgeError {
+  return problemError('forbidden', 403, 'workspace-not-active', 'Workspace not active', `This workspace is ${standing.replace(/_/g, ' ')}; it can be read but not changed.`, { standing });
+}
+
+/** A write in a workspace locked for payment: 402. */
+function billingLocked(access: unknown): BridgeError {
+  return problemError('plan-required', 402, 'billing-locked', 'Payment required', 'This workspace is locked for payment; it can be read but not changed until it is paid up.', {
+    reason: 'billing_locked',
+    ...(typeof access === 'string' ? { billing: { access } } : {}),
+  });
+}
+
+/** Bridge could not say whether the workspace may be written to: 503, never yes. */
+function stateUnknown(detail: string, cause?: unknown): BridgeError {
+  return new BridgeError('unavailable', detail, {
+    status: 503,
+    code: 'workspace-state-unavailable',
+    problem: { type: 'urn:bridge:problem:unavailable', title: 'Service unavailable', status: 503, detail },
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+/**
+ * A request, or anything with its headers: a Fetch `Request`, Node's `IncomingMessage`, or `{ headers }`.
+ * `method` is read from it when there is one: see {@link VerifyOptions.method}.
+ */
 export interface RequestLike {
   readonly headers: HeadersLike;
+  readonly method?: string | undefined;
 }
 
 interface UsageReport {
@@ -190,8 +237,15 @@ export function createBridgeServer(options: BridgeServerOptions) {
   const ready = setUp();
   ready.catch(() => undefined);
 
-  /** Checks the request's credential: `Authorization: Bearer <token>`, or `x-api-key: <key>`. */
-  async function check(request: RequestLike, verifyOptions: VerifyOptions = {}): Promise<{ ok: true; actor: Actor } | { ok: false; error: BridgeError }> {
+  /**
+   * Checks the request's credential: `Authorization: Bearer <token>`, or `x-api-key: <key>`.
+   *
+   * For a write by a signed-in person (see {@link VerifyOptions.method}) it also checks the workspace: a standing
+   * that is not `active` is refused with 403, a workspace locked for payment with 402, and a workspace whose state
+   * Bridge cannot tell with 503. The flag results it read for that come back as `flags`, so a gate on the same
+   * request need not ask again.
+   */
+  async function check(request: RequestLike, verifyOptions: VerifyOptions = {}): Promise<{ ok: true; actor: Actor; flags?: FlagSet } | { ok: false; error: BridgeError }> {
     try {
       await setUp();
     } catch (cause) {
@@ -213,7 +267,41 @@ export function createBridgeServer(options: BridgeServerOptions) {
         return { ok: false, error: new BridgeError('unavailable', 'The revocation list is too far behind for this action; try again shortly.', { status: 503, code: 'unavailable' }) };
       }
     }
-    return { ok: true, actor: publicActor(verification.actor) };
+    const actor = publicActor(verification.actor);
+    const method = (verifyOptions.method ?? request.method ?? '').toUpperCase();
+    if (actor.kind !== 'person' || method === '' || READ_METHODS.has(method)) return { ok: true, actor };
+    return enforceWorkspace(actor, request);
+  }
+
+  /**
+   * For a write by a person: the workspace must be active and not locked for payment. A token that names no
+   * workspace has none to be locked. Fails closed: results that cannot be read or lack the answer refuse.
+   */
+  async function enforceWorkspace(actor: Actor, request: RequestLike): Promise<{ ok: true; actor: Actor; flags?: FlagSet } | { ok: false; error: BridgeError }> {
+    if (actor.workspaceId === null) return { ok: true, actor };
+    if (actor.standing !== null && actor.standing !== 'active') return { ok: false, error: notActive(actor.standing) };
+    const token = bearerOf(request.headers);
+    if (token === null) return { ok: true, actor };
+    let flags: FlagSet;
+    try {
+      flags = await readFlags(token, {});
+    } catch (cause) {
+      return { ok: false, error: stateUnknown('The workspace\'s payment state could not be read from Bridge; try again shortly.', cause) };
+    }
+    const results = flags.all();
+    // The token's standing can be a few minutes old: Bridge's live answer, when it gives one, refuses at once.
+    if (results.has(WORKSPACE_FLAGS.active) && !flags.enabled(WORKSPACE_FLAGS.active)) return { ok: false, error: notActive(actor.standing ?? 'not active') };
+    const paid = results.get(WORKSPACE_FLAGS.paid);
+    if (paid === undefined || !('value' in paid)) return { ok: false, error: stateUnknown("Bridge gave no answer on whether the workspace's payment is in order, so the write is refused.") };
+    if (paid.value !== true) return { ok: false, error: billingLocked(paid.metadata?.['access']) };
+    return { ok: true, actor, flags };
+  }
+
+  /** Bridge's flag results for a person's token. Throws when Bridge cannot answer. */
+  async function readFlags(token: string, hints: Readonly<Record<string, Hint>>): Promise<FlagSet> {
+    const endpoints = await discovery.get();
+    const answer = await call<unknown>(fetchFn, endpoints.url(ROUTES.flagsEvaluate), { method: 'POST', token, body: { context: hints } });
+    return new FlagSet(resultsOf(answer.body));
   }
 
   // Counting usage.
@@ -294,9 +382,7 @@ export function createBridgeServer(options: BridgeServerOptions) {
         const token = bearerOf(request.headers);
         if (token === null) return new FlagSet();
         try {
-          const endpoints = await discovery.get();
-          const answer = await call<unknown>(fetchFn, endpoints.url(ROUTES.flagsEvaluate), { method: 'POST', token, body: { context: hints } });
-          return new FlagSet(resultsOf(answer.body));
+          return await readFlags(token, hints);
         } catch (error) {
           // Gates fail closed: every flag gives its fallback while Bridge cannot answer.
           options.log?.('Flag results could not be read; every flag gives its fallback.', { error: error instanceof Error ? error.message : String(error) });
