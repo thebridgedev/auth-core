@@ -226,6 +226,19 @@ const { url } = await bridge.billing.portal();
 
 The facts are for showing. Whether a page or button is open is a flag, and so is whether the person may manage billing.
 
+### Plan limits and plan features
+
+```ts
+// A plan feature is the flag `bridge:billing.entitlement.<key>`; it never reads the plan.
+if (bridge.entitlements.can('ai_completions')) showAi();
+
+// A limit: the first call starts reading and returns undefined; subscribe to redraw when it arrives.
+const quota = bridge.quota('projects');  // { used, limit, remaining, percent_used, policy, kind, warningLevel, … }
+bridge.quotas.subscribe((metric, snapshot) => redraw(metric, snapshot));
+```
+
+The numbers are read from The Bridge, never taken from a notice. Every metric a screen asked for is read again when Live says usage (`billing.quota_updated`) or the plan (`billing.access_changed`) changed. A metric the plan sets no limit on has no snapshot.
+
 ## Team
 
 ```ts
@@ -265,9 +278,28 @@ export async function handle(request: Request) {
   if (!flags.enabled('exports')) return new Response(null, { status: 403 });
 
   bridge.usage.count(actor, 'exports.made'); // "count this", sent in batches
+  bridge.usage.set(actor, 'projects', 4);    // a gauge: how many exist now
   // …
 }
+
+// A strict limit: hold a unit before the action, so two requests never get the last one.
+try {
+  const hold = await bridge.usage.hold(actor, 'projects', { decision: requestId });
+  try {
+    await createProject();
+    await hold.confirm();
+  } catch (error) {
+    await hold.giveBack();
+    throw error;
+  }
+} catch (error) {
+  // A limit that is reached: 402, `error.quota` is { metric, limit, used }.
+  if (isLimitReached(error)) return Response.json(quotaExceededBody(error), { status: 402 });
+  throw error;
+}
 ```
+
+`bridge.usage.quota(actor, 'projects')` reads a metric's quota on the server: `{ used, limit, policy, … }`, or `null` when the plan sets no limit on it. A `metered` limit is never refused; the overage is billed.
 
 - **Revocation.** Token checks follow your app's revocation list. A session that ended, a member who was removed or a key that was revoked is refused within seconds. While the list cannot be read, checks answer `unavailable`, never yes. For writes and sensitive actions, pass `{ strict: true }` for a tighter limit.
 - **Writes in a workspace that is not in good standing.** When the request is a write (any method but `GET`, `HEAD` and `OPTIONS`; read from the `Request`, or pass `{ method }`) by a signed-in person, `check` and `verify` also look at the workspace. A workspace that is suspended or scheduled for deletion refuses with 403 (`workspace-not-active`, `error.problem.standing` says which); one locked for payment refuses with 402 (`billing-locked`); and while The Bridge cannot say, the write is refused with 503, never allowed. Reads always pass. The refusal is a `BridgeError` whose `problem` is the RFC 9457 body to send back. Keys are not affected.

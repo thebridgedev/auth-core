@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createBridgeServer, type BridgeServerOptions } from '../../server/index.js';
+import { BridgeError } from '../../core/errors.js';
+import { createBridgeServer, isLimitReached, quotaExceededBody, type BridgeServerOptions } from '../../server/index.js';
 import { APP, makeKeyRing, mint, type KeyRing } from '../verifier/fixtures.js';
 import { fakeRevocationList, makeLaneKey, type LaneKey } from '../verifier/revocation-fixtures.js';
 
@@ -21,12 +22,12 @@ const LANES = ['identity-access', 'accounts', 'billing', 'app-registry'] as cons
 interface Setup {
   ring: KeyRing;
   list: ReturnType<typeof fakeRevocationList>;
-  requests: { url: string; headers: Headers; body: unknown }[];
+  requests: { url: string; method: string; headers: Headers; body: unknown }[];
   server: ReturnType<typeof createBridgeServer>;
   usageAnswers: number[];
 }
 
-async function setUp(options: Partial<BridgeServerOptions> & { metadata?: Record<string, unknown>; listNow?: () => number; metadataFailures?: number; jwksRedirect?: boolean; flags?: unknown[] | 'down' } = {}): Promise<Setup> {
+async function setUp(options: Partial<BridgeServerOptions> & { respond?: (request: Request, body: unknown) => Response | undefined; metadata?: Record<string, unknown>; listNow?: () => number; metadataFailures?: number; jwksRedirect?: boolean; flags?: unknown[] | 'down' } = {}): Promise<Setup> {
   let metadataFailures = options.metadataFailures ?? 0;
   const ring = await makeKeyRing();
   const laneKeys: Record<string, LaneKey> = {};
@@ -49,7 +50,9 @@ async function setUp(options: Partial<BridgeServerOptions> & { metadata?: Record
   const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
     const body = request.method === 'POST' ? await request.clone().json().catch(() => undefined) : undefined;
-    requests.push({ url: request.url, headers: request.headers, body });
+    requests.push({ url: request.url, method: request.method, headers: request.headers, body });
+    const answered = options.respond?.(request, body);
+    if (answered !== undefined) return answered;
     if (request.url === `${ISSUER}/.well-known/openid-configuration`) {
       if (metadataFailures > 0) {
         metadataFailures -= 1;
@@ -69,7 +72,7 @@ async function setUp(options: Partial<BridgeServerOptions> & { metadata?: Record
     }
     return list.fetch(input, init);
   }) as typeof fetch;
-  const { metadata: _metadata, listNow: _listNow, metadataFailures: _failures, jwksRedirect: _redirect, flags: _flags, ...serverOptions } = options;
+  const { respond: _respond, metadata: _metadata, listNow: _listNow, metadataFailures: _failures, jwksRedirect: _redirect, flags: _flags, ...serverOptions } = options;
   const server = createBridgeServer({ issuer: ISSUER, fetch: fetchFn, appKey: 'app-key-1', usageFlushMs: 60_000, ...serverOptions });
   return { ring, list, requests, server, usageAnswers };
 }
@@ -451,6 +454,166 @@ describe('server: never in a browser, never via a redirect', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.status).toBe(503);
     expect(requests.some((request) => request.url.includes('/elsewhere/'))).toBe(false);
+    await server.close();
+  });
+});
+
+describe('server: gauges, strict limits and quotas', () => {
+  const HOLDS = `${ORIGIN}/v2/billing/usage/holds`;
+  const HOLD_ID = 'a'.repeat(24);
+  const sent = (requests: Setup['requests'], suffix: string) => requests.filter((request) => request.url.endsWith(suffix));
+
+  it('sets a gauge level like a count: the level is the quantity, a newer level for the metric replaces the one waiting', async () => {
+    const { server, ring, requests } = await setUp();
+    const actor = await server.verify(withBearer(await personToken(ring)));
+    server.usage.set(actor, 'projects', 3);
+    server.usage.set(actor, 'storage.gb', 10);
+    server.usage.set(actor, 'projects', 4);
+    server.usage.count(actor, 'api.calls');
+    expect(server.usage.pending()).toBe(3);
+    await server.usage.flush();
+    const body = sent(requests, '/v2/billing/usage')[0]!.body as { reports: Record<string, unknown>[] };
+    expect(body.reports.map(({ metric, quantity, workspace }) => ({ metric, quantity, workspace }))).toEqual([
+      { metric: 'storage.gb', quantity: 10, workspace: 'ws-acme' },
+      { metric: 'projects', quantity: 4, workspace: 'ws-acme' },
+      { metric: 'api.calls', quantity: 1, workspace: 'ws-acme' },
+    ]);
+    // Nothing but Bridge's own report fields goes over the wire.
+    expect(Object.keys(body.reports[1]!).sort()).toEqual(['id', 'metric', 'quantity', 'time', 'workspace']);
+    await server.close();
+  });
+
+  it('refuses a level that is not a number of 0 or more, a metric that is not a name, and setting without the app key', async () => {
+    const { server, ring } = await setUp();
+    const actor = await server.verify(withBearer(await personToken(ring)));
+    expect(() => server.usage.set(actor, 'projects', -1)).toThrow(BridgeError);
+    expect(() => server.usage.set(actor, 'projects', Number.NaN)).toThrow(BridgeError);
+    expect(() => server.usage.set(actor, 'Projects', 1)).toThrow(BridgeError);
+    const keyless = await setUp({ appKey: '' });
+    const keylessActor = await keyless.server.verify(withBearer(await personToken(keyless.ring)));
+    expect(() => keyless.server.usage.set(keylessActor, 'projects', 1)).toThrow(/app key/);
+    await server.close();
+    await keyless.server.close();
+  });
+
+  it('holds a unit with the app key and the workspace, then confirms it once', async () => {
+    const { server, ring, requests } = await setUp({
+      respond: (request) => {
+        if (request.url === HOLDS) return Response.json({ id: HOLD_ID, metric: 'projects', limit: 5, used: 3, expiresInSeconds: 120 }, { status: 201 });
+        if (request.url === `${HOLDS}/${HOLD_ID}/confirm`) return Response.json({ confirmed: true });
+        return undefined;
+      },
+    });
+    const actor = await server.verify(withBearer(await personToken(ring)));
+    const hold = await server.usage.hold(actor, 'projects', { decision: 'req-1', quantity: 2 });
+    expect(hold).toMatchObject({ id: HOLD_ID, metric: 'projects', limit: 5, used: 3, expiresInSeconds: 120 });
+    const [made] = sent(requests, '/usage/holds');
+    expect(made!.method).toBe('POST');
+    expect(made!.headers.get('x-api-key')).toBe('app-key-1');
+    expect(made!.headers.get('authorization')).toBeNull();
+    expect(made!.headers.get('bridge-workspace')).toBe('ws-acme');
+    expect(made!.body).toEqual({ metric: 'projects', decision: 'req-1', quantity: 2 });
+    await hold.confirm();
+    await hold.confirm();
+    expect(sent(requests, '/confirm')).toHaveLength(1);
+    expect(sent(requests, '/confirm')[0]!.headers.get('bridge-workspace')).toBe('ws-acme');
+    await server.close();
+  });
+
+  it('gives a held unit back with a DELETE, once, and a hold already gone is not an error; confirming one that is gone is', async () => {
+    let gone = false;
+    const { server, ring, requests } = await setUp({
+      respond: (request) => {
+        if (request.url === HOLDS) return Response.json({ id: HOLD_ID, metric: 'projects', limit: 5, used: 3, expiresInSeconds: 120 }, { status: 201 });
+        if (request.url === `${HOLDS}/${HOLD_ID}`) return gone ? Response.json({ status: 404 }, { status: 404 }) : new Response(null, { status: 204 });
+        if (request.url === `${HOLDS}/${HOLD_ID}/confirm`) return Response.json({ status: 404 }, { status: 404 });
+        return undefined;
+      },
+    });
+    const actor = await server.verify(withBearer(await personToken(ring)));
+    const first = await server.usage.hold(actor, 'projects');
+    await first.giveBack();
+    await first.giveBack();
+    expect(sent(requests, `/holds/${HOLD_ID}`).filter((request) => request.method === 'DELETE')).toHaveLength(1);
+    gone = true;
+    const second = await server.usage.hold(actor, 'projects');
+    await expect(second.giveBack()).resolves.toBeUndefined();
+    const third = await server.usage.hold(actor, 'projects');
+    await expect(third.confirm()).rejects.toMatchObject({ kind: 'not-found' });
+    await server.close();
+  });
+
+  it('asks for a new decision each time unless one is given, and refuses a quantity that is not a whole number from 1', async () => {
+    const { server, ring, requests } = await setUp({ respond: (request) => (request.url === HOLDS ? Response.json({ id: HOLD_ID, metric: 'projects', limit: 5, used: 0, expiresInSeconds: 120 }, { status: 201 }) : undefined) });
+    const actor = await server.verify(withBearer(await personToken(ring)));
+    await server.usage.hold(actor, 'projects');
+    await server.usage.hold(actor, 'projects');
+    const decisions = sent(requests, '/usage/holds').map((request) => (request.body as { decision: string }).decision);
+    expect(new Set(decisions).size).toBe(2);
+    await expect(server.usage.hold(actor, 'projects', { quantity: 0 })).rejects.toMatchObject({ kind: 'invalid' });
+    await expect(server.usage.hold(actor, 'projects', { quantity: 1.5 })).rejects.toMatchObject({ kind: 'invalid' });
+    await expect(server.usage.hold(actor, 'Projects')).rejects.toMatchObject({ kind: 'invalid' });
+    await server.close();
+  });
+
+  it('answers a limit that is reached as plan-required with the metric, limit and use, and as 0.9\'s QUOTA_EXCEEDED body', async () => {
+    const { server, ring } = await setUp({
+      respond: (request) =>
+        request.url === HOLDS
+          ? Response.json(
+              { reason: 'limit_reached', metric: 'projects', limit: 5, used: 5, type: 'urn:bridge:problem:limit-reached', title: 'Payment Required', status: 402, detail: "The plan's limit on projects is reached." },
+              { status: 402, headers: { 'content-type': 'application/problem+json' } },
+            )
+          : undefined,
+    });
+    const actor = await server.verify(withBearer(await personToken(ring)));
+    const error = await server.usage.hold(actor, 'projects').catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(BridgeError);
+    expect(error).toMatchObject({ kind: 'plan-required', status: 402, code: 'limit-reached', quota: { metric: 'projects', limit: 5, used: 5 } });
+    expect(isLimitReached(error)).toBe(true);
+    expect(quotaExceededBody(error as BridgeError)).toEqual({ statusCode: 402, code: 'QUOTA_EXCEEDED', message: 'Your plan allows 5 projects; 5 are in use.', metric: 'projects', used: 5, limit: 5, fix: '/subscription' });
+    expect(quotaExceededBody(error as BridgeError, '/billing').fix).toBe('/billing');
+    expect(quotaExceededBody({ metric: 'seats', limit: 3, used: 3 }).code).toBe('QUOTA_EXCEEDED');
+    expect(isLimitReached(new BridgeError('plan-required', 'x', { status: 402, code: 'billing-locked' }))).toBe(false);
+    await server.close();
+  });
+
+  it('throws when Bridge cannot answer a hold, so a limit that could not be checked is not a yes', async () => {
+    const { server, ring } = await setUp({ respond: (request) => (request.url === HOLDS ? new Response(null, { status: 503 }) : undefined) });
+    const actor = await server.verify(withBearer(await personToken(ring)));
+    await expect(server.usage.hold(actor, 'projects')).rejects.toMatchObject({ kind: 'unavailable', status: 503 });
+    await server.close();
+  });
+
+  it('needs the app key, and a workspace, to hold or read a limit', async () => {
+    const keyless = await setUp({ appKey: '' });
+    const keylessActor = await keyless.server.verify(withBearer(await personToken(keyless.ring)));
+    await expect(keyless.server.usage.hold(keylessActor, 'projects')).rejects.toMatchObject({ kind: 'misconfigured' });
+    await expect(keyless.server.usage.quota(keylessActor, 'projects')).rejects.toMatchObject({ kind: 'misconfigured' });
+    await keyless.server.close();
+    const { server, ring } = await setUp();
+    const noWorkspace = await server.verify(withBearer(await mint(ring.app, { aid: APP, sid: 'ses-1', privileges: [], client_id: APP, auth_time: Math.floor(Date.now() / 1000), jti: 'jti-9' }, { issuer: ISSUER, audience: AUDIENCE, subject: 'usr-alice', typ: 'at+jwt' })));
+    await expect(server.usage.hold(noWorkspace, 'projects')).rejects.toMatchObject({ kind: 'invalid' });
+    await expect(server.usage.hold(noWorkspace, 'projects', { workspace: 'bad id!' })).rejects.toMatchObject({ kind: 'invalid' });
+    await server.close();
+  });
+
+  it('reads a metric\'s quota with the app key and the workspace, in the shape 0.9 read, and null where the plan sets no limit', async () => {
+    const { server, ring, requests } = await setUp({
+      respond: (request) => {
+        if (request.url === `${ORIGIN}/v2/billing/usage/quota/projects`) return Response.json({ metric: 'projects', used: 4, limit: 5, remaining: 1, warningLevel: 'approaching', policy: 'hard', kind: 'gauge' });
+        if (request.url === `${ORIGIN}/v2/billing/usage/quota/exports.made`) return Response.json(null);
+        return undefined;
+      },
+    });
+    const actor = await server.verify(withBearer(await personToken(ring)));
+    const quota = await server.usage.quota(actor, 'projects');
+    expect(quota).toEqual({ metric: 'projects', used: 4, limit: 5, remaining: 1, percent_used: 0.8, policy: 'hard', kind: 'gauge', warningLevel: 'approaching', label: 'projects', overcap: false });
+    const [read] = sent(requests, '/usage/quota/projects');
+    expect(read!.method).toBe('GET');
+    expect(read!.headers.get('x-api-key')).toBe('app-key-1');
+    expect(read!.headers.get('bridge-workspace')).toBe('ws-acme');
+    expect(await server.usage.quota(actor, 'exports.made')).toBeNull();
     await server.close();
   });
 });

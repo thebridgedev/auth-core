@@ -6,8 +6,11 @@ import { platformFetch, type Fetch } from './core/http.js';
 import { defaultStorage, type BridgeStorage } from './core/storage.js';
 import { originOf, secureUrl } from './core/urls.js';
 import { Emitter, type Readable } from './core/util.js';
+import { createEntitlements } from './entitlements.js';
 import { Flags } from './flags.js';
+import type { QuotaSnapshot } from './quota.js';
 import { Live, MANY_CHANGED, type LiveNotice, type LiveOptions, type LiveStatus } from './live.js';
+import { QuotaStore } from './quota-store.js';
 import { Session, type ChannelLike, type LockManagerLike, type SessionEvents, type SessionState } from './session.js';
 import { browserCeremonies, type WebAuthnCeremonies } from './passkeys.js';
 import { createRecheck } from './recheck.js';
@@ -74,6 +77,9 @@ export type BridgeEvents = SessionEvents & {
   /** The client started: the issuer's metadata is read and any stored session restored. Fires once. */
   ready: { readonly issuer: string };
 };
+
+/** Notices after which the quotas a screen shows are read again (the notices carry no numbers); a gap in Live's notices too. */
+const QUOTA_NOTICES = new Set(['billing.quota_updated', 'billing.access_changed', MANY_CHANGED]);
 
 /** Notices after which flag results may differ. */
 const FLAG_NOTICES = new Set(['flags.revision_changed', 'accounts.member_updated', 'accounts.workspace_updated', MANY_CHANGED]);
@@ -151,9 +157,12 @@ export function createBridge(options: BridgeOptions) {
   const hosted = createHosted({ issuer, endpoints, fetch: fetchFn, storage: options.signUpStorage ?? storage, session });
   const accounts = createAccounts({ endpoints, fetch: fetchFn, session });
   const billing = createBilling({ endpoints, fetch: fetchFn, session, changed: () => void flags.load() });
+  const quotas = new QuotaStore({ endpoints, fetch: fetchFn, session, onError });
+  const entitlements = createEntitlements(flags);
 
   let started = false;
   const whoChanged = () => {
+    quotas.reset();
     flags.reset();
     void flags.load();
     if (started) void live.start();
@@ -167,7 +176,9 @@ export function createBridge(options: BridgeOptions) {
   live.on('*', (notice) => {
     events.emit('notice', notice);
     // What the workspace may do changed (its plan): the results follow once Bridge's copy of it does, a moment later.
-    if (notice.type.startsWith('billing.')) void flags.reloadAfterChange();
+    // Usage changing (`billing.quota_updated`) moves numbers, not what the plan allows: only the quotas are read again.
+    if (QUOTA_NOTICES.has(notice.type)) void quotas.refresh();
+    if (notice.type.startsWith('billing.') && notice.type !== 'billing.quota_updated') void flags.reloadAfterChange();
     else if (FLAG_NOTICES.has(notice.type)) void flags.load();
     // This session was ended elsewhere: find out now rather than at the next refresh.
     if (notice.type === 'identity.signed_out') void session.refresh({ force: true }).catch(() => undefined);
@@ -186,6 +197,7 @@ export function createBridge(options: BridgeOptions) {
       if (options.loadFlags !== false) await flags.load();
       started = true;
       events.emit('ready', { issuer });
+      void quotas.refresh();
       void live.start();
     })().finally(() => {
       starting = null;
@@ -286,6 +298,21 @@ export function createBridge(options: BridgeOptions) {
       ensureStarted,
     ),
     flags,
+    /**
+     * Plan features as the flags `bridge:billing.entitlement.<key>`: `can(key)`
+     * is whether the workspace's plan includes the feature (off until Bridge
+     * says on), `all()` every one Bridge gave a result for.
+     */
+    entitlements,
+    /** The plan limits a screen shows, one snapshot per metric: see `QuotaStore`. */
+    quotas,
+    /**
+     * A metric's quota snapshot: what is used, the limit, the policy and the
+     * warning level. The first call for a metric starts reading it and
+     * returns undefined; `quotas.subscribe` tells when it arrives, and it is
+     * read again when Bridge says usage or the plan changed.
+     */
+    quota: (metric: string): QuotaSnapshot | undefined => quotas.ensureHydrated(metric),
     live: {
       status: live.status as Readable<LiveStatus>,
       on: (type: string, listener: (notice: LiveNotice) => void) => live.on(type, listener),

@@ -18,6 +18,7 @@ import { call, platformFetch, withoutRedirects, type Fetch } from '../core/http.
 import { REVOCATION_LANES, ROUTES } from '../core/routes.js';
 import { randomId } from '../core/util.js';
 import { FlagSet, resultsOf, type Hint } from '../flags.js';
+import { snapshotOf, type QuotaRead, type QuotaSnapshot } from '../quota.js';
 import {
   createCredentialVerifier,
   createKeySet,
@@ -137,6 +138,36 @@ interface UsageReport {
   readonly quantity: number;
   readonly workspace: string;
   readonly time: string;
+  /** A gauge's level (`usage.set`), not sent: a newer level replaces an older one still waiting. */
+  readonly level?: true;
+}
+
+/** A unit of a strict limit held for an action: confirm it when the action happened, give it back when it did not. */
+export interface UsageHold {
+  readonly id: string;
+  readonly metric: string;
+  /** The plan's limit on the metric. */
+  readonly limit: number;
+  /** What was used when the unit was held, the held unit not counted. */
+  readonly used: number;
+  /** How long Bridge keeps the hold before giving the unit back itself. */
+  readonly expiresInSeconds: number;
+  /** The action happened: the unit counts now. Once only; asking again does nothing. */
+  confirm(): Promise<void>;
+  /** The action did not happen: the unit goes back. Once only; a hold already gone is not an error. */
+  giveBack(): Promise<void>;
+}
+
+export interface HoldOptions {
+  /** The unit's size, a whole number from 1. @default 1 */
+  readonly quantity?: number;
+  /**
+   * What the unit is held for. Holding again for the same decision holds once, so a retried request does not hold
+   * twice: pass the request's own id. 1 to 200 visible characters. @default a new one each time
+   */
+  readonly decision?: string;
+  /** The workspace, for a caller that acts in none. @default the caller's workspace */
+  readonly workspace?: string;
 }
 
 const METRIC = /^[a-z][a-z0-9_]{0,63}(\.[a-z][a-z0-9_]{0,63}){0,3}$/;
@@ -317,7 +348,8 @@ export function createBridgeServer(options: BridgeServerOptions) {
       const endpoints = await discovery.get().catch(() => null);
       if (endpoints === null) return;
       try {
-        await call(fetchFn, endpoints.url(ROUTES.usageReport), { method: 'POST', apiKey: options.appKey ?? null, body: { reports: batch } });
+        const reports = batch.map(({ level: _level, ...report }) => report);
+        await call(fetchFn, endpoints.url(ROUTES.usageReport), { method: 'POST', apiKey: options.appKey ?? null, body: { reports } });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!refusedForGood(error)) {
@@ -355,6 +387,21 @@ export function createBridgeServer(options: BridgeServerOptions) {
     }, options.usageFlushMs ?? 5000);
     // Never keeps a Node process alive on its own.
     (timer as { unref?: () => void }).unref?.();
+  }
+
+  /** The workspace a usage call is for: the one named, or the caller's. */
+  function workspaceFor(actor: Actor, named?: string): string {
+    const workspace = named ?? actor.workspaceId;
+    if (workspace === null) throw new BridgeError('invalid', 'This caller acts in no workspace: name the workspace the usage is for.');
+    if (!WORKSPACE_ID.test(workspace)) throw new BridgeError('invalid', `"${workspace}" is not a workspace id.`);
+    return workspace;
+  }
+
+  /** What a call that holds or reads a limit needs: the app key, the workspace and the endpoints. */
+  async function usageCall(actor: Actor, metric: string, named?: string) {
+    if (options.appKey === undefined || options.appKey === '') throw new BridgeError('misconfigured', 'Holding or reading a limit needs the app key: pass `appKey`.');
+    if (!METRIC.test(metric)) throw new BridgeError('invalid', `"${metric}" is not a metric name: lower case, dot-separated, such as projects.`);
+    return { workspace: workspaceFor(actor, named), endpoints: await discovery.get(), apiKey: options.appKey };
   }
 
   return {
@@ -415,6 +462,84 @@ export function createBridgeServer(options: BridgeServerOptions) {
         if (queue.length >= MAX_BATCH) void flush();
         else schedule();
       },
+      /**
+       * Sets a gauge metric's level for the caller's workspace: how many
+       * exist now (projects, storage), not an amount to add. Queued and sent
+       * like `count`; a level still waiting for the same metric is replaced,
+       * since only the last one matters. For a metric the plan declares as a
+       * gauge; Bridge adds the level up on a counter.
+       */
+      set(actor: Actor, metric: string, level: number, setOptions: { readonly id?: string; readonly workspace?: string } = {}): void {
+        if (options.appKey === undefined || options.appKey === '') throw new BridgeError('misconfigured', 'Setting usage needs the app key: pass `appKey`.');
+        if (!METRIC.test(metric)) throw new BridgeError('invalid', `"${metric}" is not a metric name: lower case, dot-separated, such as projects.`);
+        if (!Number.isFinite(level) || level < 0) throw new BridgeError('invalid', 'The level is a number of 0 or more.');
+        const workspace = workspaceFor(actor, setOptions.workspace);
+        const id = setOptions.id ?? randomId();
+        if (!REPORT_ID.test(id)) throw new BridgeError('invalid', 'A report id is 1 to 200 visible characters, with no spaces.');
+        queue = queue.filter((report) => !(report.level === true && report.metric === metric && report.workspace === workspace));
+        queue.push({ id, metric, quantity: level, workspace, time: new Date().toISOString(), level: true });
+        if (queue.length >= MAX_BATCH) void flush();
+        else schedule();
+      },
+      /**
+       * Holds one unit of a strict limit before an action, so two requests
+       * never get the last unit. Resolves with the hold: `confirm()` when the
+       * action happened, `giveBack()` when it did not. Throws a `BridgeError`
+       * of kind `plan-required` (status 402, code `limit-reached`, with
+       * `error.quota`: the metric, the limit and what is used) when the plan's
+       * limit is reached; `quotaExceededBody(error)` is the 402 body to answer
+       * with. Any other failure (Bridge unreachable) is thrown as it is: the
+       * limit could not be checked, so treat it as refused. A metered limit
+       * is never refused; the overage is billed.
+       */
+      async hold(actor: Actor, metric: string, holdOptions: HoldOptions = {}): Promise<UsageHold> {
+        const { workspace, endpoints, apiKey } = await usageCall(actor, metric, holdOptions.workspace);
+        const decision = holdOptions.decision ?? randomId();
+        if (!REPORT_ID.test(decision)) throw new BridgeError('invalid', 'A decision is 1 to 200 visible characters, with no spaces.');
+        const quantity = holdOptions.quantity ?? 1;
+        if (!Number.isSafeInteger(quantity) || quantity < 1) throw new BridgeError('invalid', 'The quantity is a whole number from 1.');
+        const answer = await call<{ id: string; limit: number; used: number; expiresInSeconds: number }>(fetchFn, endpoints.url(ROUTES.usageHold), {
+          method: 'POST',
+          apiKey,
+          headers: { 'Bridge-Workspace': workspace },
+          body: { metric, decision, quantity },
+        });
+        const held = answer.body;
+        let done: Promise<void> | null = null;
+        const finish = (route: typeof ROUTES.usageHoldConfirm | typeof ROUTES.usageHoldGiveBack, goneIsFine: boolean): Promise<void> => {
+          done ??= call(fetchFn, endpoints.url(route, { holdId: held.id }), { method: route.method, apiKey, headers: { 'Bridge-Workspace': workspace } }).then(
+            () => undefined,
+            (error: unknown) => {
+              if (goneIsFine && error instanceof BridgeError && error.status === 404) return;
+              // Not finished: asking again may work.
+              done = null;
+              throw error;
+            },
+          );
+          return done;
+        };
+        return {
+          id: held.id,
+          metric,
+          limit: held.limit,
+          used: held.used,
+          expiresInSeconds: held.expiresInSeconds,
+          confirm: () => finish(ROUTES.usageHoldConfirm, false),
+          giveBack: () => finish(ROUTES.usageHoldGiveBack, true),
+        };
+      },
+      /**
+       * A metric's quota for the caller's workspace, read now: what is used
+       * (open holds not counted), the limit, the policy (`hard` or `metered`)
+       * and the warning level. Null when the plan sets no limit on the
+       * metric. Needs the app key. Throws when Bridge cannot answer: a check
+       * that could not be made is not a yes.
+       */
+      async quota(actor: Actor, metric: string, quotaOptions: { readonly workspace?: string } = {}): Promise<QuotaSnapshot | null> {
+        const { workspace, endpoints, apiKey } = await usageCall(actor, metric, quotaOptions.workspace);
+        const answer = await call<QuotaRead | null | undefined>(fetchFn, endpoints.url(ROUTES.usageQuota, { metric }), { method: 'GET', apiKey, headers: { 'Bridge-Workspace': workspace } });
+        return snapshotOf(metric, answer.body) ?? null;
+      },
       /** Sends what is counted now. Call it before a short-lived process ends. */
       flush,
       /** How many reports wait to be sent. */
@@ -437,4 +562,7 @@ export type BridgeServer = ReturnType<typeof createBridgeServer>;
 export { BridgeError, isBridgeError } from '../core/errors.js';
 export type { BridgeErrorKind } from '../core/errors.js';
 export { FlagSet } from '../flags.js';
+export { DEFAULT_MANAGE_ROUTE, ENTITLEMENT_FLAG_PREFIX, entitlementFlag, isLimitReached, quotaExceededBody } from '../quota.js';
+export type { QuotaExceededBody, QuotaSnapshot } from '../quota.js';
+export type { LimitReached } from '../core/errors.js';
 export type { FlagReason, FlagResult, Hint } from '../flags.js';

@@ -165,8 +165,13 @@ export const ROUTES = {
   payerRefresh: route('POST', 'billing', '/payer/refresh'),
   checkoutConfirm: route('POST', 'billing', '/payer/checkouts/{session}/confirm'),
   portal: route('GET', 'billing', '/payer/portal'),
-  // The app's server: "count this".
+  // The app's server: "count this", and strict limits (hold a unit before an action, confirm it, or give it back).
   usageReport: route('POST', 'billing', '/usage'),
+  usageHold: route('POST', 'billing', '/usage/holds'),
+  usageHoldConfirm: route('POST', 'billing', '/usage/holds/{holdId}/confirm'),
+  usageHoldGiveBack: route('DELETE', 'billing', '/usage/holds/{holdId}'),
+  // One metric's quota: the signed-in person's workspace, or the app's server naming the workspace.
+  usageQuota: route('GET', 'billing', '/usage/quota/{metric}'),
 
   // Flags, over OFREP: results only, never rules.
   flagsEvaluate: route('POST', 'flags', '/ofrep/v1/evaluate/flags'),

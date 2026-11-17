@@ -2,8 +2,14 @@
 
 ## [1.0.0-alpha.10] - Unreleased
 
+### Added
+
+- **Plan limits and plan features, as in 0.9.** `bridge.quota(metric)` and `bridge.quotas` (a `QuotaStore`: `get`, `getAll`, `subscribe`, `ensureHydrated`, `read`, `refresh`) give the same snapshot the 0.9 plugins read (`used`, `limit`, `remaining`, `percent_used`, `policy`, `kind`, `source`, `warningLevel`, and a metered limit's price and overage), read from `GET /usage/quota/:metric`. They are read again on the workspace's `billing.quota_updated` and `billing.access_changed` notices, which carry no numbers. `bridge.entitlements.can(key)`, `all()` and `subscribe()` are the flags `bridge:billing.entitlement.<key>`; the plan is never read.
+- **On the server:** `usage.set(actor, metric, level)` (a gauge), `usage.hold(actor, metric, { decision, quantity })` for strict limits (the hold has `confirm()` and `giveBack()`), and `usage.quota(actor, metric)`. A limit that is reached is a `plan-required` error with `code: 'limit-reached'` and `error.quota` (`metric`, `limit`, `used`); `quotaExceededBody(error)` is the 402 `QUOTA_EXCEEDED` body the 0.9 plugins answered with. `entitlementFlag(key)` names a plan feature's flag.
+
 ### Changed
 
+- A `billing.quota_updated` notice no longer fetches flags again; other `billing.*` notices still do.
 - **A person's write is refused when their workspace is not active or is locked for payment.** On the server, `check` and `verify` take the request's method (from the request, or `{ method }`). For a write by a signed-in person: a standing other than `active` refuses with 403 (`workspace-not-active`), a `bridge-workspace-paid` result of false refuses with 402 (`billing-locked`), and a missing result or flag results that cannot be fetched refuse with 503. Reads are never refused for this, and keys are unchanged. `check` hands back the flag results it read as `flags`, so a gate on the same request need not ask again. Needs a Bridge server that answers `bridge-workspace-active` and `bridge-workspace-paid`; until it does, a person's writes are refused with 503.
 
 ### Fixed

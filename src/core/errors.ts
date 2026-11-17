@@ -75,7 +75,15 @@ export interface BridgeErrorInit {
   readonly entitlement?: string | null;
   readonly step?: string | null;
   readonly problem?: Problem | null;
+  readonly quota?: LimitReached | null;
   readonly cause?: unknown;
+}
+
+/** What a refused hold says about the plan's limit: the metric, the limit and how much of it is used. */
+export interface LimitReached {
+  readonly metric: string;
+  readonly limit: number;
+  readonly used: number;
 }
 
 export class BridgeError extends Error {
@@ -91,6 +99,8 @@ export class BridgeError extends Error {
   /** For `unsupported-step`: the step sign-in asked for. */
   readonly step: string | null;
   readonly problem: Problem | null;
+  /** For a refusal because the plan's limit is reached (`limit-reached`): the metric, the limit and what is used. */
+  readonly quota: LimitReached | null;
 
   constructor(kind: BridgeErrorKind, message: string, init: BridgeErrorInit = {}) {
     super(message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -101,6 +111,7 @@ export class BridgeError extends Error {
     this.entitlement = init.entitlement ?? null;
     this.step = init.step ?? null;
     this.problem = init.problem ?? null;
+    this.quota = init.quota ?? null;
   }
 }
 
@@ -214,5 +225,9 @@ export function errorFromAnswer(status: number, body: unknown, headers?: { get(n
     (typeof record['message'] === 'string' ? record['message'] : Array.isArray(record['message']) ? record['message'].join(' ') : undefined) ??
     `Bridge answered ${String(status)}.`;
   const entitlement = text(record['entitlement']) ?? null;
-  return new BridgeError(kind, message, { status, code, retryAfterSeconds, entitlement, problem });
+  const limit = record['limit'];
+  const used = record['used'];
+  const quota: LimitReached | null =
+    code === 'limit-reached' && text(record['metric']) !== undefined && typeof limit === 'number' && typeof used === 'number' ? { metric: text(record['metric'])!, limit, used } : null;
+  return new BridgeError(kind, message, { status, code, retryAfterSeconds, entitlement, problem, quota });
 }
