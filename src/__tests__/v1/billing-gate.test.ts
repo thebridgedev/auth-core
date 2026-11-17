@@ -1,0 +1,220 @@
+import { describe, expect, it } from 'vitest';
+import { BillingLockedError, deriveNoticeState, deriveSeverity, isBillingLocked } from '../../billing-gate.js';
+import type { BillingFacts } from '../../billing.js';
+import { BridgeError, isBridgeError } from '../../core/errors.js';
+import type { QuotaRead } from '../../quota.js';
+import type { QuotaUpdatedMessage } from '../../quota-events.js';
+import { clientOn, flush, issuerWithPeople, PASSWORD } from './helpers.js';
+
+const WS = '/workspace/';
+const PROJECTS: QuotaRead = { metric: 'projects', used: 4, limit: 5, remaining: 1, warningLevel: 'approaching', policy: 'hard', kind: 'gauge' };
+const SEATS: QuotaRead = { metric: 'api.calls', used: 10, limit: 100, remaining: 90, warningLevel: null, policy: 'metered', kind: 'counter', unitAmount: 0.01, currency: 'usd', overageEstimate: 0, overcap: false };
+
+async function until(condition: () => boolean, timeoutMs = 2000): Promise<void> {
+  const started = Date.now();
+  while (!condition()) {
+    if (Date.now() - started > timeoutMs) throw new Error('timed out waiting');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+async function signedIn(options: { live?: boolean; facts?: Record<string, unknown> } = {}) {
+  const { fake } = issuerWithPeople();
+  if (options.facts !== undefined) fake.setFacts(options.facts);
+  fake.setQuota('projects', PROJECTS);
+  fake.setQuota('api.calls', SEATS);
+  const client = clientOn(fake, options.live === true ? { live: { websocket: fake.websocket as never } } : {});
+  await client.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+  return { fake, client };
+}
+
+const notice = (fake: ReturnType<typeof issuerWithPeople>['fake'], type: string) =>
+  fake.publish(`${WS}${fake.appId}/ws-acme/1`, { type, record: 'payers/ws-acme', workspace: 'ws-acme' });
+
+describe('billing lock: isLocked, gateState, assertNotLocked', () => {
+  it('is not locked, and assertNotLocked passes, while nobody is signed in or the state is not known', () => {
+    const { fake } = issuerWithPeople();
+    const client = clientOn(fake);
+    expect(client.isLocked()).toBe(false);
+    expect(client.gateState()).toEqual({ locked: false, severity: 'info', noticeState: 'active' });
+    expect(() => client.assertNotLocked()).not.toThrow();
+  });
+
+  it('reads the lock when the person signs in: a blocked workspace is locked with severity locked and a recovery address', async () => {
+    const { client } = await signedIn({ facts: { plan: { key: 'pro', name: 'Pro' }, status: 'past_due', access: 'blocked' } });
+    await until(() => client.isLocked());
+    expect(client.gateState()).toEqual({ locked: true, severity: 'locked', noticeState: 'dunning_exhausted', recoveryUrl: '/subscription' });
+  });
+
+  it('assertNotLocked throws a BillingLockedError (402) carrying the lock payload', async () => {
+    const { client } = await signedIn({ facts: { plan: { key: 'pro', name: 'Pro' }, status: 'past_due', access: 'blocked' } });
+    await until(() => client.isLocked());
+    let thrown: unknown;
+    try {
+      client.assertNotLocked();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(BillingLockedError);
+    expect(thrown).toBeInstanceOf(BridgeError);
+    const error = thrown as BillingLockedError;
+    expect(error.name).toBe('BillingLockedError');
+    expect(error.status).toBe(402);
+    expect(error.kind).toBe('plan-required');
+    expect(error.payload).toEqual({ reason: 'billing_locked', billing: { status: 'past_due', gateEngaged: true, recoveryUrl: '/subscription' } });
+    expect(isBillingLocked(error)).toBe(true);
+    expect(isBillingLocked(new BridgeError('plan-required', 'x', { status: 402, code: 'limit-reached' }))).toBe(false);
+    expect(isBillingLocked(new BridgeError('plan-required', 'x', { status: 402, code: 'billing-locked' }))).toBe(true);
+    expect(isBridgeError(error, 'plan-required')).toBe(true);
+  });
+
+  it('a payment that is due or a plan to pick is a notice, not a lock', async () => {
+    const { client } = await signedIn({ facts: { plan: { key: 'pro', name: 'Pro' }, status: 'past_due', access: 'payment_due' } });
+    await until(() => client.gateState().noticeState === 'past_due');
+    expect(client.isLocked()).toBe(false);
+    expect(client.gateState()).toEqual({ locked: false, severity: 'warn', noticeState: 'past_due' });
+    expect(() => client.assertNotLocked()).not.toThrow();
+  });
+
+  it('follows billing.access_changed: locks and unlocks, and tells gate-changed', async () => {
+    const { fake, client } = await signedIn({ live: true, facts: { plan: { key: 'pro', name: 'Pro' }, status: 'active', access: 'ok' } });
+    await until(() => client.live.status.get() === 'open');
+    const heard: boolean[] = [];
+    client.on('gate-changed', (state) => heard.push(state.locked));
+    await flush();
+    expect(client.isLocked()).toBe(false);
+    fake.setFacts({ status: 'past_due', access: 'blocked' });
+    notice(fake, 'billing.access_changed');
+    await until(() => client.isLocked());
+    expect(() => client.assertNotLocked()).toThrow(BillingLockedError);
+    fake.setFacts({ status: 'active', access: 'ok' });
+    notice(fake, 'billing.access_changed');
+    await until(() => !client.isLocked());
+    expect(() => client.assertNotLocked()).not.toThrow();
+    expect(heard).toEqual([true, false]);
+  });
+
+  it('does not read billing again for a quota notice', async () => {
+    const { fake, client } = await signedIn({ live: true, facts: { access: 'ok', status: 'active' } });
+    await until(() => client.live.status.get() === 'open');
+    await flush();
+    const reads = () => fake.requests.filter((request) => request.path === '/v2/billing/payer').length;
+    const before = reads();
+    notice(fake, 'billing.quota_updated');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(reads()).toBe(before);
+  });
+
+  it('forgets the lock on sign-out and is not locked for the next person', async () => {
+    const { client } = await signedIn({ facts: { status: 'past_due', access: 'blocked' } });
+    await until(() => client.isLocked());
+    await client.signOut();
+    expect(client.isLocked()).toBe(false);
+    expect(client.gateState().noticeState).toBe('active');
+  });
+
+  it('reads again after the plan is changed through bridge.billing', async () => {
+    const { fake, client } = await signedIn({ facts: { status: 'past_due', access: 'blocked' } });
+    await until(() => client.isLocked());
+    fake.setPlans([{ key: 'free', name: 'Free', free: true, archived: false, prices: [], features: [], limits: {}, trial: null, description: null }]);
+    await client.billing.choosePlan({ plan: 'free' });
+    await until(() => !client.isLocked());
+  });
+});
+
+describe('notice and severity states', () => {
+  const base: BillingFacts = { plan: { key: 'pro', name: 'Pro' }, status: 'active', access: 'ok', limits: {}, usage: {}, periodStart: null, periodEnd: null, trialEnd: null, cancelAtPeriodEnd: false, waiting: null, locked: false };
+  const now = Date.parse('2026-01-10T00:00:00Z');
+  it('maps the facts to the 0.9 notice states and severities', () => {
+    expect(deriveNoticeState(null)).toBe('active');
+    expect(deriveNoticeState({ ...base, access: 'blocked' })).toBe('dunning_exhausted');
+    expect(deriveNoticeState({ ...base, status: 'canceled' })).toBe('canceled');
+    expect(deriveNoticeState({ ...base, cancelAtPeriodEnd: true })).toBe('cancel_at_period_end');
+    expect(deriveNoticeState({ ...base, status: 'past_due', access: 'payment_due' })).toBe('past_due');
+    expect(deriveNoticeState({ ...base, status: 'trialing', access: 'payment_due' })).toBe('past_due_trial');
+    expect(deriveNoticeState({ ...base, status: 'trialing', trialEnd: '2026-01-12T00:00:00Z' }, now)).toBe('trial_ending_soon');
+    expect(deriveNoticeState({ ...base, status: 'trialing', trialEnd: '2026-02-12T00:00:00Z' }, now)).toBe('trial_active');
+    expect(deriveNoticeState({ ...base, status: 'trialing', trialEnd: null }, now)).toBe('trial_active');
+    expect(deriveSeverity('dunning_exhausted')).toBe('locked');
+    expect(deriveSeverity('trial_ending_soon')).toBe('warn');
+    expect(deriveSeverity('active')).toBe('info');
+  });
+});
+
+describe("handle({ 'quota.updated': fn })", () => {
+  it('fires on billing.quota_updated with the numbers read again, in the 0.9 message shape', async () => {
+    const { fake, client } = await signedIn({ live: true });
+    await until(() => client.live.status.get() === 'open');
+    await client.quotas.read('projects');
+    const heard: QuotaUpdatedMessage[] = [];
+    client.handle({ 'quota.updated': (message) => heard.push(message) });
+    fake.setQuota('projects', { ...PROJECTS, used: 5, remaining: 0, warningLevel: 'critical' });
+    notice(fake, 'billing.quota_updated');
+    await until(() => heard.length === 1);
+    const message = heard[0]!;
+    expect(message).toMatchObject({ kind: 'quota.updated', tenantId: 'ws-acme', metric: 'projects', used: 5, limit: 5, remaining: 0, warningLevel: 'critical', policy: 'hard', overcap: false });
+    expect(Number.isNaN(Date.parse(message.effectiveAt))).toBe(false);
+  });
+
+  it('fires once per metric that changed, and not for one that did not', async () => {
+    const { fake, client } = await signedIn({ live: true });
+    await until(() => client.live.status.get() === 'open');
+    await client.quotas.read('projects');
+    await client.quotas.read('api.calls');
+    const heard: string[] = [];
+    client.handle({ 'quota.updated': (message) => heard.push(`${message.metric}:${message.used}`) });
+    fake.setQuota('api.calls', { ...SEATS, used: 150, remaining: -50, overcap: true, overageEstimate: 0.5 });
+    notice(fake, 'billing.quota_updated');
+    await until(() => heard.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(heard).toEqual(['api.calls:150']);
+    notice(fake, 'billing.quota_updated');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(heard).toEqual(['api.calls:150']);
+  });
+
+  it('carries the metered price and overage in the message', async () => {
+    const { fake, client } = await signedIn({ live: true });
+    await until(() => client.live.status.get() === 'open');
+    await client.quotas.read('api.calls');
+    const heard: QuotaUpdatedMessage[] = [];
+    client.handle({ 'quota.updated': (message) => heard.push(message) });
+    fake.setQuota('api.calls', { ...SEATS, used: 150, remaining: -50, overcap: true, overageEstimate: 0.5 });
+    notice(fake, 'billing.quota_updated');
+    await until(() => heard.length === 1);
+    expect(heard[0]).toMatchObject({ policy: 'metered', unitAmount: 0.01, currency: 'usd', overageEstimate: 0.5, overcap: true });
+  });
+
+  it('does not fire for a first read, for a change told by another notice, or after the handlers are removed', async () => {
+    const { fake, client } = await signedIn({ live: true });
+    await until(() => client.live.status.get() === 'open');
+    const heard: string[] = [];
+    const off = client.handle({ 'quota.updated': (message) => heard.push(message.metric) });
+    await client.quotas.read('projects');
+    fake.setQuota('projects', { ...PROJECTS, limit: 50, remaining: 46 });
+    notice(fake, 'billing.access_changed');
+    await until(() => client.quotas.get('projects')?.limit === 50);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(heard).toEqual([]);
+    off();
+    fake.setQuota('projects', { ...PROJECTS, limit: 50, used: 9, remaining: 41 });
+    notice(fake, 'billing.quota_updated');
+    await until(() => client.quotas.get('projects')?.used === 9);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(heard).toEqual([]);
+  });
+
+  it('a handler that throws does not stop the others or the client', async () => {
+    const { fake, client } = await signedIn({ live: true });
+    await until(() => client.live.status.get() === 'open');
+    await client.quotas.read('projects');
+    const heard: number[] = [];
+    client.handle({ 'quota.updated': () => { throw new Error('mine'); } });
+    client.handle({ 'quota.updated': (message) => heard.push(message.used) });
+    fake.setQuota('projects', { ...PROJECTS, used: 5, remaining: 0 });
+    notice(fake, 'billing.quota_updated');
+    await until(() => heard.length === 1);
+    expect(heard).toEqual([5]);
+    expect(client.quotas.get('projects')?.used).toBe(5);
+  });
+});

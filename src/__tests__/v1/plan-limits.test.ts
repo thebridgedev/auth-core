@@ -44,9 +44,13 @@ describe('entitlements: plan features as flags', () => {
     const { fake, client } = await signedIn();
     fake.setFacts({ plan: { key: 'pro', name: 'Pro' }, status: 'active', access: 'ok', features: { ai_completions: true } });
     fake.setFlags({ 'bridge:billing.entitlement.ai_completions': false });
+    // The lock for payment reads the payer once at sign-in; loading flags never reads it.
+    await flush();
+    const payerReads = () => fake.requests.filter((request) => request.path.startsWith('/v2/billing/payer')).length;
+    const before = payerReads();
     await client.flags.load();
     expect(client.entitlements.can('ai_completions')).toBe(false);
-    expect(fake.requests.some((request) => request.path.startsWith('/v2/billing/payer'))).toBe(false);
+    expect(payerReads()).toBe(before);
   });
 
   it('is off before sign-in, and tells subscribers when the results change', async () => {
