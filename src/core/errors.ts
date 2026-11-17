@@ -12,6 +12,8 @@
  */
 
 /** What went wrong, in one word. */
+import type { BillingStatus } from '../billing.js';
+
 export type BridgeErrorKind =
   /** The email or password is wrong, or the address has no account. Bridge never says which. */
   | 'wrong-credentials'
@@ -113,6 +115,40 @@ export class BridgeError extends Error {
     this.problem = init.problem ?? null;
     this.quota = init.quota ?? null;
   }
+}
+
+/** What a lock says: the billing status it was found in, and where to recover. */
+export interface BillingLockedPayload {
+  readonly reason: 'billing_locked';
+  readonly billing: {
+    readonly status: BillingStatus;
+    readonly gateEngaged: boolean;
+    readonly recoveryUrl?: string;
+  };
+}
+
+/** Where a locked workspace is sent to pay and come back, unless Bridge says another. */
+const LOCK_RECOVERY_URL = '/subscription';
+
+/**
+ * The refusal of a change in a workspace locked for payment (402), as 0.9 threw it: `code` is `BILLING_GATE_ENGAGED`
+ * and `payload` says the status and where to recover. `reason` is what Bridge itself calls the refusal
+ * (`billing-locked`), for code that matches on Bridge's own codes. This is also what `assertNotLocked()` throws.
+ */
+export class BillingLockedError extends BridgeError {
+  readonly payload: BillingLockedPayload;
+  /** Bridge's own name for this refusal. */
+  readonly reason = 'billing-locked' as const;
+  constructor(payload: BillingLockedPayload, init: BridgeErrorInit = {}) {
+    super('plan-required', 'Billing gate engaged — workspace access is locked', { ...init, status: 402, code: 'BILLING_GATE_ENGAGED' });
+    (this as { name: string }).name = 'BillingLockedError';
+    this.payload = payload;
+  }
+}
+
+/** True for a refusal because the workspace is locked for payment: a {@link BillingLockedError} or Bridge's own 402 `billing-locked`. */
+export function isBillingLocked(error: unknown): boolean {
+  return isBridgeError(error) && error.status === 402 && (error.code === 'BILLING_GATE_ENGAGED' || error.code === 'billing-locked');
 }
 
 export function isBridgeError(value: unknown, kind?: BridgeErrorKind): value is BridgeError {
@@ -224,6 +260,14 @@ export function errorFromAnswer(status: number, body: unknown, headers?: { get(n
     text(record['title']) ??
     (typeof record['message'] === 'string' ? record['message'] : Array.isArray(record['message']) ? record['message'].join(' ') : undefined) ??
     `Bridge answered ${String(status)}.`;
+  if (status === 402 && (code === 'billing-locked' || record['reason'] === 'billing_locked')) {
+    const billing = record['billing'] !== null && typeof record['billing'] === 'object' ? (record['billing'] as Record<string, unknown>) : {};
+    const lockedStatus = text(billing['status']);
+    return new BillingLockedError(
+      { reason: 'billing_locked', billing: { status: (lockedStatus ?? 'past_due') as BillingStatus, gateEngaged: true, recoveryUrl: text(billing['recoveryUrl']) ?? LOCK_RECOVERY_URL } },
+      { problem, retryAfterSeconds },
+    );
+  }
   const entitlement = text(record['entitlement']) ?? null;
   const limit = record['limit'];
   const used = record['used'];

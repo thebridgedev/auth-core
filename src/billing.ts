@@ -52,6 +52,18 @@ export interface BillingFacts {
   readonly [field: string]: unknown;
 }
 
+/**
+ * Whether the workspace is locked for payment, as every person of it may read it (`GET /payer/gate`): the gate and
+ * nothing of the payment. `access` is `payment_due` while a payment is overdue, before the lock.
+ */
+export interface BillingGateFacts {
+  readonly locked: boolean;
+  readonly access: BillingAccess;
+  readonly status: BillingStatus;
+  readonly cancelAtPeriodEnd: boolean;
+  readonly trialEnd: string | null;
+}
+
 export interface UsageNumbers {
   readonly periodStart: string;
   readonly periodEnd: string;
@@ -128,6 +140,8 @@ export function createBilling(deps: BillingDeps) {
     plans: () => send<Plan[]>(ROUTES.plans),
     /** The workspace's billing facts. */
     state: () => send<BillingFacts>(ROUTES.payer),
+    /** Whether the workspace is locked for payment: open to every person of it, whatever their role. */
+    gate: () => send<BillingGateFacts>(ROUTES.payerGate),
     /** This period's usage of each metric, with its limit. */
     usage: () => send<UsageNumbers>(ROUTES.payerUsage),
     /**

@@ -157,6 +157,8 @@ export const ROUTES = {
   // Billing: the payer, the signed-in person's workspace.
   plans: route('GET', 'billing', '/plans'),
   payer: route('GET', 'billing', '/payer'),
+  // Whether the workspace is locked for payment: any person of it, whatever their role.
+  payerGate: route('GET', 'billing', '/payer/gate'),
   payerUsage: route('GET', 'billing', '/payer/usage'),
   payerPlan: route('POST', 'billing', '/payer/plan'),
   payerTrial: route('POST', 'billing', '/payer/trial'),

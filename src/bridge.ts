@@ -1,6 +1,6 @@
 import { createAccounts } from './accounts.js';
 import { createBilling } from './billing.js';
-import { BillingGate, type BillingGateState } from './billing-gate.js';
+import { BillingGate, watchLock, type BillingGateState } from './billing-gate.js';
 import { Discovery, type DiscoveryOptions, type Endpoints, type IssuerMetadata } from './core/discovery.js';
 import { BridgeError } from './core/errors.js';
 import { platformFetch, type Fetch } from './core/http.js';
@@ -146,6 +146,8 @@ export function createBridge(options: BridgeOptions) {
     return normalised;
   });
   const onError = (error: unknown) => events.emit('error', error);
+  // A 402 for a workspace locked for payment, caught anywhere the SDK or `bridge.fetch` sees one, shows the lock at once.
+  const watchedFetch = watchLock(fetchFn, (status) => gate.markLocked(status));
 
   const session = new Session({
     issuer,
@@ -157,19 +159,19 @@ export function createBridge(options: BridgeOptions) {
     ...(options.locks === undefined ? {} : { locks: options.locks }),
     ...(options.tabChannel === undefined ? {} : { channel: options.tabChannel }),
   });
-  const flags = new Flags({ issuer, endpoints, fetch: fetchFn, storage, session, onError });
+  const flags = new Flags({ issuer, endpoints, fetch: watchedFetch, storage, session, onError });
   const live = new Live({ endpoints, fetch: fetchFn, session, onError }, options.live === false ? { enabled: false } : (options.live ?? {}));
   const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const recheck = createRecheck({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const hosted = createHosted({ issuer, endpoints, fetch: fetchFn, storage: options.signUpStorage ?? storage, session });
-  const accounts = createAccounts({ endpoints, fetch: fetchFn, session });
-  const billing = createBilling({ endpoints, fetch: fetchFn, session, changed: () => {
+  const accounts = createAccounts({ endpoints, fetch: watchedFetch, session });
+  const billing = createBilling({ endpoints, fetch: watchedFetch, session, changed: () => {
     void flags.load();
     void gate.refresh();
   } });
-  const gate: BillingGate = new BillingGate({ state: () => billing.state(), session, onError });
+  const gate: BillingGate = new BillingGate({ state: () => billing.gate(), session, onError });
   gate.subscribe((state) => events.emit('gate-changed', state));
-  const quotas = new QuotaStore({ endpoints, fetch: fetchFn, session, onError });
+  const quotas = new QuotaStore({ endpoints, fetch: watchedFetch, session, onError });
   const quotaEvents = new QuotaEvents(quotas, () => {
     const now = session.state.get();
     return now.status === 'signed-in' ? (now.workspace?.id ?? '') : '';
@@ -269,14 +271,14 @@ export function createBridge(options: BridgeOptions) {
     };
     const retryable = !(typeof ReadableStream !== 'undefined' && init.body instanceof ReadableStream);
     const again = typeof Request !== 'undefined' && input instanceof Request && retryable ? input.clone() : input;
-    const first = await fetchFn(input, withToken(await session.accessToken()));
+    const first = await watchedFetch(input, withToken(await session.accessToken()));
     if (first.status !== 401 || !retryable) return first;
     try {
       await session.refresh({ force: true });
     } catch {
       return first;
     }
-    return fetchFn(again, withToken(await session.accessToken()));
+    return watchedFetch(again, withToken(await session.accessToken()));
   }
 
   return {

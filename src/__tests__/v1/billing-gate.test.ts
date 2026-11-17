@@ -60,6 +60,8 @@ describe('billing lock: isLocked, gateState, assertNotLocked', () => {
     const error = thrown as BillingLockedError;
     expect(error.name).toBe('BillingLockedError');
     expect(error.status).toBe(402);
+    expect(error.code).toBe('BILLING_GATE_ENGAGED');
+    expect(error.reason).toBe('billing-locked');
     expect(error.kind).toBe('plan-required');
     expect(error.payload).toEqual({ reason: 'billing_locked', billing: { status: 'past_due', gateEngaged: true, recoveryUrl: '/subscription' } });
     expect(isBillingLocked(error)).toBe(true);
@@ -98,7 +100,7 @@ describe('billing lock: isLocked, gateState, assertNotLocked', () => {
     const { fake, client } = await signedIn({ live: true, facts: { access: 'ok', status: 'active' } });
     await until(() => client.live.status.get() === 'open');
     await flush();
-    const reads = () => fake.requests.filter((request) => request.path === '/v2/billing/payer').length;
+    const reads = () => fake.requests.filter((request) => request.path === '/v2/billing/payer/gate').length;
     const before = reads();
     notice(fake, 'billing.quota_updated');
     await new Promise((resolve) => setTimeout(resolve, 80));
@@ -119,6 +121,83 @@ describe('billing lock: isLocked, gateState, assertNotLocked', () => {
     fake.setPlans([{ key: 'free', name: 'Free', free: true, archived: false, prices: [], features: [], limits: {}, trial: null, description: null }]);
     await client.billing.choosePlan({ plan: 'free' });
     await until(() => !client.isLocked());
+  });
+});
+
+const LOCKED_402 = { type: 'urn:bridge:problem:billing-locked', title: 'Payment required', status: 402, detail: 'This workspace is locked for payment.', reason: 'billing_locked', billing: { access: 'payment_due' } };
+
+describe('the lock is read by every person, and a caught 402 shows it at once', () => {
+  it('reads the gate from the read open to every person of the workspace, never the payer\'s details', async () => {
+    const { fake, client } = await signedIn({ facts: { status: 'past_due', access: 'blocked', locked: true } });
+    await until(() => client.isLocked());
+    const paths = fake.requests.map((request) => request.path);
+    expect(paths).toContain('/v2/billing/payer/gate');
+    expect(paths).not.toContain('/v2/billing/payer');
+  });
+
+  it('a payment that is overdue before the lock is the past_due notice; the gate never says more than the lock', async () => {
+    const { client } = await signedIn({ facts: { status: 'past_due', access: 'payment_due', plan: { key: 'pro', name: 'Pro' } } });
+    await until(() => client.gateState().noticeState === 'past_due');
+    expect(client.gateState()).toEqual({ locked: false, severity: 'warn', noticeState: 'past_due' });
+  });
+
+  it('a Bridge call refused with 402 billing-locked locks the workspace at once, as 0.9 did, and throws the 0.9 error', async () => {
+    const { fake, client } = await signedIn({ facts: { status: 'active', access: 'ok' } });
+    await flush();
+    expect(client.isLocked()).toBe(false);
+    const heard: boolean[] = [];
+    client.on('gate-changed', (state) => heard.push(state.locked));
+    fake.answerWith('/v2/billing/payer/plan', 402, LOCKED_402);
+    const error = await client.billing.choosePlan({ plan: 'free' }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(BillingLockedError);
+    expect(error).toMatchObject({ status: 402, code: 'BILLING_GATE_ENGAGED', reason: 'billing-locked', kind: 'plan-required' });
+    expect(isBillingLocked(error)).toBe(true);
+    expect(client.isLocked()).toBe(true);
+    expect(client.gateState()).toMatchObject({ locked: true, severity: 'locked', noticeState: 'dunning_exhausted', recoveryUrl: '/subscription' });
+    expect(heard).toEqual([true]);
+    expect(() => client.assertNotLocked()).toThrow(BillingLockedError);
+  });
+
+  it('the Child App\'s own 402 with 0.9\'s billing_locked body, through bridge.fetch, locks too; the answer is handed on whole', async () => {
+    const { fake, client } = await signedIn({ facts: { status: 'active', access: 'ok' } });
+    await flush();
+    fake.answerWith('/v2/billing/payer/usage', 402, { reason: 'billing_locked', billing: { status: 'past_due', gateEngaged: true } });
+    const answer = await client.fetch(`https://bridge.test/v2/billing/payer/usage`);
+    expect(answer.status).toBe(402);
+    expect(await answer.json()).toMatchObject({ reason: 'billing_locked' });
+    expect(client.isLocked()).toBe(true);
+  });
+
+  it('a 402 for a limit, or one that is not JSON, locks nothing', async () => {
+    const { fake, client } = await signedIn({ facts: { status: 'active', access: 'ok' } });
+    await flush();
+    fake.answerWith('/v2/billing/payer/usage', 402, { type: 'urn:bridge:problem:limit-reached', title: 'Limit', status: 402, reason: 'limit_reached', metric: 'projects', limit: 5, used: 5 });
+    expect((await client.fetch(`https://bridge.test/v2/billing/payer/usage`)).status).toBe(402);
+    fake.answerWith('/v2/billing/payer/usage', 402, 'payment required');
+    expect((await client.fetch(`https://bridge.test/v2/billing/payer/usage`)).status).toBe(402);
+    expect(client.isLocked()).toBe(false);
+  });
+
+  it('the read the lock waits on never unlocks a lock a refusal just showed', async () => {
+    const { fake, client } = await signedIn({ facts: { status: 'active', access: 'ok' } });
+    await flush();
+    fake.answerWith('/v2/billing/payer/usage', 402, LOCKED_402);
+    await client.fetch(`https://bridge.test/v2/billing/payer/usage`);
+    expect(client.isLocked()).toBe(true);
+    // Bridge's own notice of a change is what says whether it still holds.
+    fake.answerWith('/v2/billing/payer/usage', null);
+    await client.quotas.refresh();
+    expect(client.isLocked()).toBe(true);
+  });
+
+  it('forgets a lock that was only caught on sign-out', async () => {
+    const { fake, client } = await signedIn({ facts: { status: 'active', access: 'ok' } });
+    await flush();
+    fake.answerWith('/v2/billing/payer/usage', 402, LOCKED_402);
+    await client.fetch(`https://bridge.test/v2/billing/payer/usage`);
+    expect(client.isLocked()).toBe(true);
+    await client.signOut();
+    expect(client.isLocked()).toBe(false);
   });
 });
 

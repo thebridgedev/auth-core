@@ -180,6 +180,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   let flagResults: Record<string, unknown>[] = [];
   let flagsRevision = 1;
   let visitorFlags: Record<string, unknown>[] = [];
+  const forcedAnswers = new Map<string, { status: number; body: unknown }>();
   let facts: Record<string, unknown> = { plan: null, status: 'none', access: 'needs_plan', features: {}, limits: {}, usage: {}, periodStart: null, periodEnd: null, trialEnd: null, cancelAtPeriodEnd: false, waiting: null, locked: false };
   let plans: Record<string, unknown>[] = [];
   const checkouts = new Set<string>();
@@ -681,6 +682,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       sentLinks.push({ to: person.email, purpose: 'magic-link', token });
       return json(202, { next: 'verify_email' });
     }
+    const forced = forcedAnswers.get(path);
+    if (forced !== undefined) return json(forced.status, forced.body);
     const workspaceRequired = () => (session.workspace === null ? problem(403, 'workspace-required', 'Choose a workspace first.') : null);
 
     if (path === '/v2/identity-access/passkeys' && method === 'GET') return json(200, [...passkeys.values()].filter((each) => each.user === person.id).reverse().map(passkeyView));
@@ -756,6 +759,11 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
 
     if (path === '/v2/billing/plans' && method === 'GET') return json(200, plans);
     if (path === '/v2/billing/payer' && method === 'GET') return workspaceRequired() ?? json(200, facts);
+    // The lock is read by every person of the workspace, whatever their role: only the gate, nothing of the payment.
+    if (path === '/v2/billing/payer/gate' && method === 'GET') {
+      const { locked, access, status, cancelAtPeriodEnd, trialEnd } = facts;
+      return workspaceRequired() ?? json(200, { locked, access, status, cancelAtPeriodEnd, trialEnd });
+    }
     if (path === '/v2/billing/payer/usage' && method === 'GET') return json(200, { periodStart: new Date(now()).toISOString(), periodEnd: new Date(now() + 30 * 86_400_000).toISOString(), metrics: [] });
     const quotaRead = path.match(/^\/v2\/billing\/usage\/quota\/([^/]+)$/);
     if (quotaRead !== null && method === 'GET') {
@@ -921,6 +929,11 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     },
     setFacts(given: Record<string, unknown>): void {
       facts = { ...facts, ...given };
+    },
+    /** Answers every call of a path (such as `/v2/billing/payer/plan`) with this status and body, until `null` clears it. */
+    answerWith(path: string, status: number | null, body: unknown = {}): void {
+      if (status === null) forcedAnswers.delete(path);
+      else forcedAnswers.set(path, { status, body });
     },
     usage,
     /** Sets what the quota read answers for a metric (`null`: the plan sets no limit on it). */

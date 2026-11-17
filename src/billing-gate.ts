@@ -1,5 +1,7 @@
-import type { BillingFacts, BillingStatus } from './billing.js';
-import { BridgeError, isBridgeError } from './core/errors.js';
+import type { BillingGateFacts } from './billing.js';
+import { BillingLockedError, errorFromAnswer, isBillingLocked, isBridgeError } from './core/errors.js';
+export { BillingLockedError, isBillingLocked };
+export type { BillingLockedPayload } from './core/errors.js';
 import { DEFAULT_MANAGE_ROUTE } from './quota.js';
 import type { Session } from './session.js';
 
@@ -36,39 +38,10 @@ export interface BillingGateState {
   readonly recoveryUrl?: string;
 }
 
-/** What a lock says: the billing status it was found in, and where to recover. */
-export interface BillingLockedPayload {
-  readonly reason: 'billing_locked';
-  readonly billing: {
-    readonly status: BillingStatus;
-    readonly gateEngaged: boolean;
-    readonly recoveryUrl?: string;
-  };
-}
-
-/**
- * The refusal of a change in a workspace locked for payment (402). Bridge
- * answers a write in such a workspace with `code: 'billing-locked'`; this is
- * also what `assertNotLocked()` throws.
- */
-export class BillingLockedError extends BridgeError {
-  readonly payload: BillingLockedPayload;
-  constructor(payload: BillingLockedPayload) {
-    super('plan-required', 'Billing gate engaged — workspace access is locked', { status: 402, code: 'billing-locked' });
-    (this as { name: string }).name = 'BillingLockedError';
-    this.payload = payload;
-  }
-}
-
-/** True for a refusal because the workspace is locked for payment: a {@link BillingLockedError} or Bridge's 402 `billing-locked`. */
-export function isBillingLocked(error: unknown): boolean {
-  return isBridgeError(error) && error.status === 402 && error.code === 'billing-locked';
-}
-
 const TRIAL_ENDING_DAYS = 3;
 
 /** The notice state for the workspace's facts; the facts are unknown (null) before the first read. */
-export function deriveNoticeState(facts: BillingFacts | null, now = Date.now()): BillingNoticeState {
+export function deriveNoticeState(facts: BillingGateFacts | null, now = Date.now()): BillingNoticeState {
   if (facts === null) return 'active';
   if (facts.access === 'blocked') return 'dunning_exhausted';
   if (facts.status === 'canceled') return 'canceled';
@@ -98,9 +71,29 @@ export function deriveSeverity(state: BillingNoticeState): BillingSeverity {
   return SEVERITY[state];
 }
 
+/**
+ * A fetch that tells `locked` when an answer is Bridge's (or the Child App's own) 402 for a workspace locked for payment,
+ * and hands the answer on untouched. This is how a caught lock shows without a read, as in 0.9.
+ */
+export function watchLock(fetchFn: typeof fetch, locked: (status: BillingGateFacts['status'] | undefined) => void): typeof fetch {
+  return (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const response = await fetchFn(input, init);
+    if (response.status === 402) {
+      try {
+        const body: unknown = JSON.parse(await response.clone().text());
+        const error = errorFromAnswer(402, body);
+        if (isBillingLocked(error)) locked(error instanceof BillingLockedError ? error.payload.billing.status : undefined);
+      } catch {
+        // Not a JSON answer, or not a lock: nothing to tell.
+      }
+    }
+    return response;
+  }) as typeof fetch;
+}
+
 export interface BillingGateDeps {
-  /** Reads the workspace's billing facts (`GET /payer`). */
-  readonly state: () => Promise<BillingFacts>;
+  /** Reads whether the workspace is locked, and why (`GET /payer/gate`): open to every person of the workspace. */
+  readonly state: () => Promise<BillingGateFacts>;
   readonly session: Session;
   readonly onError: (error: unknown) => void;
 }
@@ -108,12 +101,12 @@ export interface BillingGateDeps {
 export type GateListener = (state: BillingGateState) => void;
 
 /**
- * Holds the workspace's billing facts for the lock. Fail-closed the way 0.9
+ * Holds whether the workspace is locked, from the read every person of it may make. Fail-closed the way 0.9
  * was: not locked until Bridge says so. Read again when Bridge says billing
  * changed, and dropped when the person or workspace changes.
  */
 export class BillingGate {
-  private facts: BillingFacts | null = null;
+  private facts: BillingGateFacts | null = null;
   private counter = 0;
   private shown = '';
   private readonly listeners = new Set<GateListener>();
@@ -137,6 +130,19 @@ export class BillingGate {
     return { locked, severity: deriveSeverity(noticeState), noticeState, ...(locked ? { recoveryUrl: DEFAULT_MANAGE_ROUTE } : {}) };
   }
 
+  /**
+   * A Bridge answer or the Child App's own refused a change with 402 because the workspace is locked for payment: show the
+   * lock now, as 0.9 did, without waiting for the next read. The next read of the gate (Bridge's own notice of a change)
+   * says whether it still holds. `status` is the billing status the refusal named, when it did.
+   */
+  markLocked(status?: BillingGateFacts['status']): void {
+    if (this.contextNow() === null) return;
+    // A read already on its way began before the refusal: its answer is older and must not unlock what was just locked.
+    this.counter += 1;
+    this.facts = { locked: true, access: 'blocked', status: status ?? this.facts?.status ?? 'past_due', cancelAtPeriodEnd: this.facts?.cancelAtPeriodEnd ?? false, trialEnd: this.facts?.trialEnd ?? null };
+    this.announce();
+  }
+
   /** Throws a {@link BillingLockedError} when the workspace is locked. */
   assertNotLocked(): void {
     if (this.facts === null || !this.isLocked()) return;
@@ -151,7 +157,7 @@ export class BillingGate {
     };
   }
 
-  /** Reads the facts now. A failed read keeps what is held and is reported, except a person who may not read billing, which leaves the gate open. */
+  /** Reads the gate now. A failed read keeps what is held and is reported. */
   async refresh(renewed = false): Promise<void> {
     const context = this.contextNow();
     if (context === null) return;
