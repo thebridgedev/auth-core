@@ -146,9 +146,15 @@ export class BillingLockedError extends BridgeError {
   }
 }
 
+/** Every name a lock goes by: Bridge's problem type, and the code the 0.9 plugins and Child Apps answered with. */
+const LOCK_NAMES: readonly string[] = ['billing-locked', 'BILLING_GATE_ENGAGED'];
+const PROBLEM_PREFIX = 'urn:bridge:problem:';
+const isLockName = (value: unknown): boolean => typeof value === 'string' && LOCK_NAMES.includes(value.startsWith(PROBLEM_PREFIX) ? value.slice(PROBLEM_PREFIX.length) : value);
+
 /** True for a refusal because the workspace is locked for payment: a {@link BillingLockedError} or Bridge's own 402 `billing-locked`. */
 export function isBillingLocked(error: unknown): boolean {
-  return isBridgeError(error) && error.status === 402 && (error.code === 'BILLING_GATE_ENGAGED' || error.code === 'billing-locked');
+  if (!isBridgeError(error) || error.status !== 402) return false;
+  return isLockName(error.code) || isLockName(error.problem?.type);
 }
 
 export function isBridgeError(value: unknown, kind?: BridgeErrorKind): value is BridgeError {
@@ -260,7 +266,8 @@ export function errorFromAnswer(status: number, body: unknown, headers?: { get(n
     text(record['title']) ??
     (typeof record['message'] === 'string' ? record['message'] : Array.isArray(record['message']) ? record['message'].join(' ') : undefined) ??
     `Bridge answered ${String(status)}.`;
-  if (status === 402 && (code === 'billing-locked' || record['reason'] === 'billing_locked')) {
+  // A lock goes by Bridge's problem type `billing-locked` and by 0.9's code `BILLING_GATE_ENGAGED` (or its `billing_locked` reason).
+  if (status === 402 && (isLockName(type) || isLockName(record['code']) || record['reason'] === 'billing_locked')) {
     const billing = record['billing'] !== null && typeof record['billing'] === 'object' ? (record['billing'] as Record<string, unknown>) : {};
     const lockedStatus = text(billing['status']);
     return new BillingLockedError(

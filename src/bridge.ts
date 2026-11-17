@@ -164,8 +164,8 @@ export function createBridge(options: BridgeOptions) {
   const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const recheck = createRecheck({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const hosted = createHosted({ issuer, endpoints, fetch: fetchFn, storage: options.signUpStorage ?? storage, session });
-  const accounts = createAccounts({ endpoints, fetch: watchedFetch, session });
-  const billing = createBilling({ endpoints, fetch: watchedFetch, session, changed: () => {
+  const accounts = createAccounts({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh() });
+  const billing = createBilling({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh(), changed: () => {
     void flags.load();
     void gate.refresh();
   } });
@@ -273,12 +273,17 @@ export function createBridge(options: BridgeOptions) {
     const again = typeof Request !== 'undefined' && input instanceof Request && retryable ? input.clone() : input;
     const first = await watchedFetch(input, withToken(await session.accessToken()));
     if (first.status !== 401 || !retryable) return first;
+    // Locking a workspace for payment, or lifting the lock, takes back everyone's tokens: renew silently and try once more.
+    // A session that cannot be renewed has ended, as any sign-out does.
     try {
       await session.refresh({ force: true });
     } catch {
       return first;
     }
-    return watchedFetch(again, withToken(await session.accessToken()));
+    const second = await watchedFetch(again, withToken(await session.accessToken()));
+    // The lock may have changed meanwhile: read it again, so the page shows the lockscreen, or goes back to normal.
+    void gate.refresh();
+    return second;
   }
 
   return {

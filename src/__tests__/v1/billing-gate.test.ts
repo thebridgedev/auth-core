@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BillingLockedError, deriveNoticeState, deriveSeverity, isBillingLocked } from '../../billing-gate.js';
 import type { BillingFacts } from '../../billing.js';
-import { BridgeError, isBridgeError } from '../../core/errors.js';
+import { BridgeError, errorFromAnswer, isBridgeError } from '../../core/errors.js';
 import type { QuotaRead } from '../../quota.js';
 import type { QuotaUpdatedMessage } from '../../quota-events.js';
 import { clientOn, flush, issuerWithPeople, PASSWORD } from './helpers.js';
@@ -295,5 +295,103 @@ describe("handle({ 'quota.updated': fn })", () => {
     await until(() => heard.length === 1);
     expect(heard).toEqual([5]);
     expect(client.quotas.get('projects')?.used).toBe(5);
+  });
+});
+
+describe('a lock or unlock takes back the tokens: the open page renews silently and shows the new state', () => {
+  const tokenReads = (fake: ReturnType<typeof issuerWithPeople>['fake']) => fake.requests.filter((request) => request.path === '/token' || request.path.endsWith('/token')).length;
+
+  it('lock: the next call is refused 401, the session renews, the call is made again, and the lockscreen state shows', async () => {
+    const { fake, client } = await signedIn({ facts: { status: 'active', access: 'ok' } });
+    await flush();
+    expect(client.isLocked()).toBe(false);
+    const signedOutEvents: unknown[] = [];
+    client.on('signed-out', (value) => signedOutEvents.push(value));
+    const refreshes = tokenReads(fake);
+    fake.setFacts({ status: 'past_due', access: 'blocked' });
+    fake.refuseTokensSoFar();
+    const answer = await client.fetch('https://bridge.test/v2/billing/payer/usage');
+    expect(answer.status).toBe(200);
+    expect(tokenReads(fake)).toBe(refreshes + 1);
+    await until(() => client.isLocked());
+    expect(client.gateState()).toMatchObject({ locked: true, severity: 'locked', recoveryUrl: '/subscription' });
+    expect(signedOutEvents).toEqual([]);
+    expect(client.session.get().status).toBe('signed-in');
+  });
+
+  it('unlock: the next call is refused 401, the session renews, the call is made again, and the page is unlocked again', async () => {
+    const { fake, client } = await signedIn({ facts: { status: 'past_due', access: 'blocked' } });
+    await until(() => client.isLocked());
+    fake.setFacts({ status: 'active', access: 'ok' });
+    fake.refuseTokensSoFar();
+    const answer = await client.fetch('https://bridge.test/v2/billing/payer/usage');
+    expect(answer.status).toBe(200);
+    await until(() => !client.isLocked());
+    expect(client.gateState()).toEqual({ locked: false, severity: 'info', noticeState: 'active' });
+  });
+
+  it('a call through bridge.me or bridge.billing renews and goes through too, and reads the lock again', async () => {
+    const { fake, client } = await signedIn({ facts: { status: 'active', access: 'ok' } });
+    await flush();
+    fake.setFacts({ status: 'past_due', access: 'blocked' });
+    fake.refuseTokensSoFar();
+    expect(await client.me.get()).toMatchObject({ workspaces: expect.any(Array) });
+    await until(() => client.isLocked());
+    fake.setFacts({ status: 'active', access: 'ok' });
+    fake.refuseTokensSoFar();
+    await client.billing.state();
+    await until(() => !client.isLocked());
+  });
+
+  it('a write that comes back 402 billing-locked after the renewal shows the lockscreen at once', async () => {
+    const { fake, client } = await signedIn({ facts: { status: 'active', access: 'ok' } });
+    await flush();
+    fake.refuseTokensSoFar();
+    fake.answerWith('/v2/billing/payer/usage', 402, LOCKED_402);
+    const answer = await client.fetch('https://bridge.test/v2/billing/payer/usage', { method: 'POST', body: '{}' });
+    expect(answer.status).toBe(402);
+    expect(client.isLocked()).toBe(true);
+  });
+
+  it('when the session cannot be renewed it is a normal sign-out', async () => {
+    const { fake, client } = await signedIn({ facts: { status: 'active', access: 'ok' } });
+    await flush();
+    const ended: unknown[] = [];
+    client.on('signed-out', (value) => ended.push(value));
+    fake.refuseTokensSoFar();
+    for (const each of fake.sessions()) fake.endSession(each.id);
+    const answer = await client.fetch('https://bridge.test/v2/billing/payer/usage');
+    expect(answer.status).toBe(401);
+    expect(client.session.get().status).toBe('signed-out');
+    expect(ended).toHaveLength(1);
+    expect(client.isLocked()).toBe(false);
+  });
+});
+
+describe('the lock goes by Bridge\'s problem type billing-locked and by 0.9\'s code BILLING_GATE_ENGAGED', () => {
+  const lockedBy = (body: unknown) => isBillingLocked(errorFromAnswer(402, body));
+  it('recognises the problem type, with or without its prefix, and the 0.9 code, in a body or on an error', () => {
+    expect(lockedBy({ type: 'urn:bridge:problem:billing-locked', title: 'x', status: 402 })).toBe(true);
+    expect(lockedBy({ type: 'billing-locked', title: 'x' })).toBe(true);
+    expect(lockedBy({ statusCode: 402, code: 'BILLING_GATE_ENGAGED', message: 'locked' })).toBe(true);
+    expect(lockedBy({ code: 'billing-locked' })).toBe(true);
+    expect(lockedBy({ reason: 'billing_locked' })).toBe(true);
+    expect(errorFromAnswer(402, { code: 'BILLING_GATE_ENGAGED' })).toBeInstanceOf(BillingLockedError);
+    expect(isBillingLocked(new BridgeError('plan-required', 'x', { status: 402, problem: { type: 'urn:bridge:problem:billing-locked' } }))).toBe(true);
+    expect(isBillingLocked(new BridgeError('plan-required', 'x', { status: 402, code: 'billing-locked' }))).toBe(true);
+  });
+
+  it('does not take a limit, a missing feature or another status for a lock', () => {
+    expect(lockedBy({ type: 'urn:bridge:problem:limit-reached', metric: 'projects', limit: 5, used: 5 })).toBe(false);
+    expect(lockedBy({ code: 'QUOTA_EXCEEDED' })).toBe(false);
+    expect(isBillingLocked(errorFromAnswer(403, { type: 'urn:bridge:problem:billing-locked' }))).toBe(false);
+  });
+
+  it('the Child App\'s own 402 with the 0.9 code locks through bridge.fetch', async () => {
+    const { fake, client } = await signedIn({ facts: { status: 'active', access: 'ok' } });
+    await flush();
+    fake.answerWith('/v2/billing/payer/usage', 402, { statusCode: 402, code: 'BILLING_GATE_ENGAGED', message: 'Billing gate engaged' });
+    await client.fetch('https://bridge.test/v2/billing/payer/usage');
+    expect(client.isLocked()).toBe(true);
   });
 });
