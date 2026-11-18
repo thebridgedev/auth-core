@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.0-alpha.12] - Unreleased
+
+### Fixed
+
+- **A locked workspace is read after the lock even while Bridge still refuses the new token.** Bridge refuses tokens issued before a lock for a moment. The session now renews at once, and while the renewed token is still refused it renews again after 1, 2 and 4 seconds, then gives up; before, it renewed once, so the lock read failed and the page never learned it was locked. `BillingGate.refresh` no longer renews on its own. The fake issuer (`/testing`) has `refuseTokensFor(ms)`.
+
 ## [1.0.0-alpha.11] - Unreleased
 
 ### Added
