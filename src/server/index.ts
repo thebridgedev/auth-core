@@ -67,6 +67,8 @@ export interface BridgeServerOptions {
   readonly revocationIntervalMs?: number;
   /** How often counted usage is sent. @default 5000 */
   readonly usageFlushMs?: number;
+  /** How long `flags.forVisitor` keeps an answer for the same hints, so a busy public route does not ask Bridge each time. 0 asks every time. @default 10000 */
+  readonly visitorFlagsTtlMs?: number;
   /** The most reports kept while Bridge cannot take them; past it, the oldest are dropped and logged. @default 10000 */
   readonly maxQueuedReports?: number;
   /**
@@ -380,6 +382,33 @@ export function createBridgeServer(options: BridgeServerOptions) {
     return new FlagSet(resultsOf(answer.body));
   }
 
+  // Flags for a caller who is not signed in: what Bridge shows a visitor, kept briefly per hints.
+  const visitorTtlMs = options.visitorFlagsTtlMs ?? 10_000;
+  const visitorAnswers = new Map<string, { until: number; answer: Promise<FlagSet> }>();
+  const MAX_VISITOR_ANSWERS = 50;
+
+  function readVisitorFlags(hints: Readonly<Record<string, Hint>>): Promise<FlagSet> {
+    const cacheKey = JSON.stringify(Object.entries(hints).sort(([a], [b]) => (a < b ? -1 : 1)));
+    const now = Date.now();
+    const kept = visitorAnswers.get(cacheKey);
+    if (kept !== undefined && kept.until > now) return kept.answer;
+    const answer = (async (): Promise<FlagSet> => {
+      const endpoints = await discovery.get();
+      if (!endpoints.offers(ROUTES.flagsVisitorEvaluate)) throw new BridgeError('not-offered', "The issuer lists no visitor flags endpoint.");
+      const asked = await call<unknown>(fetchFn, endpoints.url(ROUTES.flagsVisitorEvaluate), { method: 'POST', body: { context: hints } });
+      return new FlagSet(resultsOf(asked.body));
+    })();
+    if (visitorTtlMs > 0) {
+      if (visitorAnswers.size >= MAX_VISITOR_ANSWERS) visitorAnswers.delete(visitorAnswers.keys().next().value as string);
+      visitorAnswers.set(cacheKey, { until: now + visitorTtlMs, answer });
+      // A failed answer is never kept.
+      answer.catch(() => {
+        if (visitorAnswers.get(cacheKey)?.answer === answer) visitorAnswers.delete(cacheKey);
+      });
+    }
+    return answer;
+  }
+
   // Counting usage.
   let queue: UsageReport[] = [];
   let dropped = 0;
@@ -595,6 +624,28 @@ export function createBridgeServer(options: BridgeServerOptions) {
         } catch (error) {
           // Gates fail closed: every flag gives its fallback while Bridge cannot answer.
           options.log?.('Flag results could not be read; every flag gives its fallback.', { error: error instanceof Error ? error.message : String(error) });
+          return new FlagSet();
+        }
+      },
+      /**
+       * The flag results Bridge gives a visitor: a caller who is not signed in
+       * and holds no key, such as the request to a public route. Only flags the
+       * developer marked public are in it; any other flag is as good as absent,
+       * so every gate on it gives its fallback. Bridge decides that, not this
+       * client: no credential is sent, so the app's key never speaks for a
+       * visitor.
+       *
+       * `hints` are facts the server itself knows and passes on; anything the
+       * visitor said about themselves is only a hint to Bridge, never a fact.
+       * An answer is kept for `visitorFlagsTtlMs` per hints. A refusal, or
+       * Bridge not being reachable, gives an empty set: every flag gives its
+       * fallback.
+       */
+      async forVisitor(hints: Readonly<Record<string, Hint>> = {}): Promise<FlagSet> {
+        try {
+          return await readVisitorFlags(hints);
+        } catch (error) {
+          options.log?.('Visitor flag results could not be read; every flag gives its fallback.', { error: error instanceof Error ? error.message : String(error) });
           return new FlagSet();
         }
       },
