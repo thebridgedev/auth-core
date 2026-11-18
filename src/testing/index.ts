@@ -159,6 +159,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   const sessions = new Map<string, Session>();
   const accessTokens = new Map<string, { session: string; user: string; workspace: string | null; exp: number; authTime: number; refused?: true }>();
   const refreshTokens = new Map<string, { session: string; rotatedAt: number | null }>();
+  // Tokens given before this time are refused too: a lock's revocation entry takes effect a little after it is written.
+  let refuseGivenBefore = 0;
   const codes = new Map<string, Code>();
   const flows = new Map<string, { user: string; challenge: string; request?: SignInRequest }>();
   const returns = options.returns ?? [];
@@ -256,7 +258,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       ...(membership === null ? {} : { tid: membership.id, wst: 'active' }),
       email: person.email, email_verified: true,
     });
-    accessTokens.set(access, { session: session.id, user: person.id, workspace: session.workspace, exp: exp * 1000, authTime: session.authTime });
+    accessTokens.set(access, { session: session.id, user: person.id, workspace: session.workspace, exp: exp * 1000, authTime: session.authTime, ...(now() < refuseGivenBefore ? { refused: true as const } : {}) });
     const idToken = fakeJwt('JWT', { iss: issuer, aud: appId, sub: person.id, aid: appId, sid: session.id, email: person.email, email_verified: true, exp });
     const body: Record<string, unknown> = { access_token: access, token_type: 'Bearer', expires_in: accessSeconds, id_token: idToken, ...(membership === null ? {} : { workspace: membership.id }) };
     if (withRefresh) {
@@ -916,6 +918,16 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
      */
     refuseTokensSoFar(): void {
       for (const each of accessTokens.values()) each.refused = true;
+    },
+    /**
+     * Refuses every access token given so far and every one given in the next
+     * `ms`, as Bridge does after a lock: its revocation entry covers tokens
+     * issued until a little after the lock (for clock skew), so a token
+     * renewed at once is refused as well. Refresh tokens keep working.
+     */
+    refuseTokensFor(ms: number): void {
+      for (const each of accessTokens.values()) each.refused = true;
+      refuseGivenBefore = now() + ms;
     },
     /** Sets the signed-in results of every flag: `{ key: value }` or full OFREP results. */
     setFlags(results: Record<string, unknown>, visitor: Record<string, unknown> = {}): void {
