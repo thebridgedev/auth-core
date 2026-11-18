@@ -582,6 +582,8 @@ export function createBridgeServer(options: BridgeServerOptions) {
 
 export type BridgeServer = ReturnType<typeof createBridgeServer>;
 
+export { createBridgeManagement, MANAGEMENT_TIMEOUT_MS } from './management.js';
+export type { BridgeManagement, Change, EventQuery, EventResult, FlagFields, ManagedFlag, ManagementArea, ManagementOptions, ManagementRequest, Revision } from './management.js';
 export { BridgeError, isBridgeError } from '../core/errors.js';
 export type { BridgeErrorKind } from '../core/errors.js';
 export { FlagSet } from '../flags.js';

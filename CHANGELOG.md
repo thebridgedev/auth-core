@@ -4,6 +4,7 @@
 
 ### Added
 
+- **A management client for your server: `createBridgeManagement` (`/server`).** What 0.8's `BridgeManagement` did, on Bridge's new API with your app key: workspaces (also as `tenants`), users, invites, roles and privileges, flags and their segments, plans, events, and the `setupPayments` and `setupCommunication` workflows, with 0.8's method names where the new API allows. `request()` makes any other call on the API. A flag change reads the current revision first, or takes the one you saw (`ifMatch`). `flags.toggle(key, true)` keeps a flag's rule. Plan prices are in minor units. The app's own settings, branding, keys and the setup checklist are not here: they are done in Bridge's dashboard, CLI or assistant server, not with the app's key. It runs on a server only.
 - **Flags for callers with an API key.** On the server, `flags.forRequest(request)` now works for a request that carries an `x-api-key` and no bearer token: it sends the key to Bridge, which evaluates the flags for that key. Rules on the key's privileges (`bridge:privileges`) apply; rules on a role, user or email never match a key. The SDK never reads or checks the key itself. Before, such a request always got an empty set, so every flag gave its fallback.
 - `flags.forRequest(request, hints, { workspace })` names the workspace whose plan an app key's results use (sent as `Bridge-Workspace`). It is sent only with a key and only when you pass it; a workspace that is not your app's is refused by Bridge, and the set comes back empty.
 

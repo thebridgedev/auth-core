@@ -314,6 +314,41 @@ try {
 
 The low-level checker is at `@nebulr-group/bridge-auth-core/verifier`.
 
+### Managing Bridge from your server
+
+`createBridgeManagement` is for your server's own code: provisioning workspaces, inviting people, setting roles and flags, reading events. It calls Bridge's API with your app key and keeps the names of the 0.8 management client.
+
+```ts
+import { createBridgeManagement } from '@nebulr-group/bridge-auth-core/server';
+
+const mgmt = createBridgeManagement({ issuer: process.env.BRIDGE_ISSUER, appKey: process.env.BRIDGE_APP_KEY });
+
+const workspace = await mgmt.workspaces.create({ name: 'Acme', owner: { email: 'ada@acme.test' } }); // 0.8: tenants.create
+await mgmt.users.invite(workspace.id, { email: 'bob@acme.test', role: 'ADMIN' });
+await mgmt.flags.toggle('beta-banner', true);
+const events = await mgmt.events.query({ type: 'accounts.member_added', since: '24h' });
+```
+
+| Area | Calls |
+|---|---|
+| `workspaces` (also `tenants`) | `list`, `get`, `create`, `update`, `delete`, `restore`, `suspend`, `resume`, `setSubscription` |
+| `users` | `list`, `get`, `invite`, `update`, `remove`, `deletionPreview` for one workspace; `find`, `suspend`, `resume` for a person of the app |
+| `invites` | `list`, `send`, `cancel` for one workspace |
+| `roles` | `list`, `create`, `update`, `delete`; `listPrivileges`, `createPrivilege`, `updatePrivilege`, `deletePrivilege` |
+| `flags` | `list`, `get`, `create`, `update`, `toggle`, `delete`, `kill`, `restore`; segments (flag groups): `listSegments`, `createSegment`, `updateSegment`, `deleteSegment`; `export`, `import` |
+| `plans` | `list`, `get`, `create`, `update`, `replace`, `delete`, `archive` |
+| `events` | `query` (as 0.8), `list` (with the cursor for the next page) |
+| `workflows` | `setupPayments`, `setupCommunication` |
+| `request(method, area, path)` | Any other call on Bridge's version 2 API with your key |
+
+What differs from 0.8:
+
+- **Ids are Bridge's new ones.** A flag is named by its key, a plan by its key. `flags.update` and `updateSegment` read the current revision first (Bridge refuses a change made on an old one); name the revision you saw with `{ ifMatch }` to refuse a change someone else made in between. `flags.toggle(key, true)` keeps the flag's rule: a flag with a rule goes to `on-with-rule`, so the audience does not widen to everyone.
+- **Plan prices are in minor units** (1999 is 19.99), one per currency and interval. `workflows.setupPayments` still takes a plan's `price` in whole units, as 0.8 did, and converts it.
+- **`users.invite` adds the person at once and emails them**, as 0.8 did. Use `invites.send` for an invitation the person accepts.
+- **Your app key does what its privileges allow.** A call it may not make is refused (403) by Bridge. Changing the app's own settings and branding, making keys and the setup checklist are done in Bridge's dashboard, with its CLI or through its assistant server, not with the app's own key, so this client has no call for them.
+- **Server only.** It refuses to start in a browser, since it holds the app key.
+
 ## Hosted mode: sign in on Bridge's page
 
 Instead of building sign-in pages, the app can send people to the page Bridge hosts for it and get them back signed in. Register the page in the app's addresses first: its origin as a browser origin, and your return (for example `https://app.example.com/auth/callback`) as a sign-in return. `bridge.metadata().signInPage` is then set.
