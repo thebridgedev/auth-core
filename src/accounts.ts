@@ -1,6 +1,7 @@
 import type { Endpoints } from './core/discovery.js';
 import { call, type Fetch } from './core/http.js';
 import { ROUTES, type Route } from './core/routes.js';
+import { renewing } from './renewal.js';
 import type { Session } from './session.js';
 
 /**
@@ -115,13 +116,21 @@ export interface AccountsDeps {
   readonly endpoints: () => Endpoints;
   readonly fetch: Fetch;
   readonly session: Session;
+  /** Called when a call was refused as signed out and went through after the session was renewed: the lock may have changed. */
+  readonly renewed?: () => void;
 }
 
 export function createAccounts(deps: AccountsDeps) {
   async function send<T>(route: Route, options: { params?: Record<string, string>; query?: Record<string, string | undefined>; body?: unknown } = {}): Promise<T> {
-    const token = await deps.session.accessToken();
-    const url = deps.endpoints().url(route, options.params, options.query);
-    return (await call<T>(deps.fetch, url, { method: route.method, token, ...(options.body === undefined ? {} : { body: options.body }) })).body;
+    return renewing(
+      deps.session,
+      async () => {
+        const token = await deps.session.accessToken();
+        const url = deps.endpoints().url(route, options.params, options.query);
+        return (await call<T>(deps.fetch, url, { method: route.method, token, ...(options.body === undefined ? {} : { body: options.body }) })).body;
+      },
+      deps.renewed,
+    );
   }
   const paging = (page: Page = {}) => ({ limit: page.limit === undefined ? undefined : String(page.limit), after: page.after });
 

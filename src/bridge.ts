@@ -1,13 +1,18 @@
 import { createAccounts } from './accounts.js';
 import { createBilling } from './billing.js';
+import { BillingGate, watchLock, type BillingGateState } from './billing-gate.js';
 import { Discovery, type DiscoveryOptions, type Endpoints, type IssuerMetadata } from './core/discovery.js';
 import { BridgeError } from './core/errors.js';
 import { platformFetch, type Fetch } from './core/http.js';
 import { defaultStorage, type BridgeStorage } from './core/storage.js';
 import { originOf, secureUrl } from './core/urls.js';
 import { Emitter, type Readable } from './core/util.js';
+import { createEntitlements } from './entitlements.js';
 import { Flags } from './flags.js';
+import type { QuotaSnapshot } from './quota.js';
 import { Live, MANY_CHANGED, type LiveNotice, type LiveOptions, type LiveStatus } from './live.js';
+import { QuotaStore } from './quota-store.js';
+import { QuotaEvents, type BillingEventHandlers } from './quota-events.js';
 import { Session, type ChannelLike, type LockManagerLike, type SessionEvents, type SessionState } from './session.js';
 import { browserCeremonies, type WebAuthnCeremonies } from './passkeys.js';
 import { createRecheck } from './recheck.js';
@@ -73,7 +78,15 @@ export type BridgeEvents = SessionEvents & {
   notice: LiveNotice;
   /** The client started: the issuer's metadata is read and any stored session restored. Fires once. */
   ready: { readonly issuer: string };
+  /** The workspace was locked for payment or unlocked, or what the gate says about billing changed: see `gateState()`. */
+  'gate-changed': BillingGateState;
 };
+
+/** Notices after which the quotas a screen shows are read again (the notices carry no numbers); a gap in Live's notices too. */
+/** Notices after which the lock for payment is read again. */
+const GATE_NOTICES = new Set(['billing.access_changed', MANY_CHANGED]);
+
+const QUOTA_NOTICES = new Set(['billing.quota_updated', 'billing.access_changed', MANY_CHANGED]);
 
 /** Notices after which flag results may differ. */
 const FLAG_NOTICES = new Set(['flags.revision_changed', 'accounts.member_updated', 'accounts.workspace_updated', MANY_CHANGED]);
@@ -133,6 +146,8 @@ export function createBridge(options: BridgeOptions) {
     return normalised;
   });
   const onError = (error: unknown) => events.emit('error', error);
+  // A 402 for a workspace locked for payment, caught anywhere the SDK or `bridge.fetch` sees one, shows the lock at once.
+  const watchedFetch = watchLock(fetchFn, (status) => gate.markLocked(status));
 
   const session = new Session({
     issuer,
@@ -144,16 +159,29 @@ export function createBridge(options: BridgeOptions) {
     ...(options.locks === undefined ? {} : { locks: options.locks }),
     ...(options.tabChannel === undefined ? {} : { channel: options.tabChannel }),
   });
-  const flags = new Flags({ issuer, endpoints, fetch: fetchFn, storage, session, onError });
+  const flags = new Flags({ issuer, endpoints, fetch: watchedFetch, storage, session, onError });
   const live = new Live({ endpoints, fetch: fetchFn, session, onError }, options.live === false ? { enabled: false } : (options.live ?? {}));
   const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const recheck = createRecheck({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const hosted = createHosted({ issuer, endpoints, fetch: fetchFn, storage: options.signUpStorage ?? storage, session });
-  const accounts = createAccounts({ endpoints, fetch: fetchFn, session });
-  const billing = createBilling({ endpoints, fetch: fetchFn, session, changed: () => void flags.load() });
+  const accounts = createAccounts({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh() });
+  const billing = createBilling({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh(), changed: () => {
+    void flags.load();
+    void gate.refresh();
+  } });
+  const gate: BillingGate = new BillingGate({ state: () => billing.gate(), session, onError });
+  gate.subscribe((state) => events.emit('gate-changed', state));
+  const quotas = new QuotaStore({ endpoints, fetch: watchedFetch, session, onError });
+  const quotaEvents = new QuotaEvents(quotas, () => {
+    const now = session.state.get();
+    return now.status === 'signed-in' ? (now.workspace?.id ?? '') : '';
+  });
+  const entitlements = createEntitlements(flags);
 
   let started = false;
   const whoChanged = () => {
+    quotas.reset();
+    gate.reset();
     flags.reset();
     void flags.load();
     if (started) void live.start();
@@ -167,7 +195,12 @@ export function createBridge(options: BridgeOptions) {
   live.on('*', (notice) => {
     events.emit('notice', notice);
     // What the workspace may do changed (its plan): the results follow once Bridge's copy of it does, a moment later.
-    if (notice.type.startsWith('billing.')) void flags.reloadAfterChange();
+    // Usage changing (`billing.quota_updated`) moves numbers, not what the plan allows: only the quotas are read again.
+    // A quota_updated notice also tells the handlers registered with `handle` which metrics changed.
+    if (notice.type === 'billing.quota_updated') void quotaEvents.noticed();
+    else if (QUOTA_NOTICES.has(notice.type)) void quotas.refresh();
+    if (GATE_NOTICES.has(notice.type)) void gate.refresh();
+    if (notice.type.startsWith('billing.') && notice.type !== 'billing.quota_updated') void flags.reloadAfterChange();
     else if (FLAG_NOTICES.has(notice.type)) void flags.load();
     // This session was ended elsewhere: find out now rather than at the next refresh.
     if (notice.type === 'identity.signed_out') void session.refresh({ force: true }).catch(() => undefined);
@@ -186,6 +219,8 @@ export function createBridge(options: BridgeOptions) {
       if (options.loadFlags !== false) await flags.load();
       started = true;
       events.emit('ready', { issuer });
+      void quotas.refresh();
+      void gate.refresh();
       void live.start();
     })().finally(() => {
       starting = null;
@@ -236,14 +271,19 @@ export function createBridge(options: BridgeOptions) {
     };
     const retryable = !(typeof ReadableStream !== 'undefined' && init.body instanceof ReadableStream);
     const again = typeof Request !== 'undefined' && input instanceof Request && retryable ? input.clone() : input;
-    const first = await fetchFn(input, withToken(await session.accessToken()));
+    const first = await watchedFetch(input, withToken(await session.accessToken()));
     if (first.status !== 401 || !retryable) return first;
+    // Locking a workspace for payment, or lifting the lock, takes back everyone's tokens: renew silently and try once more.
+    // A session that cannot be renewed has ended, as any sign-out does.
     try {
       await session.refresh({ force: true });
     } catch {
       return first;
     }
-    return fetchFn(again, withToken(await session.accessToken()));
+    const second = await watchedFetch(again, withToken(await session.accessToken()));
+    // The lock may have changed meanwhile: read it again, so the page shows the lockscreen, or goes back to normal.
+    void gate.refresh();
+    return second;
   }
 
   return {
@@ -286,6 +326,36 @@ export function createBridge(options: BridgeOptions) {
       ensureStarted,
     ),
     flags,
+    /**
+     * Plan features as the flags `bridge:billing.entitlement.<key>`: `can(key)`
+     * is whether the workspace's plan includes the feature (off until Bridge
+     * says on), `all()` every one Bridge gave a result for.
+     */
+    entitlements,
+    /** The plan limits a screen shows, one snapshot per metric: see `QuotaStore`. */
+    quotas,
+    /**
+     * A metric's quota snapshot: what is used, the limit, the policy and the
+     * warning level. The first call for a metric starts reading it and
+     * returns undefined; `quotas.subscribe` tells when it arrives, and it is
+     * read again when Bridge says usage or the plan changed.
+     */
+    quota: (metric: string): QuotaSnapshot | undefined => quotas.ensureHydrated(metric),
+    /**
+     * True when the workspace is locked for payment (it can be read, not
+     * changed); false until that is known. For disabling write actions early.
+     */
+    isLocked: (): boolean => gate.isLocked(),
+    /** The lock with its severity and notice state, for a custom lock screen. `on('gate-changed')` tells when it changes. */
+    gateState: (): BillingGateState => gate.gateState(),
+    /** Throws a `BillingLockedError` when the workspace is locked for payment. */
+    assertNotLocked: (): void => gate.assertNotLocked(),
+    /**
+     * Runs `handlers['quota.updated']` when a metric's numbers changed, with
+     * the numbers read again (Bridge's notice carries none). Returns how to
+     * remove the handlers.
+     */
+    handle: (handlers: BillingEventHandlers): (() => void) => quotaEvents.handle(handlers),
     live: {
       status: live.status as Readable<LiveStatus>,
       on: (type: string, listener: (notice: LiveNotice) => void) => live.on(type, listener),

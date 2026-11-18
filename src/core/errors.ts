@@ -12,6 +12,8 @@
  */
 
 /** What went wrong, in one word. */
+import type { BillingStatus } from '../billing.js';
+
 export type BridgeErrorKind =
   /** The email or password is wrong, or the address has no account. Bridge never says which. */
   | 'wrong-credentials'
@@ -75,7 +77,15 @@ export interface BridgeErrorInit {
   readonly entitlement?: string | null;
   readonly step?: string | null;
   readonly problem?: Problem | null;
+  readonly quota?: LimitReached | null;
   readonly cause?: unknown;
+}
+
+/** What a refused hold says about the plan's limit: the metric, the limit and how much of it is used. */
+export interface LimitReached {
+  readonly metric: string;
+  readonly limit: number;
+  readonly used: number;
 }
 
 export class BridgeError extends Error {
@@ -91,6 +101,8 @@ export class BridgeError extends Error {
   /** For `unsupported-step`: the step sign-in asked for. */
   readonly step: string | null;
   readonly problem: Problem | null;
+  /** For a refusal because the plan's limit is reached (`limit-reached`): the metric, the limit and what is used. */
+  readonly quota: LimitReached | null;
 
   constructor(kind: BridgeErrorKind, message: string, init: BridgeErrorInit = {}) {
     super(message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -101,7 +113,48 @@ export class BridgeError extends Error {
     this.entitlement = init.entitlement ?? null;
     this.step = init.step ?? null;
     this.problem = init.problem ?? null;
+    this.quota = init.quota ?? null;
   }
+}
+
+/** What a lock says: the billing status it was found in, and where to recover. */
+export interface BillingLockedPayload {
+  readonly reason: 'billing_locked';
+  readonly billing: {
+    readonly status: BillingStatus;
+    readonly gateEngaged: boolean;
+    readonly recoveryUrl?: string;
+  };
+}
+
+/** Where a locked workspace is sent to pay and come back, unless Bridge says another. */
+const LOCK_RECOVERY_URL = '/subscription';
+
+/**
+ * The refusal of a change in a workspace locked for payment (402), as 0.9 threw it: `code` is `BILLING_GATE_ENGAGED`
+ * and `payload` says the status and where to recover. `reason` is what Bridge itself calls the refusal
+ * (`billing-locked`), for code that matches on Bridge's own codes. This is also what `assertNotLocked()` throws.
+ */
+export class BillingLockedError extends BridgeError {
+  readonly payload: BillingLockedPayload;
+  /** Bridge's own name for this refusal. */
+  readonly reason = 'billing-locked' as const;
+  constructor(payload: BillingLockedPayload, init: BridgeErrorInit = {}) {
+    super('plan-required', 'Billing gate engaged — workspace access is locked', { ...init, status: 402, code: 'BILLING_GATE_ENGAGED' });
+    (this as { name: string }).name = 'BillingLockedError';
+    this.payload = payload;
+  }
+}
+
+/** Every name a lock goes by: Bridge's problem type, and the code the 0.9 plugins and Child Apps answered with. */
+const LOCK_NAMES: readonly string[] = ['billing-locked', 'BILLING_GATE_ENGAGED'];
+const PROBLEM_PREFIX = 'urn:bridge:problem:';
+const isLockName = (value: unknown): boolean => typeof value === 'string' && LOCK_NAMES.includes(value.startsWith(PROBLEM_PREFIX) ? value.slice(PROBLEM_PREFIX.length) : value);
+
+/** True for a refusal because the workspace is locked for payment: a {@link BillingLockedError} or Bridge's own 402 `billing-locked`. */
+export function isBillingLocked(error: unknown): boolean {
+  if (!isBridgeError(error) || error.status !== 402) return false;
+  return isLockName(error.code) || isLockName(error.problem?.type);
 }
 
 export function isBridgeError(value: unknown, kind?: BridgeErrorKind): value is BridgeError {
@@ -213,6 +266,19 @@ export function errorFromAnswer(status: number, body: unknown, headers?: { get(n
     text(record['title']) ??
     (typeof record['message'] === 'string' ? record['message'] : Array.isArray(record['message']) ? record['message'].join(' ') : undefined) ??
     `Bridge answered ${String(status)}.`;
+  // A lock goes by Bridge's problem type `billing-locked` and by 0.9's code `BILLING_GATE_ENGAGED` (or its `billing_locked` reason).
+  if (status === 402 && (isLockName(type) || isLockName(record['code']) || record['reason'] === 'billing_locked')) {
+    const billing = record['billing'] !== null && typeof record['billing'] === 'object' ? (record['billing'] as Record<string, unknown>) : {};
+    const lockedStatus = text(billing['status']);
+    return new BillingLockedError(
+      { reason: 'billing_locked', billing: { status: (lockedStatus ?? 'past_due') as BillingStatus, gateEngaged: true, recoveryUrl: text(billing['recoveryUrl']) ?? LOCK_RECOVERY_URL } },
+      { problem, retryAfterSeconds },
+    );
+  }
   const entitlement = text(record['entitlement']) ?? null;
-  return new BridgeError(kind, message, { status, code, retryAfterSeconds, entitlement, problem });
+  const limit = record['limit'];
+  const used = record['used'];
+  const quota: LimitReached | null =
+    code === 'limit-reached' && text(record['metric']) !== undefined && typeof limit === 'number' && typeof used === 'number' ? { metric: text(record['metric'])!, limit, used } : null;
+  return new BridgeError(kind, message, { status, code, retryAfterSeconds, entitlement, problem, quota });
 }

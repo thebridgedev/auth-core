@@ -1,6 +1,7 @@
 import type { Endpoints } from './core/discovery.js';
 import { call, type Fetch } from './core/http.js';
 import { ROUTES, type Route } from './core/routes.js';
+import { renewing } from './renewal.js';
 import type { Session } from './session.js';
 
 /**
@@ -50,6 +51,18 @@ export interface BillingFacts {
   readonly waiting: { readonly plan: string; readonly waitsFor: 'period_end' | 'payment'; readonly at: string | null } | null;
   readonly locked: boolean;
   readonly [field: string]: unknown;
+}
+
+/**
+ * Whether the workspace is locked for payment, as every person of it may read it (`GET /payer/gate`): the gate and
+ * nothing of the payment. `access` is `payment_due` while a payment is overdue, before the lock.
+ */
+export interface BillingGateFacts {
+  readonly locked: boolean;
+  readonly access: BillingAccess;
+  readonly status: BillingStatus;
+  readonly cancelAtPeriodEnd: boolean;
+  readonly trialEnd: string | null;
 }
 
 export interface UsageNumbers {
@@ -110,12 +123,20 @@ export interface BillingDeps {
   readonly session: Session;
   /** Called after anything that may change the facts, so flags whose rules read the plan are fetched again. */
   readonly changed: () => void;
+  /** Called when a call was refused as signed out and went through after the session was renewed: the lock may have changed. */
+  readonly renewed?: () => void;
 }
 
 export function createBilling(deps: BillingDeps) {
-  async function send<T>(route: Route, options: { params?: Record<string, string>; body?: unknown } = {}): Promise<T> {
-    const token = await deps.session.accessToken();
-    return (await call<T>(deps.fetch, deps.endpoints().url(route, options.params), { method: route.method, token, ...(options.body === undefined ? {} : { body: options.body }) })).body;
+  async function send<T>(route: Route, options: { params?: Record<string, string>; body?: unknown } = {}, announce = true): Promise<T> {
+    return renewing(
+      deps.session,
+      async () => {
+        const token = await deps.session.accessToken();
+        return (await call<T>(deps.fetch, deps.endpoints().url(route, options.params), { method: route.method, token, ...(options.body === undefined ? {} : { body: options.body }) })).body;
+      },
+      announce ? deps.renewed : undefined,
+    );
   }
   async function changing<T>(work: Promise<T>): Promise<T> {
     const result = await work;
@@ -128,6 +149,8 @@ export function createBilling(deps: BillingDeps) {
     plans: () => send<Plan[]>(ROUTES.plans),
     /** The workspace's billing facts. */
     state: () => send<BillingFacts>(ROUTES.payer),
+    /** Whether the workspace is locked for payment: open to every person of it, whatever their role. */
+    gate: () => send<BillingGateFacts>(ROUTES.payerGate, {}, false),
     /** This period's usage of each metric, with its limit. */
     usage: () => send<UsageNumbers>(ROUTES.payerUsage),
     /**
