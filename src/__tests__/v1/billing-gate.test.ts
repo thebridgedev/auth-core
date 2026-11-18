@@ -353,6 +353,25 @@ describe('a lock or unlock takes back the tokens: the open page renews silently 
     expect(client.isLocked()).toBe(true);
   });
 
+  it('a lock refuses even a token renewed at once, for a moment: the gate read waits, renews again, and shows the lock', async () => {
+    const { fake, client } = await signedIn({ live: true, facts: { status: 'active', access: 'ok' } });
+    await until(() => client.live.status.get() === 'open');
+    await flush();
+    expect(client.isLocked()).toBe(false);
+    const ended: unknown[] = [];
+    client.on('signed-out', (value) => ended.push(value));
+    const refreshes = tokenReads(fake);
+    fake.setFacts({ status: 'past_due', access: 'blocked' });
+    // Bridge takes back every token issued until a moment after the lock, so the first renewal is refused too.
+    fake.refuseTokensFor(600);
+    notice(fake, 'billing.access_changed');
+    await until(() => client.isLocked(), 5000);
+    expect(client.gateState()).toMatchObject({ locked: true, severity: 'locked', recoveryUrl: '/subscription' });
+    expect(tokenReads(fake)).toBeGreaterThanOrEqual(refreshes + 2);
+    expect(ended).toEqual([]);
+    expect(client.session.get().status).toBe('signed-in');
+  }, 10_000);
+
   it('when the session cannot be renewed it is a normal sign-out', async () => {
     const { fake, client } = await signedIn({ facts: { status: 'active', access: 'ok' } });
     await flush();
