@@ -306,6 +306,7 @@ try {
 - **Keys.** A request with `x-api-key` is checked as a key and becomes the same kind of Actor.
 - **No roles in the Actor.** Gate with flags.
 - **Usage** is counted only from servers. A batch that fails is sent again with the same ids, so nothing is counted twice. A batch The Bridge refuses as malformed is logged and dropped, so it never holds up the rest. While The Bridge cannot be reached, at most `maxQueuedReports` (10,000) wait; past that, the oldest are dropped and logged. Call `bridge.usage.flush()` before a short-lived process ends.
+- **Flags found in code.** With `appKey`, a flag your server reads that The Bridge gave no result for is reported once per process, in the background, so it shows in the dashboard as found in code, switched off, until you set it up.
 - **Start-up.** If the issuer cannot be reached at first, checks answer `unavailable` (503), flags give their fallbacks and usage waits, and the server keeps trying, waiting longer each time. It never needs a restart.
 - **Never in a page.** The server entry holds your app key: a browser build of it fails at once, and `createBridgeServer` refuses to start in a browser with an app key.
 - **Edge runtimes.** `./server` uses only `fetch` and Web Crypto.

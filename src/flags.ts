@@ -89,13 +89,29 @@ export function resultsOf(body: unknown): Map<string, FlagResult> {
   return results;
 }
 
+/** The type of a flag as its fallback shows it, for a flag Bridge does not have yet. */
+export function fallbackType(fallback: unknown): 'boolean' | 'string' | 'number' | 'json' {
+  if (typeof fallback === 'string') return 'string';
+  if (typeof fallback === 'number') return 'number';
+  if (typeof fallback === 'object' && fallback !== null) return 'json';
+  return 'boolean';
+}
+
 /** A set of results, read the same way in the browser and on a server. */
 export class FlagSet {
-  constructor(private readonly results: ReadonlyMap<string, FlagResult> = new Map()) {}
+  /**
+   * @param missing called with each key read that Bridge gave no result for, and the fallback it was read with: the
+   * server SDK reports such keys to Bridge, which shows them as found in code.
+   */
+  constructor(
+    private readonly results: ReadonlyMap<string, FlagResult> = new Map(),
+    private readonly missing?: (key: string, fallback: unknown) => void,
+  ) {}
 
   /** A flag's value, or `fallback` when Bridge gave none or one of another type. */
   get<T>(key: string, fallback: T): T {
     const result = this.results.get(key);
+    if (result === undefined) this.missing?.(key, fallback);
     if (result === undefined || !('value' in result)) return fallback;
     const value = result.value;
     if (fallback === undefined || fallback === null) return value as T;

@@ -66,6 +66,7 @@ async function setUp(options: Partial<BridgeServerOptions> & { respond?: (reques
       const status = usageAnswers.shift() ?? 201;
       return status === 201 ? Response.json({ counted: 1, deduped: 0, outcomes: [] }, { status }) : new Response(null, { status });
     }
+    if (request.url === `${ORIGIN}/v2/flags/discoveries`) return new Response(null, { status: 204 });
     if (request.url === `${ORIGIN}/v2/flags/ofrep/v1/evaluate/flags`) {
       if (options.flags === 'down') return new Response(null, { status: 503 });
       return Response.json({ flags: options.flags ?? [{ key: 'reports', value: true, reason: 'TARGETING_MATCH' }] });
@@ -208,6 +209,47 @@ describe('server: flags for the caller', () => {
     expect(sent.body).toEqual({ context: { plan_page: 'pricing' } });
     expect((await server.flags.forRequest({ headers: {} })).enabled('reports')).toBe(false);
     await server.close();
+  });
+});
+
+describe('server: flags found in code', () => {
+  const reports = (requests: Setup['requests']) => requests.filter((request) => request.url.endsWith('/v2/flags/discoveries'));
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+  it('reports each key read that Bridge gave no result for, once, with the app key and the fallback\'s type', async () => {
+    const { server, ring, requests } = await setUp();
+    const flags = await server.flags.forRequest(withBearer(await personToken(ring)));
+    expect(flags.enabled('reports')).toBe(true);
+    expect(flags.enabled('new-checkout')).toBe(false);
+    expect(flags.get('max-rows', 10)).toBe(10);
+    expect(flags.get('layout', { columns: 2 })).toEqual({ columns: 2 });
+    expect(flags.get('greeting', 'hi')).toBe('hi');
+    flags.enabled('bridge:billing.entitlement.sso');
+    await settle();
+    expect(reports(requests)).toHaveLength(1);
+    const [sent] = reports(requests);
+    expect(sent!.method).toBe('POST');
+    expect(sent!.headers.get('x-api-key')).toBe('app-key-1');
+    expect(sent!.headers.get('authorization')).toBeNull();
+    expect(sent!.body).toEqual({ flags: [{ key: 'new-checkout', type: 'boolean' }, { key: 'max-rows', type: 'number' }, { key: 'layout', type: 'json' }, { key: 'greeting', type: 'string' }] });
+    // Once per process: read again, on another request, nothing more is sent.
+    (await server.flags.forRequest(withBearer(await personToken(ring)))).enabled('new-checkout');
+    await settle();
+    expect(reports(requests)).toHaveLength(1);
+    await server.close();
+  });
+
+  it('reports nothing without the app key, nor for a set Bridge did not answer', async () => {
+    const keyless = await setUp({ appKey: undefined as unknown as string });
+    (await keyless.server.flags.forRequest(withBearer(await personToken(keyless.ring)))).enabled('new-checkout');
+    await settle();
+    expect(reports(keyless.requests)).toHaveLength(0);
+    await keyless.server.close();
+    const down = await setUp({ flags: 'down' });
+    (await down.server.flags.forRequest(withBearer(await personToken(down.ring)))).enabled('new-checkout');
+    await settle();
+    expect(reports(down.requests)).toHaveLength(0);
+    await down.server.close();
   });
 });
 
