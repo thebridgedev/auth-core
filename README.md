@@ -274,6 +274,8 @@ export async function handle(request: Request) {
   const actor = await bridge.verify(request); // throws BridgeError: 401, or 503 while The Bridge cannot be checked
   // actor: { kind, id, personId, workspaceId, sessionId, appId, standing }
 
+  // A person's token, or an API key (x-api-key) that Bridge evaluates for the key's privileges.
+  // An app key can name the workspace whose plan applies: forRequest(request, {}, { workspace }).
   const flags = await bridge.flags.forRequest(request);
   if (!flags.enabled('exports')) return new Response(null, { status: 403 });
 

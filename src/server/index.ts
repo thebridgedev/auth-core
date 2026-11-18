@@ -199,6 +199,14 @@ function bearerOf(headers: HeadersLike): string | null {
   return found?.value ?? null;
 }
 
+function keyOf(headers: HeadersLike): string | null {
+  const found = readCredentials(headers).find((credential) => credential.type === 'key');
+  return found?.value ?? null;
+}
+
+/** Whose flags to read: a person's token, or an API key that Bridge swaps for the key's own token. */
+type FlagCredential = { readonly token: string } | { readonly apiKey: string; readonly workspace?: string | undefined };
+
 export function createBridgeServer(options: BridgeServerOptions) {
   // The app key reaches the whole app: it must never be in a page. The package's browser build of this entry throws too.
   if (options.appKey && typeof window !== 'undefined' && typeof document !== 'undefined') {
@@ -315,7 +323,7 @@ export function createBridgeServer(options: BridgeServerOptions) {
     if (token === null) return { ok: true, actor };
     let flags: FlagSet;
     try {
-      flags = await readFlags(token, {});
+      flags = await readFlags({ token }, {});
     } catch (cause) {
       return { ok: false, error: stateUnknown('The workspace\'s payment state could not be read from Bridge; try again shortly.', cause) };
     }
@@ -329,9 +337,12 @@ export function createBridgeServer(options: BridgeServerOptions) {
   }
 
   /** Bridge's flag results for a person's token. Throws when Bridge cannot answer. */
-  async function readFlags(token: string, hints: Readonly<Record<string, Hint>>): Promise<FlagSet> {
+  async function readFlags(credential: FlagCredential, hints: Readonly<Record<string, Hint>>): Promise<FlagSet> {
     const endpoints = await discovery.get();
-    const answer = await call<unknown>(fetchFn, endpoints.url(ROUTES.flagsEvaluate), { method: 'POST', token, body: { context: hints } });
+    const sent = 'token' in credential
+      ? { token: credential.token }
+      : { apiKey: credential.apiKey, ...(credential.workspace === undefined ? {} : { headers: { 'Bridge-Workspace': credential.workspace } }) };
+    const answer = await call<unknown>(fetchFn, endpoints.url(ROUTES.flagsEvaluate), { method: 'POST', ...sent, body: { context: hints } });
     return new FlagSet(resultsOf(answer.body));
   }
 
@@ -420,16 +431,28 @@ export function createBridgeServer(options: BridgeServerOptions) {
     },
     flags: {
       /**
-       * The caller's flag results, worked out by Bridge for the person whose
-       * token came with the request. A request without a person's token gets
-       * an empty set: every flag gives its fallback, as it does while Bridge
-       * cannot answer.
+       * The caller's flag results, worked out by Bridge for the credential
+       * that came with the request. A person's token (`Authorization: Bearer`)
+       * is sent as it is. A request with no token but an `x-api-key` sends the
+       * key: Bridge swaps it for the key's own token, so rules on the key's
+       * privileges apply, and rules on a role, user or email never match. The
+       * key is never read here. When both come, only the token is sent.
+       *
+       * `workspace` names the workspace whose plan an app key's results use
+       * (sent as `Bridge-Workspace`); it is sent only with a key, and only
+       * when given. A workspace that is not the app's is refused by Bridge.
+       *
+       * A request with neither gets an empty set, as does one Bridge refuses
+       * or cannot answer: every flag gives its fallback.
        */
-      async forRequest(request: RequestLike, hints: Readonly<Record<string, Hint>> = {}): Promise<FlagSet> {
+      async forRequest(request: RequestLike, hints: Readonly<Record<string, Hint>> = {}, forOptions: { readonly workspace?: string } = {}): Promise<FlagSet> {
+        const { workspace } = forOptions;
+        if (workspace !== undefined && !WORKSPACE_ID.test(workspace)) throw new BridgeError('invalid', `"${workspace}" is not a workspace id.`);
         const token = bearerOf(request.headers);
-        if (token === null) return new FlagSet();
+        const apiKey = token === null ? keyOf(request.headers) : null;
+        if (token === null && apiKey === null) return new FlagSet();
         try {
-          return await readFlags(token, hints);
+          return await readFlags(token !== null ? { token } : { apiKey: apiKey as string, workspace }, hints);
         } catch (error) {
           // Gates fail closed: every flag gives its fallback while Bridge cannot answer.
           options.log?.('Flag results could not be read; every flag gives its fallback.', { error: error instanceof Error ? error.message : String(error) });
