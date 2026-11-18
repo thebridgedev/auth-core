@@ -69,6 +69,16 @@ export interface BridgeServerOptions {
   readonly usageFlushMs?: number;
   /** The most reports kept while Bridge cannot take them; past it, the oldest are dropped and logged. @default 10000 */
   readonly maxQueuedReports?: number;
+  /**
+   * Keeps waiting usage reports where a crash or restart cannot take them: see {@link UsageQueueStore}. Without one
+   * they wait in memory only, and a process that ends without `flush()` loses them.
+   */
+  readonly usageStore?: UsageQueueStore;
+  /**
+   * How long a report may wait before it is dropped and logged instead of sent. Bridge counts each report id once
+   * for 35 days, so this is at most 34 days. @default 2592000000 (30 days)
+   */
+  readonly maxQueuedAgeMs?: number;
   /** The first wait before the issuer's metadata is read again after a failure; it doubles up to a minute. @default 1000 */
   readonly discoveryRetryMs?: number;
   /** Debug messages. Never receives a credential. */
@@ -132,7 +142,8 @@ export interface RequestLike {
   readonly method?: string | undefined;
 }
 
-interface UsageReport {
+/** One usage report waiting to be sent, as a {@link UsageQueueStore} keeps it. The id is the report's one-time id: Bridge counts each id once. */
+export interface QueuedUsageReport {
   readonly id: string;
   readonly metric: string;
   readonly quantity: number;
@@ -141,6 +152,29 @@ interface UsageReport {
   /** A gauge's level (`usage.set`), not sent: a newer level replaces an older one still waiting. */
   readonly level?: true;
 }
+type UsageReport = QueuedUsageReport;
+
+/**
+ * Where reports wait so that they survive a crash or a restart. Plug one in as `usageStore`: the reports it holds
+ * when the server starts are sent first. Each report keeps the id it was counted with, so a report sent before the
+ * crash and sent again after it counts once: Bridge counts each id once for 35 days.
+ *
+ * Calls are made one at a time, in order. A failure is logged and never stops counting: the report is then only as
+ * safe as memory. `@nebulr-group/bridge-auth-core/server/node` has one that keeps a file.
+ */
+export interface UsageQueueStore {
+  /** Every report still waiting, read once when the server starts. */
+  load(): readonly QueuedUsageReport[] | Promise<readonly QueuedUsageReport[]>;
+  /** Keeps reports that now wait. */
+  add(reports: readonly QueuedUsageReport[]): void | Promise<void>;
+  /** Forgets reports by id: sent, refused for good, replaced by a newer level, or dropped. */
+  remove(ids: readonly string[]): void | Promise<void>;
+}
+
+/** Bridge keeps a report's id for 35 days; a report older than this is never sent again, so a replay cannot count twice. */
+const DAY_MS = 86_400_000;
+const REPORT_WINDOW_MS = 35 * DAY_MS;
+const DEFAULT_MAX_AGE_MS = 30 * DAY_MS;
 
 /** A unit of a strict limit held for an action: confirm it when the action happened, give it back when it did not. */
 export interface UsageHold {
@@ -351,9 +385,112 @@ export function createBridgeServer(options: BridgeServerOptions) {
   let dropped = 0;
   let sending: Promise<void> | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  const store = options.usageStore;
+  const maxAgeMs = Math.min(Math.max(options.maxQueuedAgeMs ?? DEFAULT_MAX_AGE_MS, 0), REPORT_WINDOW_MS - DAY_MS);
+
+  // The store's calls run one at a time, in order, and never throw: a store that fails leaves the report as safe as memory.
+  let storing: Promise<unknown> = Promise.resolve();
+  function inStore(what: string, action: (store: UsageQueueStore) => unknown): void {
+    if (store === undefined) return;
+    storing = storing.then(() => action(store)).catch((error: unknown) => {
+      options.log?.(`The usage queue's store could not ${what}; the reports are only as safe as memory.`, { error: error instanceof Error ? error.message : String(error) });
+    });
+  }
+  const keep = (reports: readonly UsageReport[]): void => {
+    if (reports.length > 0) inStore('keep reports', (kept) => kept.add(reports));
+  };
+  const forget = (reports: readonly UsageReport[]): void => {
+    if (reports.length > 0) inStore('forget reports', (kept) => kept.remove(reports.map((report) => report.id)));
+  };
+  const aged = (report: UsageReport, now: number): boolean => {
+    const at = Date.parse(report.time);
+    return Number.isNaN(at) || now - at > maxAgeMs;
+  };
+  /** A report as the store gave it back: anything that is not exactly one is set aside, never sent. */
+  const wellFormed = (value: unknown): value is UsageReport => {
+    if (value === null || typeof value !== 'object') return false;
+    const report = value as Record<string, unknown>;
+    return (
+      typeof report['id'] === 'string' && REPORT_ID.test(report['id']) &&
+      typeof report['metric'] === 'string' && METRIC.test(report['metric']) &&
+      typeof report['quantity'] === 'number' && Number.isFinite(report['quantity']) && report['quantity'] >= 0 &&
+      typeof report['workspace'] === 'string' && WORKSPACE_ID.test(report['workspace']) &&
+      typeof report['time'] === 'string' && !Number.isNaN(Date.parse(report['time'])) &&
+      (report['level'] === undefined || report['level'] === true)
+    );
+  };
+
+  /** Reads what waited when the last process ended, once. It is sent first, with the ids it had. */
+  const restored: Promise<void> = (async () => {
+    if (store === undefined) return;
+    let found: readonly unknown[];
+    try {
+      found = await store.load();
+    } catch (error) {
+      options.log?.('The usage queue could not be read from its store; reports from before this start are lost.', { error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    const now = Date.now();
+    const waiting = new Set(queue.map((report) => report.id));
+    const keptBack: UsageReport[] = [];
+    const setAside: UsageReport[] = [];
+    let unreadable = 0;
+    let expired = 0;
+    const levels = new Set<string>();
+    // Newest first, so only the newest level of a gauge stays.
+    for (const value of [...found].reverse()) {
+      if (!wellFormed(value)) {
+        unreadable += 1;
+        if (value !== null && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string') setAside.push(value as UsageReport);
+        continue;
+      }
+      if (aged(value, now)) {
+        expired += 1;
+        setAside.push(value);
+        continue;
+      }
+      if (waiting.has(value.id)) continue;
+      if (value.level === true) {
+        const gauge = `${value.workspace}\u0000${value.metric}`;
+        if (levels.has(gauge) || queue.some((report) => report.level === true && report.workspace === value.workspace && report.metric === value.metric)) {
+          setAside.push(value);
+          continue;
+        }
+        levels.add(gauge);
+      }
+      waiting.add(value.id);
+      keptBack.push(value);
+    }
+    keptBack.reverse();
+    let all = [...keptBack, ...queue];
+    if (all.length > maxQueued) {
+      const overflow = all.slice(0, all.length - maxQueued);
+      all = all.slice(all.length - maxQueued);
+      setAside.push(...overflow);
+      dropped += overflow.length;
+    }
+    queue = all;
+    forget(setAside);
+    if (unreadable > 0 || expired > 0) options.log?.('Some usage reports from before this start were not kept.', { unreadable, expired });
+    if (keptBack.length > 0) options.log?.('Usage reports from before this start are sent again with their ids.', { reports: keptBack.length });
+    if (queue.length > 0) schedule();
+  })();
+  // Reports from before this start are put in order before anything is added to the store.
+  storing = storing.then(() => restored);
 
   async function sendQueued(): Promise<void> {
+    await restored;
     while (queue.length > 0) {
+      const now = Date.now();
+      const stale = queue.filter((report) => aged(report, now));
+      if (stale.length > 0) {
+        // Past what Bridge's one-time ids cover: sent now, a report that was counted once could count again.
+        options.log?.('Usage reports waited too long and were dropped.', { reports: stale.length });
+        const gone = new Set(stale);
+        queue = queue.filter((report) => !gone.has(report));
+        forget(stale);
+        continue;
+      }
       const batch = queue.slice(0, MAX_BATCH);
       // Until the metadata can be read, the reports wait (within the queue's limit).
       const endpoints = await discovery.get().catch(() => null);
@@ -373,6 +510,8 @@ export function createBridgeServer(options: BridgeServerOptions) {
       }
       const done = new Set(batch);
       queue = queue.filter((report) => !done.has(report));
+      // Only now, once Bridge took them (or refused them for good): a crash before this resends them under the same ids.
+      forget(batch);
     }
     if (dropped > 0) {
       options.log?.('Usage reports were dropped while the queue was full.', { dropped });
@@ -477,11 +616,14 @@ export function createBridgeServer(options: BridgeServerOptions) {
         if (!REPORT_ID.test(id)) throw new BridgeError('invalid', 'A report id is 1 to 200 visible characters, with no spaces.');
         if (queue.length >= maxQueued) {
           // Full while Bridge cannot take reports: the oldest go, so memory stays bounded.
-          queue.shift();
+          const oldest = queue.shift();
+          if (oldest !== undefined) forget([oldest]);
           dropped += 1;
           if (dropped === 1) options.log?.('The usage queue is full; the oldest reports are being dropped.', { limit: maxQueued });
         }
-        queue.push({ id, metric, quantity, workspace, time: new Date().toISOString() });
+        const report: UsageReport = { id, metric, quantity, workspace, time: new Date().toISOString() };
+        queue.push(report);
+        keep([report]);
         if (queue.length >= MAX_BATCH) void flush();
         else schedule();
       },
@@ -499,8 +641,12 @@ export function createBridgeServer(options: BridgeServerOptions) {
         const workspace = workspaceFor(actor, setOptions.workspace);
         const id = setOptions.id ?? randomId();
         if (!REPORT_ID.test(id)) throw new BridgeError('invalid', 'A report id is 1 to 200 visible characters, with no spaces.');
-        queue = queue.filter((report) => !(report.level === true && report.metric === metric && report.workspace === workspace));
-        queue.push({ id, metric, quantity: level, workspace, time: new Date().toISOString(), level: true });
+        const replaced = queue.filter((report) => report.level === true && report.metric === metric && report.workspace === workspace);
+        queue = queue.filter((report) => !replaced.includes(report));
+        forget(replaced);
+        const report: UsageReport = { id, metric, quantity: level, workspace, time: new Date().toISOString(), level: true };
+        queue.push(report);
+        keep([report]);
         if (queue.length >= MAX_BATCH) void flush();
         else schedule();
       },
@@ -575,6 +721,7 @@ export function createBridgeServer(options: BridgeServerOptions) {
     /** Sends counted usage, and stops following the revocation list. */
     async close(): Promise<void> {
       await flush();
+      await storing;
       puller?.stop();
     },
   };
