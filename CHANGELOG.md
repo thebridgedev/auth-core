@@ -6,6 +6,10 @@
 
 - **Flags found in code show in the dashboard.** On the server, when your code reads a flag (`flags.forRequest(...)`, or the results `check` hands back) that The Bridge gave no result for, the SDK reports its key, with the type of the fallback you passed, to `POST /discoveries` on the flags endpoint, with the app key: once per key per process, in the background. The Bridge makes each key it does not have as a flag that is switched off, marked as found in code, until someone sets it up; a flag it has is left as it is. Without `appKey` nothing is reported. A failed report is dropped and changes nothing your code sees. Needs a Bridge server that serves the route; until then the report fails quietly. `FlagSet` takes an optional second argument, called with each key read that has no result.
 
+### Fixed
+
+- **A live notice the SDK cannot read now counts as "something changed".** It was dropped; now listeners hear `bridge.live.many_changed`, so screens, flags, quotas and the billing gate fetch again, and the next notice is delivered as usual. The fake issuer (`/testing`) has `sendUnreadable(channel, event)`.
+
 ## [1.0.0-alpha.12] - Unreleased
 
 ### Fixed
