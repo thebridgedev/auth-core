@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.0.0-alpha.10] - Unreleased
+## [1.0.0-alpha.11] - Unreleased
 
 ### Added
 
@@ -11,6 +11,8 @@
 
 - A `billing.quota_updated` notice no longer fetches flags again; other `billing.*` notices still do.
 - **A person's write is refused when their workspace is not active or is locked for payment.** On the server, `check` and `verify` take the request's method (from the request, or `{ method }`). For a write by a signed-in person: a standing other than `active` refuses with 403 (`workspace-not-active`), a `bridge-workspace-paid` result of false refuses with 402 (`billing-locked`), and a missing result or flag results that cannot be fetched refuse with 503. Reads are never refused for this, and keys are unchanged. `check` hands back the flag results it read as `flags`, so a gate on the same request need not ask again. Needs a Bridge server that answers `bridge-workspace-active` and `bridge-workspace-paid`; until it does, a person's writes are refused with 503.
+
+## [1.0.0-alpha.10] - Unreleased
 
 ### Fixed
 
