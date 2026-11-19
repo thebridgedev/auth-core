@@ -373,11 +373,14 @@ export function createSignIn(deps: SignInDeps) {
       /**
        * Finishes a sign-up from its email link, on the device that started
        * it. Opened anywhere else, it fails with `wrong-device`, and the link
-       * still works on the right device.
+       * still works on the right device. A sign-up started with no password
+       * on an app that takes passwords fails with the code
+       * `password_required` until it is finished with one: ask the person to
+       * choose it, then call this again with it. The link stays usable.
        */
-      async finish(token: string): Promise<SignInStep> {
+      async finish(token: string, password?: string): Promise<SignInStep> {
         const verifier = await waitingVerifier(signUpKey);
-        const answer = await post(ROUTES.signUpVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }) });
+        const answer = await post(ROUTES.signUpVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }), ...(password === undefined ? {} : { password }) });
         if (verifier === null) throw new BridgeError('wrong-device', 'Open the link on the device you signed up on.', { code: 'wrong_device' });
         // Bridge took the verifier: it is spent, and the rest needs it only in memory.
         await deps.signUpStorage.remove(signUpKey);
