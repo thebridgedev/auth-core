@@ -78,6 +78,17 @@ describe('billing lock: isLocked, gateState, assertNotLocked', () => {
     expect(() => client.assertNotLocked()).not.toThrow();
   });
 
+  it('reads the provider\'s retry schedule off the gate: a try to come warns, the last one is critical', async () => {
+    const retry = { attempts: 2, nextAt: '2026-01-12T00:00:00.000Z', final: false };
+    const { client } = await signedIn({ facts: { plan: { key: 'pro', name: 'Pro' }, status: 'past_due', access: 'payment_due', retry } });
+    await until(() => client.gateState().noticeState === 'dunning_active');
+    expect(client.isLocked()).toBe(false);
+    expect(client.gateState()).toEqual({ locked: false, severity: 'warn', noticeState: 'dunning_active' });
+    const last = await signedIn({ facts: { plan: { key: 'pro', name: 'Pro' }, status: 'past_due', access: 'payment_due', retry: { ...retry, attempts: 7, final: true } } });
+    await until(() => last.client.gateState().noticeState === 'dunning_final_retry');
+    expect(last.client.gateState()).toEqual({ locked: false, severity: 'critical', noticeState: 'dunning_final_retry' });
+  });
+
   it('follows billing.access_changed: locks and unlocks, and tells gate-changed', async () => {
     const { fake, client } = await signedIn({ live: true, facts: { plan: { key: 'pro', name: 'Pro' }, status: 'active', access: 'ok' } });
     await until(() => client.live.status.get() === 'open');
@@ -211,6 +222,15 @@ describe('notice and severity states', () => {
     expect(deriveNoticeState({ ...base, cancelAtPeriodEnd: true })).toBe('cancel_at_period_end');
     expect(deriveNoticeState({ ...base, status: 'past_due', access: 'payment_due' })).toBe('past_due');
     expect(deriveNoticeState({ ...base, status: 'trialing', access: 'payment_due' })).toBe('past_due_trial');
+    // The provider's retry schedule: a try to come is `dunning_active`, the last of them `dunning_final_retry`; none left is plain past due.
+    const overdue = { ...base, status: 'past_due' as const, access: 'payment_due' as const };
+    expect(deriveNoticeState({ ...overdue, retry: { attempts: 2, nextAt: '2026-01-12T00:00:00Z', final: false } })).toBe('dunning_active');
+    expect(deriveNoticeState({ ...overdue, retry: { attempts: 7, nextAt: '2026-01-12T00:00:00Z', final: true } })).toBe('dunning_final_retry');
+    expect(deriveNoticeState({ ...overdue, retry: { attempts: 8, nextAt: null, final: false } })).toBe('past_due');
+    expect(deriveNoticeState({ ...overdue, retry: null })).toBe('past_due');
+    expect(deriveNoticeState({ ...base, status: 'trialing', access: 'payment_due', retry: { attempts: 1, nextAt: '2026-01-12T00:00:00Z', final: false } })).toBe('past_due_trial');
+    expect(deriveSeverity('dunning_active')).toBe('warn');
+    expect(deriveSeverity('dunning_final_retry')).toBe('critical');
     expect(deriveNoticeState({ ...base, status: 'trialing', trialEnd: '2026-01-12T00:00:00Z' }, now)).toBe('trial_ending_soon');
     expect(deriveNoticeState({ ...base, status: 'trialing', trialEnd: '2026-02-12T00:00:00Z' }, now)).toBe('trial_active');
     expect(deriveNoticeState({ ...base, status: 'trialing', trialEnd: null }, now)).toBe('trial_active');

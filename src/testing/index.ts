@@ -763,8 +763,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     if (path === '/v2/billing/payer' && method === 'GET') return workspaceRequired() ?? json(200, facts);
     // The lock is read by every person of the workspace, whatever their role: only the gate, nothing of the payment.
     if (path === '/v2/billing/payer/gate' && method === 'GET') {
-      const { locked, access, status, cancelAtPeriodEnd, trialEnd } = facts;
-      return workspaceRequired() ?? json(200, { locked, access, status, cancelAtPeriodEnd, trialEnd });
+      const { locked, access, status, cancelAtPeriodEnd, trialEnd, retry } = facts;
+      return workspaceRequired() ?? json(200, { locked, access, status, cancelAtPeriodEnd, trialEnd, retry: retry ?? null });
     }
     if (path === '/v2/billing/payer/usage' && method === 'GET') return json(200, { periodStart: new Date(now()).toISOString(), periodEnd: new Date(now() + 30 * 86_400_000).toISOString(), metrics: [] });
     const quotaRead = path.match(/^\/v2\/billing\/usage\/quota\/([^/]+)$/);

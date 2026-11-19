@@ -38,6 +38,16 @@ export type BillingStatus = 'none' | 'trialing' | 'active' | 'past_due' | 'cance
 /** Whether the workspace can be used: `ok`, needs a plan, has a payment due, or is blocked. */
 export type BillingAccess = 'ok' | 'needs_plan' | 'payment_due' | 'blocked';
 
+/**
+ * The payment provider's retry schedule for an overdue payment: how many attempts failed, when it tries next (null: no
+ * more tries), and whether that try is its last (the 0.9 plugins' `dunning_final_retry`).
+ */
+export interface BillingRetry {
+  readonly attempts: number;
+  readonly nextAt: string | null;
+  readonly final: boolean;
+}
+
 export interface BillingFacts {
   readonly plan: { readonly key: string; readonly name: string } | null;
   readonly status: BillingStatus;
@@ -50,6 +60,8 @@ export interface BillingFacts {
   readonly cancelAtPeriodEnd: boolean;
   readonly waiting: { readonly plan: string; readonly waitsFor: 'period_end' | 'payment'; readonly at: string | null } | null;
   readonly locked: boolean;
+  /** While a payment is overdue and the provider retries it: its schedule. Absent or null otherwise. */
+  readonly retry?: BillingRetry | null;
   readonly [field: string]: unknown;
 }
 
@@ -63,6 +75,8 @@ export interface BillingGateFacts {
   readonly status: BillingStatus;
   readonly cancelAtPeriodEnd: boolean;
   readonly trialEnd: string | null;
+  /** While the payment is overdue and the provider retries it: its schedule, so a notice can say when and whether it is the last try. */
+  readonly retry?: BillingRetry | null;
 }
 
 export interface UsageNumbers {
@@ -79,7 +93,7 @@ export type PlanChange =
 /** A notice to show about the workspace's billing, worked out from its facts. */
 export type BillingNotice =
   | { readonly kind: 'blocked' }
-  | { readonly kind: 'payment-due' }
+  | { readonly kind: 'payment-due'; readonly retry?: BillingRetry }
   | { readonly kind: 'needs-plan' }
   | { readonly kind: 'trial-ending'; readonly trialEnd: string; readonly daysLeft: number }
   | { readonly kind: 'ending'; readonly periodEnd: string | null }
@@ -91,7 +105,7 @@ const TRIAL_NOTICE_DAYS = 7;
 /** The one notice worth showing now, the most urgent first, or null. */
 export function billingNotice(facts: BillingFacts, now = Date.now()): BillingNotice | null {
   if (facts.access === 'blocked') return { kind: 'blocked' };
-  if (facts.access === 'payment_due') return { kind: 'payment-due' };
+  if (facts.access === 'payment_due') return facts.retry == null ? { kind: 'payment-due' } : { kind: 'payment-due', retry: facts.retry };
   if (facts.access === 'needs_plan') return { kind: 'needs-plan' };
   if (facts.status === 'trialing' && facts.trialEnd !== null) {
     const daysLeft = Math.ceil((Date.parse(facts.trialEnd) - now) / 86_400_000);

@@ -49,7 +49,7 @@ export type { QuotaListener, QuotaStoreDeps } from './quota-store.js';
 export { createEntitlements } from './entitlements.js';
 export type { Entitlements } from './entitlements.js';
 export { billingNotice, readCheckoutReturn } from './billing.js';
-export type { BillingAccess, BillingFacts, BillingGateFacts, BillingNotice, BillingStatus, Plan, PlanChange, Price, UsageNumbers } from './billing.js';
+export type { BillingAccess, BillingFacts, BillingGateFacts, BillingNotice, BillingRetry, BillingStatus, Plan, PlanChange, Price, UsageNumbers } from './billing.js';
 export { MANY_CHANGED } from './live.js';
 export type { LiveNotice, LiveOptions, LiveStatus, WebSocketFactory, WebSocketLike } from './live.js';
 
