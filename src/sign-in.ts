@@ -78,6 +78,19 @@ export interface SignUpInput {
   readonly lastName?: string;
   /** `true` for a new workspace with no name yet, or its name. Leave out for none. */
   readonly workspace?: boolean | string;
+  /**
+   * Where the visit came from, for your sign-up reports: the earliest visit's campaign tags (`utm_source`, `ref`, …),
+   * the latest touch when it differs, and the visitor's marketing consent. Kept with the sign-up and attached to the
+   * new account once the address is proved. Leave out for none.
+   */
+  readonly attribution?: SignUpAttribution;
+}
+
+/** A sign-up's attribution: campaign tags as plain strings, and whether the visitor consented to marketing. */
+export interface SignUpAttribution {
+  readonly first: Readonly<Record<string, string>>;
+  readonly last?: Readonly<Record<string, string>>;
+  readonly marketingConsent: boolean;
 }
 
 /** What an invite's link shows before anyone signs in. */
@@ -352,6 +365,7 @@ export function createSignIn(deps: SignInDeps) {
           ...(input.firstName === undefined ? {} : { firstName: input.firstName }),
           ...(input.lastName === undefined ? {} : { lastName: input.lastName }),
           ...(input.workspace === undefined || input.workspace === false ? {} : { workspace: input.workspace }),
+          ...(input.attribution === undefined ? {} : { attribution: input.attribution }),
         });
         return { next: 'verify_email' };
       },
