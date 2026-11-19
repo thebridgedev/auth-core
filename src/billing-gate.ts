@@ -92,7 +92,10 @@ export function watchLock(fetchFn: typeof fetch, locked: (status: BillingGateFac
 }
 
 export interface BillingGateDeps {
-  /** Reads whether the workspace is locked, and why (`GET /payer/gate`): open to every person of the workspace. */
+  /**
+   * Reads whether the workspace is locked, and why (`GET /payer/gate`): open to every person of the workspace. It renews
+   * a token Bridge took back with the lock and asks again, waiting out the moment a renewed token is still refused.
+   */
   readonly state: () => Promise<BillingGateFacts>;
   readonly session: Session;
   readonly onError: (error: unknown) => void;
@@ -158,7 +161,7 @@ export class BillingGate {
   }
 
   /** Reads the gate now. A failed read keeps what is held and is reported. */
-  async refresh(renewed = false): Promise<void> {
+  async refresh(): Promise<void> {
     const context = this.contextNow();
     if (context === null) return;
     const mine = ++this.counter;
@@ -169,15 +172,8 @@ export class BillingGate {
       this.announce();
     } catch (error) {
       if (mine !== this.counter) return;
-      if (isBridgeError(error, 'signed-out') && !renewed && this.deps.session.state.get().status === 'signed-in') {
-        // A token from before a change of plan is refused once Bridge has saved the change: renew it once and ask again.
-        try {
-          await this.deps.session.refresh({ force: true });
-        } catch {
-          return;
-        }
-        return this.refresh(true);
-      }
+      // Still refused once the renewals gave up, or the session ended: a sign-out says so, not the gate.
+      if (isBridgeError(error, 'signed-out') && this.deps.session.state.get().status !== 'signed-in') return;
       if (isBridgeError(error, 'forbidden')) return;
       this.deps.onError(error);
     }
