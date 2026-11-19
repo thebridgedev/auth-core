@@ -4,6 +4,7 @@
 
 ### Added
 
+- **Sign-up attribution.** `signUp.start({ …, attribution })` sends where the visit came from (`{ first, last?, marketingConsent }`: campaign tags as strings, and the visitor's marketing consent) with the sign-up. Bridge keeps it until the address is proved and attaches it to the new account.
 - **Flags for callers with an API key.** On the server, `flags.forRequest(request)` now works for a request that carries an `x-api-key` and no bearer token: it sends the key to Bridge, which evaluates the flags for that key. Rules on the key's privileges (`bridge:privileges`) apply; rules on a role, user or email never match a key. The SDK never reads or checks the key itself. Before, such a request always got an empty set, so every flag gave its fallback.
 - `flags.forRequest(request, hints, { workspace })` names the workspace whose plan an app key's results use (sent as `Bridge-Workspace`). It is sent only with a key and only when you pass it; a workspace that is not your app's is refused by Bridge, and the set comes back empty.
 
