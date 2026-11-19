@@ -17,7 +17,7 @@ import { BridgeError } from '../core/errors.js';
 import { call, platformFetch, withoutRedirects, type Fetch } from '../core/http.js';
 import { REVOCATION_LANES, ROUTES } from '../core/routes.js';
 import { randomId } from '../core/util.js';
-import { FlagSet, resultsOf, type Hint } from '../flags.js';
+import { fallbackType, FlagSet, resultsOf, type Hint } from '../flags.js';
 import { snapshotOf, type QuotaRead, type QuotaSnapshot } from '../quota.js';
 import {
   createCredentialVerifier,
@@ -207,6 +207,11 @@ function keyOf(headers: HeadersLike): string | null {
 /** Whose flags to read: a person's token, or an API key that Bridge swaps for the key's own token. */
 type FlagCredential = { readonly token: string } | { readonly apiKey: string; readonly workspace?: string | undefined };
 
+/** At most this many keys go in one report of flags found in code. */
+const FLAG_REPORT_BATCH = 50;
+/** At most this many keys are reported by one process: enough for any app's flags, never a flood. */
+const MAX_REPORTED_FLAGS = 1000;
+
 export function createBridgeServer(options: BridgeServerOptions) {
   // The app key reaches the whole app: it must never be in a page. The package's browser build of this entry throws too.
   if (options.appKey && typeof window !== 'undefined' && typeof document !== 'undefined') {
@@ -343,7 +348,44 @@ export function createBridgeServer(options: BridgeServerOptions) {
       ? { token: credential.token }
       : { apiKey: credential.apiKey, ...(credential.workspace === undefined ? {} : { headers: { 'Bridge-Workspace': credential.workspace } }) };
     const answer = await call<unknown>(fetchFn, endpoints.url(ROUTES.flagsEvaluate), { method: 'POST', ...sent, body: { context: hints } });
-    return new FlagSet(resultsOf(answer.body));
+    return new FlagSet(resultsOf(answer.body), noticeMissing);
+  }
+
+  // Flags found in code. A key the app reads that Bridge gave no result for is reported once per process, with the app
+  // key, in the background: Bridge makes each one it does not have, switched off, and shows it as found in code. A flag
+  // that is off gives no result either, so it is reported too; Bridge leaves a flag it has as it is. Without the app
+  // key nothing is reported. A report that fails is dropped: it is only a hint for the dashboard.
+  const reportedKeys = new Set<string>();
+  const unreported = new Map<string, string>();
+  let reportingKeys = false;
+
+  function noticeMissing(key: string, fallback: unknown): void {
+    if (options.appKey === undefined || options.appKey === '') return;
+    if (key.startsWith('bridge:') || reportedKeys.has(key) || unreported.has(key)) return;
+    if (reportedKeys.size + unreported.size >= MAX_REPORTED_FLAGS) return;
+    unreported.set(key, fallbackType(fallback));
+    if (reportingKeys) return;
+    reportingKeys = true;
+    setTimeout(() => void reportKeys(), 0);
+  }
+
+  async function reportKeys(): Promise<void> {
+    try {
+      while (unreported.size > 0) {
+        const batch = [...unreported].slice(0, FLAG_REPORT_BATCH);
+        for (const [key] of batch) {
+          unreported.delete(key);
+          reportedKeys.add(key);
+        }
+        const endpoints = await discovery.get();
+        await call(fetchFn, endpoints.url(ROUTES.flagsReport), { method: 'POST', apiKey: options.appKey ?? null, body: { flags: batch.map(([key, type]) => ({ key, type })) } });
+      }
+    } catch (error) {
+      options.log?.('Flags found in code could not be reported; they are not sent again.', { error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      unreported.clear();
+      reportingKeys = false;
+    }
   }
 
   // Counting usage.

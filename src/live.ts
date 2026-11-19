@@ -317,6 +317,9 @@ export class Live {
         for (const raw of events) {
           const frame = frameOf(raw);
           if (frame !== null) await this.take(run, channel, frame);
+          // A notice this SDK cannot read (from a newer Bridge, say) still says something changed: screens fetch again,
+          // never drop it. Its number is unknown, so the next notice's gap, if any, is filled from history as usual.
+          else this.notices.emit('notice', { type: MANY_CHANGED, record: null, version: null, time: new Date().toISOString(), workspace: null });
         }
         return;
       }

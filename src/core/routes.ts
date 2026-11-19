@@ -179,6 +179,9 @@ export const ROUTES = {
   flagsEvaluate: route('POST', 'flags', '/ofrep/v1/evaluate/flags'),
   flagEvaluate: route('POST', 'flags', '/ofrep/v1/evaluate/flags/{key}'),
   flagsVisitorEvaluate: route('POST', 'flags_visitor', '/ofrep/v1/evaluate/flags'),
+  // From the app's server, with its key: keys the app asked for that Bridge gave no result for, so they show in the
+  // dashboard as found in code.
+  flagsReport: route('POST', 'flags', '/discoveries', 'reporting flags found in code'),
 
   // Live.
   liveChannels: route('GET', 'live', '/channels'),
