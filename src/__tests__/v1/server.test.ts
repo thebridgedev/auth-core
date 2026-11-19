@@ -209,6 +209,67 @@ describe('server: flags for the caller', () => {
     expect((await server.flags.forRequest({ headers: {} })).enabled('reports')).toBe(false);
     await server.close();
   });
+
+  const evaluations = (requests: Setup['requests']) => requests.filter((request) => request.url.endsWith('/evaluate/flags'));
+
+  it('sends an API key that came without a token, and returns what Bridge answers for it', async () => {
+    const { server, requests } = await setUp({ flags: [{ key: 'exports', value: true, reason: 'TARGETING_MATCH' }] });
+    const flags = await server.flags.forRequest({ headers: { 'x-api-key': 'caller-key-1' } }, { plan_page: 'pricing' });
+    expect(flags.enabled('exports')).toBe(true);
+    const [sent, ...more] = evaluations(requests);
+    expect(more).toHaveLength(0);
+    expect(sent!.headers.get('x-api-key')).toBe('caller-key-1');
+    expect(sent!.headers.get('authorization')).toBeNull();
+    expect(sent!.headers.get('bridge-workspace')).toBeNull();
+    expect(sent!.body).toEqual({ context: { plan_page: 'pricing' } });
+    await server.close();
+  });
+
+  it('sends only the token when a request carries both a token and a key', async () => {
+    const { server, ring, requests } = await setUp();
+    const token = await personToken(ring);
+    const flags = await server.flags.forRequest({ headers: { authorization: `Bearer ${token}`, 'x-api-key': 'caller-key-1' } }, {}, { workspace: 'ws-other' });
+    expect(flags.enabled('reports')).toBe(true);
+    const [sent] = evaluations(requests);
+    expect(sent!.headers.get('authorization')).toBe(`Bearer ${token}`);
+    expect(sent!.headers.get('x-api-key')).toBeNull();
+    expect(sent!.headers.get('bridge-workspace')).toBeNull();
+    await server.close();
+  });
+
+  it('asks Bridge nothing for a request with neither a token nor a key', async () => {
+    const { server, requests } = await setUp();
+    const flags = await server.flags.forRequest({ headers: {} }, {}, { workspace: 'ws-acme' });
+    expect(flags.enabled('reports')).toBe(false);
+    expect(flags.all().size).toBe(0);
+    expect(evaluations(requests)).toHaveLength(0);
+    await server.close();
+  });
+
+  it('names the workspace for a key only when one is given', async () => {
+    const { server, requests } = await setUp();
+    await server.flags.forRequest({ headers: { 'x-api-key': 'caller-key-1' } }, {}, { workspace: 'ws-acme' });
+    await server.flags.forRequest({ headers: { 'x-api-key': 'caller-key-1' } });
+    const [named, unnamed] = evaluations(requests);
+    expect(named!.headers.get('bridge-workspace')).toBe('ws-acme');
+    expect(unnamed!.headers.get('bridge-workspace')).toBeNull();
+    await expect(server.flags.forRequest({ headers: { 'x-api-key': 'caller-key-1' } }, {}, { workspace: 'not a workspace' })).rejects.toMatchObject({ kind: 'invalid' });
+    expect(evaluations(requests)).toHaveLength(2);
+    await server.close();
+  });
+
+  it('gives every flag its fallback when Bridge refuses the key or the workspace', async () => {
+    const logged: string[] = [];
+    const { server } = await setUp({
+      log: (message) => logged.push(message),
+      respond: (request) => (request.url.endsWith('/evaluate/flags') ? Response.json({ error: 'not_found' }, { status: 404 }) : undefined),
+    });
+    const flags = await server.flags.forRequest({ headers: { 'x-api-key': 'caller-key-1' } }, {}, { workspace: 'ws-elsewhere' });
+    expect(flags.enabled('reports')).toBe(false);
+    expect(flags.all().size).toBe(0);
+    expect(logged).toHaveLength(1);
+    await server.close();
+  });
 });
 
 const ACTIVE = { key: 'bridge-workspace-active', value: true, reason: 'STATIC' };

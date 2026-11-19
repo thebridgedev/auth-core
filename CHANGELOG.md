@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.13] - Unreleased
+
+### Added
+
+- **Flags for callers with an API key.** On the server, `flags.forRequest(request)` now works for a request that carries an `x-api-key` and no bearer token: it sends the key to Bridge, which evaluates the flags for that key. Rules on the key's privileges (`bridge:privileges`) apply; rules on a role, user or email never match a key. The SDK never reads or checks the key itself. Before, such a request always got an empty set, so every flag gave its fallback.
+- `flags.forRequest(request, hints, { workspace })` names the workspace whose plan an app key's results use (sent as `Bridge-Workspace`). It is sent only with a key and only when you pass it; a workspace that is not your app's is refused by Bridge, and the set comes back empty.
+
+### Unchanged
+
+- A request with a bearer token sends only the token, even when it also carries a key. A request with neither still gets an empty set and Bridge is not asked.
+
 ## [1.0.0-alpha.12] - Unreleased
 
 ### Fixed
