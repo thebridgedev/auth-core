@@ -24,8 +24,8 @@ describe('the package', () => {
     expect(pkg.version).toMatch(/^1\.0\.0-alpha\.\d+$/);
   });
 
-  it('exports the browser entry, the server, the verifier, i18n and the testing fakes', () => {
-    expect(Object.keys(pkg.exports).sort()).toEqual(['.', './i18n', './package.json', './server', './testing', './verifier']);
+  it('exports the browser entry, the server (and its Node-only file queue), the verifier, i18n and the testing fakes', () => {
+    expect(Object.keys(pkg.exports).sort()).toEqual(['.', './i18n', './package.json', './server', './server/node', './testing', './verifier']);
   });
 
   it.each(['src/index.ts', 'src/server/index.ts'])('%s bundles for an edge runtime with no Node built-in', async (entry) => {
