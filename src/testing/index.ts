@@ -763,8 +763,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     if (path === '/v2/billing/payer' && method === 'GET') return workspaceRequired() ?? json(200, facts);
     // The lock is read by every person of the workspace, whatever their role: only the gate, nothing of the payment.
     if (path === '/v2/billing/payer/gate' && method === 'GET') {
-      const { locked, access, status, cancelAtPeriodEnd, trialEnd } = facts;
-      return workspaceRequired() ?? json(200, { locked, access, status, cancelAtPeriodEnd, trialEnd });
+      const { locked, access, status, cancelAtPeriodEnd, trialEnd, retry } = facts;
+      return workspaceRequired() ?? json(200, { locked, access, status, cancelAtPeriodEnd, trialEnd, retry: retry ?? null });
     }
     if (path === '/v2/billing/payer/usage' && method === 'GET') return json(200, { periodStart: new Date(now()).toISOString(), periodEnd: new Date(now() + 30 * 86_400_000).toISOString(), metrics: [] });
     const quotaRead = path.match(/^\/v2\/billing\/usage\/quota\/([^/]+)$/);
@@ -979,6 +979,13 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       const seq = (frames.at(-1)?.seq ?? 0) + 1;
       frames.push({ seq, cursor: `${channel}#${String(seq)}`, notice: { type: notice.type, record: null, version: null, time: new Date(now()).toISOString(), workspace: null } });
       live.history.set(channel, frames);
+    },
+    /** Sends something on a channel that is not a notice this SDK can read (a newer shape, or garbage), as a newer Bridge might. */
+    sendUnreadable(channel: string, event: unknown): void {
+      for (const [socket, map] of live.subscribed) {
+        const subscription = map.get(channel);
+        if (subscription !== undefined) queueMicrotask(() => socket.onmessage?.({ data: JSON.stringify({ type: 'data', id: subscription, event: [typeof event === 'string' ? event : JSON.stringify(event)] }) }));
+      }
     },
     /** Makes the next history read of a channel answer that it cannot fill the gap. */
     loseHistory(channel: string): void {

@@ -88,6 +88,26 @@ describe('sign-up, finished from the email link on the same device', () => {
     expect(await storage.get(`bridge:${fake.issuer}:sign-up`)).toBeNull();
   });
 
+  it('sends a sign-up\'s attribution with it, and nothing of it when there is none', async () => {
+    const { fake } = issuerWithPeople();
+    const attribution = { first: { utm_source: 'reddit', rdt_cid: 'c1' }, last: { utm_source: 'youtube' }, marketingConsent: true };
+    await clientOn(fake, { storage: memoryStorage() }).signUp.start({ email: 'gil@acme.test', password: PASSWORD, attribution });
+    await clientOn(fake, { storage: memoryStorage() }).signUp.start({ email: 'hal@acme.test', password: PASSWORD });
+    const sent = fake.requests.filter((each) => each.path.endsWith('/sign-up')).map((each) => each.body as Record<string, unknown>);
+    expect(sent.find((body) => body['email'] === 'gil@acme.test')?.['attribution']).toEqual(attribution);
+    expect(sent.find((body) => body['email'] === 'hal@acme.test')).not.toHaveProperty('attribution');
+  });
+
+  it('finishes a sign-up with the password the person chooses at the link, when it was started with none', async () => {
+    const { fake } = issuerWithPeople();
+    const storage = memoryStorage();
+    await clientOn(fake, { storage }).signUp.start({ email: 'ivy@acme.test' });
+    const link = fake.lastLink('ivy@acme.test', 'verify-sign-up')!;
+    await clientOn(fake, { storage }).signUp.finish(link, PASSWORD).catch(() => undefined);
+    const verify = fake.requests.filter((each) => each.path.endsWith('/sign-up/verify')).pop()!;
+    expect(verify.body).toMatchObject({ token: link, password: PASSWORD, code_verifier: expect.any(String) });
+  });
+
   it('answers the same for an address that already has an account', async () => {
     const { fake } = issuerWithPeople();
     await expect(clientOn(fake).signUp.start({ email: 'alice@acme.test', password: PASSWORD })).resolves.toEqual({ next: 'verify_email' });

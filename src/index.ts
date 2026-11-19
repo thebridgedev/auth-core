@@ -30,7 +30,7 @@ export { browserCeremonies } from './passkeys.js';
 export { needsRecheck } from './recheck.js';
 export type { Recheck, RecheckMethod } from './recheck.js';
 export type { PasskeyInfo, PasskeySignInInput, WebAuthnCeremonies } from './passkeys.js';
-export type { AcceptedInvite, EmailLink, EmailLinkWindow, HandoffInput, HandoffStep, InvitePreview, InviteSignUpInput, SignInInput, SignInOptions, SignInStep, SignUpInput, WorkspaceChoice } from './sign-in.js';
+export type { AcceptedInvite, EmailLink, EmailLinkWindow, HandoffInput, HandoffStep, InvitePreview, InviteSignUpInput, SignInInput, SignInOptions, SignInStep, SignUpAttribution, SignUpInput, WorkspaceChoice } from './sign-in.js';
 export { HANDOFF_CALLBACK_PATH, handoffReturnUrl, isLoopbackRedirect, readHandoffRequest } from './handoff.js';
 export type { HandoffRequest } from './handoff.js';
 export { isHostedReturn } from './hosted.js';
@@ -49,7 +49,7 @@ export type { QuotaListener, QuotaStoreDeps } from './quota-store.js';
 export { createEntitlements } from './entitlements.js';
 export type { Entitlements } from './entitlements.js';
 export { billingNotice, readCheckoutReturn } from './billing.js';
-export type { BillingAccess, BillingFacts, BillingGateFacts, BillingNotice, BillingStatus, Plan, PlanChange, Price, UsageNumbers } from './billing.js';
+export type { BillingAccess, BillingFacts, BillingGateFacts, BillingNotice, BillingRetry, BillingStatus, Plan, PlanChange, Price, UsageNumbers } from './billing.js';
 export { MANY_CHANGED } from './live.js';
 export type { LiveNotice, LiveOptions, LiveStatus, WebSocketFactory, WebSocketLike } from './live.js';
 

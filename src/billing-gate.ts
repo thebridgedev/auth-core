@@ -46,7 +46,12 @@ export function deriveNoticeState(facts: BillingGateFacts | null, now = Date.now
   if (facts.access === 'blocked') return 'dunning_exhausted';
   if (facts.status === 'canceled') return 'canceled';
   if (facts.cancelAtPeriodEnd) return 'cancel_at_period_end';
-  if (facts.access === 'payment_due') return facts.status === 'trialing' ? 'past_due_trial' : 'past_due';
+  if (facts.access === 'payment_due') {
+    // An unpaid trial first; then the provider's retry schedule, the last try before the ones still to come.
+    if (facts.status === 'trialing') return 'past_due_trial';
+    if (facts.retry?.final === true) return 'dunning_final_retry';
+    return facts.retry?.nextAt != null ? 'dunning_active' : 'past_due';
+  }
   if (facts.status === 'trialing') {
     const daysLeft = facts.trialEnd === null ? undefined : Math.ceil((Date.parse(facts.trialEnd) - now) / 86_400_000);
     return daysLeft !== undefined && daysLeft <= TRIAL_ENDING_DAYS ? 'trial_ending_soon' : 'trial_active';

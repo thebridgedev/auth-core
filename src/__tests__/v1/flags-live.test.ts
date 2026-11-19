@@ -248,6 +248,23 @@ describe('Live: notices over the socket, and history', () => {
     client.destroy();
   });
 
+  it('treats a notice it cannot read as "something changed": screens and flags fetch again, nothing is dropped silently', async () => {
+    const { fake, client } = await liveClient();
+    const heard: string[] = [];
+    client.live.on('*', (notice) => heard.push(notice.type));
+    const channel = `/workspace/${fake.appId}/ws-acme/1`;
+    fake.publish(channel, { type: 'record.one' });
+    await until(() => heard.length === 1);
+    const loads = evaluations(fake).length;
+    fake.sendUnreadable(channel, { seq: 'two', shape: 'from a newer Bridge' });
+    fake.sendUnreadable(channel, 'not json');
+    await until(() => heard.filter((type) => type === MANY_CHANGED).length === 2 && evaluations(fake).length > loads);
+    // The next readable notice is delivered as usual.
+    fake.publish(channel, { type: 'record.two' });
+    await until(() => heard.includes('record.two'));
+    client.destroy();
+  });
+
   it('stops for good on destroy', async () => {
     const { fake, client } = await liveClient();
     client.destroy();

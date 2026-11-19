@@ -1,9 +1,24 @@
 # Changelog
 
+## [1.0.0-alpha.14] - Unreleased
+
+### Added
+
+- **Flags found in code show in the dashboard.** On the server, when your code reads a flag (`flags.forRequest(...)`, or the results `check` hands back) that The Bridge gave no result for, the SDK reports its key, with the type of the fallback you passed, to `POST /discoveries` on the flags endpoint, with the app key: once per key per process, in the background. The Bridge makes each key it does not have as a flag that is switched off, marked as found in code, until someone sets it up; a flag it has is left as it is. Without `appKey` nothing is reported. The app key needs the privilege `flags.discoveries:write` (give it to the key when you make it); a key without it is refused and nothing is made. A failed report is dropped and changes nothing your code sees. Needs a Bridge server that serves the route; until then the report fails quietly. `FlagSet` takes an optional second argument, called with each key read that has no result.
+- **Flags for a caller who is not signed in: `flags.forVisitor(hints?)`.** For a public route on your server: the results Bridge gives a visitor, which are the flags you marked public and no others. It sends no credential, so the app key never speaks for a stranger. An answer is kept for `visitorFlagsTtlMs` per set of hints (10 seconds by default). A refusal or an unreachable Bridge gives an empty set, so every flag gives its fallback.
+- **Usage that survives a crash or a restart (`usageStore`).** `createBridgeServer` takes a store for the usage reports that wait to be sent. `fileUsageQueue({ dir })` (`/server/node`) keeps them in a journal on disk, as 0.8 did; any object with `load`, `add` and `remove` can be a store. When the server starts, what waited is sent first with the ids it was counted with, so a report sent just before the crash and sent again counts once (The Bridge counts each id once for 35 days). A report older than `maxQueuedAgeMs` (30 days by default, at most 34) is dropped and logged instead of sent, a gauge keeps only its newest level, and a store that fails is logged without stopping the count. Without a store the queue is in memory, as before.
+- **A management client for your server: `createBridgeManagement` (`/server`).** What 0.8's `BridgeManagement` did, on Bridge's new API with your app key: workspaces (also as `tenants`), users, invites, roles and privileges, flags and their segments, plans, events, and the `setupPayments` and `setupCommunication` workflows, with 0.8's method names where the new API allows. `request()` makes any other call on the API. A flag change reads the current revision first, or takes the one you saw (`ifMatch`). `flags.toggle(key, true)` keeps a flag's rule. Plan prices are in minor units. `app` (the app's own record), `branding` (how the sign-in page looks) and `onboarding` (how far setup has come) need the key to hold the privilege the dashboard asks for the same action (`apps.settings:manage`, `accounts.members:read`). `branding` has `getCss`, `updateCss` and `deleteCss`, as in 0.8, on the branding's `css` field. **Different from 0.8:** there is no `tokens`: keys cannot be made, listed or revoked with a key, only by people in the dashboard or CLI. It runs on a server only.
+
+### Fixed
+
+- **A live notice the SDK cannot read now counts as "something changed".** It was dropped; now listeners hear `bridge.live.many_changed`, so screens, flags, quotas and the billing gate fetch again, and the next notice is delivered as usual. The fake issuer (`/testing`) has `sendUnreadable(channel, event)`.
+
 ## [1.0.0-alpha.13] - Unreleased
 
 ### Added
 
+- **Choosing the password at the email link.** `signUp.finish(token, password?)`: a sign-up started with no password on an app that takes passwords fails with the code `password_required` (and the link stays usable) until it is finished with the password the person chooses.
+- **Sign-up attribution.** `signUp.start({ …, attribution })` sends where the visit came from (`{ first, last?, marketingConsent }`: campaign tags as strings, and the visitor's marketing consent) with the sign-up. Bridge keeps it until the address is proved and attaches it to the new account.
 - **Flags for callers with an API key.** On the server, `flags.forRequest(request)` now works for a request that carries an `x-api-key` and no bearer token: it sends the key to Bridge, which evaluates the flags for that key. Rules on the key's privileges (`bridge:privileges`) apply; rules on a role, user or email never match a key. The SDK never reads or checks the key itself. Before, such a request always got an empty set, so every flag gave its fallback.
 - `flags.forRequest(request, hints, { workspace })` names the workspace whose plan an app key's results use (sent as `Bridge-Workspace`). It is sent only with a key and only when you pass it; a workspace that is not your app's is refused by Bridge, and the set comes back empty.
 
@@ -12,6 +27,10 @@
 - A request with a bearer token sends only the token, even when it also carries a key. A request with neither still gets an empty set and Bridge is not asked.
 
 ## [1.0.0-alpha.12] - Unreleased
+
+### Added
+
+- **The payment-retry states of 0.9.** While a payment is overdue, the gate read (`GET /payer/gate`, and `GET /payer`) carries the payment provider's retry schedule as `retry` (`attempts`, `nextAt`, `final`). `deriveNoticeState` maps it back to the 0.9 states: `dunning_active` ("payment retrying", a warning) while a retry is still to come, `dunning_final_retry` (critical) for the last one, and `past_due` when none is left or none is known; an unpaid trial stays `past_due_trial`. A `payment-due` notice from `billingNotice` carries it as `retry`.
 
 ### Fixed
 
