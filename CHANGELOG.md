@@ -13,6 +13,10 @@
 
 ## [1.0.0-alpha.12] - Unreleased
 
+### Added
+
+- **The payment-retry states of 0.9.** While a payment is overdue, the gate read (`GET /payer/gate`, and `GET /payer`) carries the payment provider's retry schedule as `retry` (`attempts`, `nextAt`, `final`). `deriveNoticeState` maps it back to the 0.9 states: `dunning_active` ("payment retrying", a warning) while a retry is still to come, `dunning_final_retry` (critical) for the last one, and `past_due` when none is left or none is known; an unpaid trial stays `past_due_trial`. A `payment-due` notice from `billingNotice` carries it as `retry`.
+
 ### Fixed
 
 - **A locked workspace is read after the lock even while Bridge still refuses the new token.** Bridge refuses tokens issued before a lock for a moment. The session now renews at once, and while the renewed token is still refused it renews again after 1, 2 and 4 seconds, then gives up; before, it renewed once, so the lock read failed and the page never learned it was locked. `BillingGate.refresh` no longer renews on its own. The fake issuer (`/testing`) has `refuseTokensFor(ms)`.

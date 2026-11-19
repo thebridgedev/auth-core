@@ -123,6 +123,12 @@ describe('billing: the payer, checkout and the portal', () => {
       expect(billingNotice({ ...base, ...change } as BillingFacts, now)?.kind).toBe(kind);
     });
 
+    it('carries the provider\'s retry schedule on a payment that is due', () => {
+      const retry = { attempts: 2, nextAt: '2026-11-09T00:00:00.000Z', final: false };
+      expect(billingNotice({ ...base, status: 'past_due', access: 'payment_due', retry } as BillingFacts, now)).toEqual({ kind: 'payment-due', retry });
+      expect(billingNotice({ ...base, status: 'past_due', access: 'payment_due', retry: null } as BillingFacts, now)).toEqual({ kind: 'payment-due' });
+    });
+
     it('says how many days a trial has left', () => {
       expect(billingNotice({ ...base, status: 'trialing', trialEnd: '2026-11-09T00:00:00.000Z' }, now)).toMatchObject({ daysLeft: 3 });
     });
