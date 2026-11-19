@@ -21,6 +21,11 @@
       "import": "./dist/server/index.js",
       "default": "./dist/server/index.js"
     },
+    "./server/node": {
+      "types": "./dist/server/node.d.ts",
+      "node": "./dist/server/node.js",
+      "default": "./dist/server/node.js"
+    },
     "./verifier": {
       "types": "./dist/verifier/index.d.ts",
       "browser": "./dist/verifier/index.js",
@@ -47,6 +52,9 @@
     "*": {
       "server": [
         "./dist/server/index.d.ts"
+      ],
+      "server/node": [
+        "./dist/server/node.d.ts"
       ],
       "verifier": [
         "./dist/verifier/index.d.ts"
