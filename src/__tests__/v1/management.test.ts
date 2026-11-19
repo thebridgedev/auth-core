@@ -251,6 +251,45 @@ describe('management client: flags and segments', () => {
   });
 });
 
+describe('management client: the app, its sign-in page and its setup progress', () => {
+  it('reads and changes the app\'s own record, at the key door in the App registry', async () => {
+    const { mgmt, seen } = setUp(() => Response.json({ redirectUris: [] }), {}, { sign_in: `${ORIGIN}/v2/identity-access/apps/app-1/sign-in`, token: `${ORIGIN}/v2/identity-access/apps/app-1/token`, accounts: `${ORIGIN}/v2/accounts` });
+    await mgmt.app.get();
+    expect([last(seen).method, last(seen).url.href]).toEqual(['GET', `${ORIGIN}/v2/app-registry/app`]);
+    await mgmt.app.update({ redirectUris: ['https://acme.test/cb'] });
+    expect([last(seen).method, last(seen).url.pathname, last(seen).body]).toEqual(['PATCH', '/v2/app-registry/app', { redirectUris: ['https://acme.test/cb'] }]);
+  });
+
+  it('changes the sign-in page\'s look on the version it read, or the one you name', async () => {
+    const { mgmt, seen } = setUp((entry) => (entry.method === 'GET' ? Response.json({ font: 'system', version: 3 }, { headers: { etag: '"3"' } }) : Response.json({ font: 'inter', version: 4 })));
+    await mgmt.branding.get();
+    expect(last(seen).url.pathname).toBe('/v2/app-registry/branding');
+    await mgmt.branding.update({ font: 'inter' });
+    expect(seen.map((entry) => entry.method)).toEqual(['GET', 'GET', 'PATCH']);
+    expect([last(seen).url.pathname, last(seen).headers.get('if-match'), last(seen).body]).toEqual(['/v2/app-registry/branding', '"3"', { font: 'inter' }]);
+    await mgmt.branding.update({ radius: 'small' }, { ifMatch: 2 });
+    expect(last(seen).headers.get('if-match')).toBe('"2"');
+    expect(seen.filter((entry) => entry.method === 'GET')).toHaveLength(2);
+  });
+
+  it('keeps 0.8\'s CSS calls: they ride on the branding\'s css field', async () => {
+    const { mgmt, seen } = setUp((entry) => (entry.method === 'GET' ? Response.json({ css: 'input { border-radius: 4px; }', version: 5 }, { headers: { etag: '"5"' } }) : Response.json({ version: 6 })));
+    expect(await mgmt.branding.getCss()).toEqual({ content: 'input { border-radius: 4px; }' });
+    await mgmt.branding.updateCss({ content: 'a { color: red; }' });
+    expect(last(seen).body).toEqual({ css: 'a { color: red; }' });
+    expect(last(seen).headers.get('if-match')).toBe('"5"');
+    await mgmt.branding.deleteCss();
+    expect(last(seen).body).toEqual({ css: null });
+    await expect(mgmt.branding.updateCss({} as { content: string })).rejects.toMatchObject({ kind: 'invalid' });
+  });
+
+  it('reads the setup progress of its own app', async () => {
+    const { mgmt, seen } = setUp(() => Response.json({ signedIn: null }));
+    await mgmt.onboarding.get({ since: '2026-11-01T00:00:00Z' });
+    expect([last(seen).url.pathname, last(seen).url.searchParams.get('since')]).toEqual(['/v2/events-and-logs/setup-signals', '2026-11-01T00:00:00Z']);
+  });
+});
+
 describe('management client: setup workflows', () => {
   it('connects payments, then makes plans with prices in minor units', async () => {
     const { mgmt, seen } = setUp();

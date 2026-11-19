@@ -340,6 +340,9 @@ const events = await mgmt.events.query({ type: 'accounts.member_added', since: '
 | `flags` | `list`, `get`, `create`, `update`, `toggle`, `delete`, `kill`, `restore`; segments (flag groups): `listSegments`, `createSegment`, `updateSegment`, `deleteSegment`; `export`, `import` |
 | `plans` | `list`, `get`, `create`, `update`, `replace`, `delete`, `archive` |
 | `events` | `query` (as 0.8), `list` (with the cursor for the next page) |
+| `app` | `get`, `update`: the app's own record (redirect URIs, allowed origins, profile addresses), in 0.8's names |
+| `branding` | `get`, `update`: how the app's hosted sign-in page looks (scheme, colors, radius, font, css); `getCss`, `updateCss`, `deleteCss` as in 0.8 |
+| `onboarding` | `get`: how far the app's setup has come |
 | `workflows` | `setupPayments`, `setupCommunication` |
 | `request(method, area, path)` | Any other call on Bridge's version 2 API with your key |
 
@@ -348,7 +351,7 @@ What differs from 0.8:
 - **Ids are Bridge's new ones.** A flag is named by its key, a plan by its key. `flags.update` and `updateSegment` read the current revision first (Bridge refuses a change made on an old one); name the revision you saw with `{ ifMatch }` to refuse a change someone else made in between. `flags.toggle(key, true)` keeps the flag's rule: a flag with a rule goes to `on-with-rule`, so the audience does not widen to everyone.
 - **Plan prices are in minor units** (1999 is 19.99), one per currency and interval. `workflows.setupPayments` still takes a plan's `price` in whole units, as 0.8 did, and converts it.
 - **`users.invite` adds the person at once and emails them**, as 0.8 did. Use `invites.send` for an invitation the person accepts.
-- **Your app key does what its privileges allow.** A call it may not make is refused (403) by Bridge. Changing the app's own settings and branding, making keys and the setup checklist are done in Bridge's dashboard, with its CLI or through its assistant server, not with the app's own key, so this client has no call for them.
+- **Your app key does what its privileges allow.** A call it may not make is refused (403) by Bridge. The dashboard's privilege for the same action is the key's: `app.update` and `branding.update` need `apps.settings:manage` on the key, `onboarding.get` needs `accounts.members:read`; reads of the app and of the branding need none. `branding.update` is read first for the version Bridge asks for, unless you pass `{ ifMatch }`. `updateCss` is kept only as the sign-in page may draw it (paint, spacing and text; no `url()`, no selector on a field's value); anything else is refused with every reason. There is no call for the app's social-login credentials. **Keys cannot be made, listed or revoked with a key**, which differs from 0.8's `tokens`: a key that could make keys would defeat "every key expires" and "a key holds at most its maker's", so keys are made by people, in Bridge's dashboard or CLI.
 - **Server only.** It refuses to start in a browser, since it holds the app key.
 
 ## Hosted mode: sign in on Bridge's page

@@ -11,9 +11,9 @@
  *
  * What the app's own key may do is decided by Bridge, by the key's
  * privileges: a call it may not make is refused (403), never quietly changed.
- * The app's own settings, branding, its keys and the setup checklist are
- * operator actions in Bridge (the dashboard, the CLI and Bridge's assistant
- * server), so this client has no call for them.
+ * The app's own record, the look of its sign-in page and its setup progress
+ * need the key to hold the privilege the dashboard asks for the same action.
+ * Making and revoking keys has no call: a key may never make keys.
  */
 import { Discovery, type IssuerMetadata } from '../core/discovery.js';
 import { BridgeError } from '../core/errors.js';
@@ -23,7 +23,7 @@ type Json = Record<string, unknown>;
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 /** Which part of Bridge's API a call goes to. */
-export type ManagementArea = 'accounts' | 'billing' | 'flags' | 'events-and-logs' | 'communication' | 'identity-access';
+export type ManagementArea = 'accounts' | 'billing' | 'flags' | 'events-and-logs' | 'communication' | 'identity-access' | 'app-registry';
 
 /** The revision a change is made on: the `ETag` a read gave, or the flag's or segment's `revision`. */
 export type Revision = string | number;
@@ -164,7 +164,7 @@ export function createBridgeManagement(options: ManagementOptions) {
     const { endpoints } = await metadata();
     const listed = area === 'events-and-logs' ? endpoints.events_and_logs : area === 'accounts' ? endpoints.accounts : area === 'billing' ? endpoints.billing : area === 'flags' ? endpoints.flags : undefined;
     if (listed !== undefined) return listed.replace(/\/+$/, '');
-    if (area === 'communication' || area === 'identity-access' || area === 'events-and-logs') {
+    if (area === 'communication' || area === 'identity-access' || area === 'events-and-logs' || area === 'app-registry') {
       // FALLBACK: the issuer lists no address for this part of the API; every part sits beside Accounts, at `…/v2/<part>`.
       const accounts = endpoints.accounts?.replace(/\/+$/, '');
       if (accounts !== undefined && accounts.endsWith('/accounts')) return `${accounts.slice(0, -'/accounts'.length)}/${area}`;
@@ -193,6 +193,60 @@ export function createBridgeManagement(options: ManagementOptions) {
   const at = (workspace: string, request: Omit<ManagementRequest, 'workspace'> = {}): ManagementRequest => {
     if (typeof workspace !== 'string' || workspace === '') throw new BridgeError('invalid', '"workspaceId" is needed.');
     return { ...request, workspace };
+  };
+
+  const app = {
+    /** The app's own record, in 0.8's names: `redirectUris`, `allowedOrigins`, `defaultCallbackUri`, the profile addresses. */
+    get: () => run<Json>('GET', 'app-registry', '/app'),
+    /** Changes the fields you give. Needs the privilege to change the app's settings on your key. */
+    update: (data: Json) => run<Json>('PATCH', 'app-registry', '/app', { body: data }),
+  };
+
+  const getBranding = () => run<Json>('GET', 'app-registry', '/branding');
+  async function updateBranding(data: Json, change: Change = {}): Promise<Json> {
+    let ifMatch = change.ifMatch;
+    if (ifMatch === undefined) {
+      const read = await send<Json>('GET', 'app-registry', '/branding');
+      ifMatch = read.etag ?? (typeof read.body['version'] === 'number' ? read.body['version'] : undefined);
+      if (ifMatch === undefined) throw new BridgeError('invalid', 'Bridge gave no version for the branding: pass `ifMatch`.');
+    }
+    return run<Json>('PATCH', 'app-registry', '/branding', { body: data, ifMatch });
+  }
+
+  const branding = {
+    /** How the app's hosted sign-in page looks: scheme, colors, radius, font, logo, its own CSS, with the choices on offer and the `version` read. */
+    get: getBranding,
+    /**
+     * Changes the fields you give (`scheme`, `colors`, `radius`, `font`, `css`), merged. Bridge makes a change only on
+     * the version you read: it is read first, unless you name the one you saw in `ifMatch`. Needs the privilege to
+     * change the app's settings on your key.
+     */
+    update: updateBranding,
+    /** The app's own CSS, as Bridge saved it (checked and written out again), in 0.8's `{ content }`; `content` is empty when there is none. */
+    async getCss(): Promise<{ content: string }> {
+      const read = await getBranding();
+      return { content: typeof read['css'] === 'string' ? read['css'] : '' };
+    },
+    /**
+     * Replaces the app's CSS. Bridge keeps only what the sign-in page may draw (paint, spacing and text; no `url()`, no
+     * selector on a field's value) and refuses the rest with every reason (400, in `error.message`).
+     */
+    async updateCss(data: { content: string }): Promise<void> {
+      if (typeof data?.content !== 'string') throw new BridgeError('invalid', 'updateCss takes `{ content }`, the CSS as text.');
+      await updateBranding({ css: data.content });
+    },
+    /** Removes the app's CSS. */
+    async deleteCss(): Promise<void> {
+      await updateBranding({ css: null });
+    },
+  };
+
+  const onboarding = {
+    /**
+     * How far the app's setup has come, from its own record: first sign-in, first user, first real sign-in, first paid
+     * subscription. Needs the privilege to read members on your key. `since` is an ISO time.
+     */
+    get: (query: { since?: string } = {}) => run<Json>('GET', 'events-and-logs', '/setup-signals', query.since === undefined ? {} : { query: { since: query.since } }),
   };
 
   const workspaces = {
@@ -415,6 +469,9 @@ export function createBridgeManagement(options: ManagementOptions) {
   return {
     /** Any call on Bridge's version 2 API with the app key, for a route this client has no method for yet. */
     request: <T = Json>(method: Method, area: ManagementArea, path: string, request?: ManagementRequest) => run<T>(method, area, path, request),
+    app,
+    branding,
+    onboarding,
     workspaces,
     /** 0.8's name for `workspaces`. */
     tenants: workspaces,
