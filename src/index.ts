@@ -33,8 +33,8 @@ export type { PasskeyInfo, PasskeySignInInput, WebAuthnCeremonies } from './pass
 export type { AcceptedInvite, EmailLink, EmailLinkWindow, HandoffInput, HandoffStep, InvitePreview, InviteSignUpInput, SignInInput, SignInOptions, SignInStep, SignUpAttribution, SignUpInput, WorkspaceChoice } from './sign-in.js';
 export { HANDOFF_CALLBACK_PATH, handoffReturnUrl, isLoopbackRedirect, readHandoffRequest } from './handoff.js';
 export type { HandoffRequest } from './handoff.js';
-export { isHostedReturn } from './hosted.js';
-export type { HostedStartOptions } from './hosted.js';
+export { initiatedSignIn, isHostedReturn } from './hosted.js';
+export type { HostedStartOptions, InitiatedSignIn } from './hosted.js';
 
 export type { Invite, Me, MeUpdate, Member, MemberUpdate, MyWorkspace, Page, Role, Workspace, WorkspaceUpdate } from './accounts.js';
 export { FlagSet, STANDARD_FLAGS } from './flags.js';

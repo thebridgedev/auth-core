@@ -369,7 +369,24 @@ location.assign(await bridge.hosted.start({ redirectUri: 'https://app.example.co
 await bridge.hosted.finish(location.href); // refuses another state, another issuer, or a return this browser did not start
 ```
 
-`hosted.start({ redirectUri, linkAddress })` also names where an email link sent on the way goes (default: Bridge's page).
+`hosted.start({ redirectUri, linkAddress })` also names where an email link sent on the way goes (default: Bridge's page). `page: 'sign-up'` opens the page on its sign-up form, and `plan` names the plan the new workspace starts on (`currency` and `interval` pick one of its prices).
+
+When someone opens Bridge's page directly (a login or signup link, with no sign-in started by your app), the page sends the browser to your app's default sign-in return with `iss` set to your issuer, and `page=sign-up` and `plan` for a signup link. `initiatedSignIn(location.href, issuer)` recognises that address: start an ordinary `hosted.start` with its `page` and `plan`, and the person signs in once on the page and comes back with a code only your app can trade. Any other `iss` is not yours: ignore it.
+
+```ts
+const asked = initiatedSignIn(location.href, issuer);
+if (asked) {
+  location.replace(
+    await bridge.hosted.start({
+      redirectUri,
+      page: asked.page,
+      ...(asked.plan ? { plan: asked.plan } : {}),
+      ...(asked.price ? { currency: asked.price.currency, interval: asked.price.interval } : {}),
+    }),
+  );
+}
+else await bridge.hosted.finish(location.href);
+```
 
 A page that signs people in for other apps, like Bridge's own, calls `bridge.request.use(id)` with the `request` from its address. Every sign-in step then sends the request instead of its own challenge, and a finished step is `{ done: true, handoff }`: send the browser to `handoff`. The page never holds the app's verifier.
 

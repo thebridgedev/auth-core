@@ -84,6 +84,17 @@ export interface SignUpInput {
    * new account once the address is proved. Leave out for none.
    */
   readonly attribution?: SignUpAttribution;
+  /**
+   * The plan the new workspace starts on, by its key, as a plan-specific sign-up link names it. Bridge applies it
+   * when the app offers that plan, and otherwise ignores it: the app's plan at sign-up applies. Leave out for none.
+   */
+  readonly plan?: string;
+  /**
+   * With `plan`, which of the plan's prices the workspace starts on: its currency (`EUR`) and its interval (`month`).
+   * Sent only with a plan and both of them; Bridge uses the plan's price that matches, if it has one.
+   */
+  readonly currency?: string;
+  readonly interval?: 'day' | 'week' | 'month' | 'year';
 }
 
 /** A sign-up's attribution: campaign tags as plain strings, and whether the visitor consented to marketing. */
@@ -366,6 +377,8 @@ export function createSignIn(deps: SignInDeps) {
           ...(input.lastName === undefined ? {} : { lastName: input.lastName }),
           ...(input.workspace === undefined || input.workspace === false ? {} : { workspace: input.workspace }),
           ...(input.attribution === undefined ? {} : { attribution: input.attribution }),
+          ...(input.plan === undefined || input.plan === '' ? {} : { plan: input.plan }),
+          ...(input.plan === undefined || input.plan === '' || !input.currency || !input.interval ? {} : { currency: input.currency, interval: input.interval }),
         });
         return { next: 'verify_email' };
       },

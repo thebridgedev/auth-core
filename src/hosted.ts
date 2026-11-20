@@ -34,6 +34,26 @@ export interface HostedStartOptions {
    * registered email-links addresses, exactly. @default Bridge's hosted page
    */
   readonly linkAddress?: string;
+  /** Open Bridge's page on its sign-up form instead of its sign-in form. @default 'sign-in' */
+  readonly page?: 'sign-in' | 'sign-up';
+  /** On the sign-up form, the plan the new workspace starts on, by its key (see `SignUpInput.plan`). */
+  readonly plan?: string;
+  /** With `plan`, the plan's price: its currency and interval (see `SignUpInput.currency`). */
+  readonly currency?: string;
+  readonly interval?: string;
+}
+
+/**
+ * A sign-in that Bridge's hosted page asked the app to start (third-party-initiated login, OpenID Connect Core 1.0,
+ * section 4): the page was opened with no sign-in request, and sent the browser to the app's default sign-in return
+ * with `iss`. The app starts an ordinary hosted sign-in (`hosted.start`), with its own return, and the person signs in
+ * once on the page. Nothing in it is trusted beyond which form to open and which plan to offer.
+ */
+export interface InitiatedSignIn {
+  readonly page: 'sign-in' | 'sign-up';
+  readonly plan: string | null;
+  /** With the plan, the plan's price the link named: its currency and interval, or null. */
+  readonly price: { readonly currency: string; readonly interval: string } | null;
 }
 
 /** What waits in this browser for the return: kept where every tab of the origin reads it, as a sign-up's verifier is. */
@@ -84,6 +104,16 @@ export function createHosted(deps: HostedDeps) {
       await deps.storage.set(key, JSON.stringify({ verifier: pkce.verifier, state, redirectUri: options.redirectUri, expiresAt: Date.now() + PENDING_KEEP_MS } satisfies Pending));
       const url = new URL(page);
       url.searchParams.set('request', request);
+      if (options.page === 'sign-up') {
+        url.searchParams.set('page', 'sign-up');
+        if (options.plan !== undefined && options.plan !== '') {
+          url.searchParams.set('signupPlan', options.plan);
+          if (options.currency && options.interval) {
+            url.searchParams.set('signupCurrency', options.currency);
+            url.searchParams.set('signupRecurrenceInterval', options.interval);
+          }
+        }
+      }
       return url.toString();
     },
 
@@ -122,4 +152,23 @@ export function createHosted(deps: HostedDeps) {
 export function isHostedReturn(location: string | URL): boolean {
   const params = new URL(String(location)).searchParams;
   return params.has('state') && (params.has('code') || params.has('error'));
+}
+
+/**
+ * Whether an address is a sign-in Bridge's hosted page asked this app to start (see `InitiatedSignIn`): it carries
+ * `iss` naming this app's issuer exactly, and no `code`, `state` or `error`. Answers which form to open and the plan,
+ * or null for any other address, another issuer's among them.
+ */
+export function initiatedSignIn(location: string | URL, issuer: string): InitiatedSignIn | null {
+  const params = new URL(String(location)).searchParams;
+  if (params.has('code') || params.has('state') || params.has('error')) return null;
+  const iss = params.getAll('iss');
+  if (iss.length !== 1 || iss[0] !== issuer) return null;
+  const page = params.get('page') === 'sign-up' ? 'sign-up' : 'sign-in';
+  const given = params.get('plan');
+  const plan = page === 'sign-up' && given !== null && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(given) ? given : null;
+  const currency = params.get('currency');
+  const interval = params.get('interval')?.toLowerCase();
+  const price = plan !== null && currency !== null && /^[A-Za-z]{3}$/.test(currency) && interval !== undefined && ['day', 'week', 'month', 'year'].includes(interval) ? { currency: currency.toUpperCase(), interval } : null;
+  return { page, plan, price };
 }
