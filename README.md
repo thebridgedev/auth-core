@@ -369,7 +369,7 @@ location.assign(await bridge.hosted.start({ redirectUri: 'https://app.example.co
 await bridge.hosted.finish(location.href); // refuses another state, another issuer, or a return this browser did not start
 ```
 
-`hosted.start({ redirectUri, linkAddress })` also names where an email link sent on the way goes (default: Bridge's page). `page: 'sign-up'` opens the page on its sign-up form, and `plan` names the plan the new workspace starts on.
+`hosted.start({ redirectUri, linkAddress })` also names where an email link sent on the way goes (default: Bridge's page). `page: 'sign-up'` opens the page on its sign-up form, and `plan` names the plan the new workspace starts on (`currency` and `interval` pick one of its prices).
 
 When someone opens Bridge's page directly (a login or signup link, with no sign-in started by your app), the page sends the browser to your app's default sign-in return with `iss` set to your issuer, and `page=sign-up` and `plan` for a signup link. `initiatedSignIn(location.href, issuer)` recognises that address: start an ordinary `hosted.start` with its `page` and `plan`, and the person signs in once on the page and comes back with a code only your app can trade. Any other `iss` is not yours: ignore it.
 

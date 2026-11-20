@@ -90,11 +90,15 @@ describe('sign-up, finished from the email link on the same device', () => {
 
   it('sends the plan a sign-up names, and nothing of it when there is none', async () => {
     const { fake } = issuerWithPeople();
-    await clientOn(fake, { storage: memoryStorage() }).signUp.start({ email: 'ivy@acme.test', password: PASSWORD, plan: 'pro' });
-    await clientOn(fake, { storage: memoryStorage() }).signUp.start({ email: 'jay@acme.test', password: PASSWORD });
+    await clientOn(fake, { storage: memoryStorage() }).signUp.start({ email: 'ivy@acme.test', password: PASSWORD, plan: 'pro', currency: 'SEK', interval: 'year' });
+    await clientOn(fake, { storage: memoryStorage() }).signUp.start({ email: 'jay@acme.test', password: PASSWORD, currency: 'SEK', interval: 'year' });
+    await clientOn(fake, { storage: memoryStorage() }).signUp.start({ email: 'kim@acme.test', password: PASSWORD, plan: 'pro', currency: 'SEK' });
     const sent = fake.requests.filter((each) => each.path.endsWith('/sign-up')).map((each) => each.body as Record<string, unknown>);
-    expect(sent.find((body) => body['email'] === 'ivy@acme.test')?.['plan']).toBe('pro');
+    expect(sent.find((body) => body['email'] === 'ivy@acme.test')).toMatchObject({ plan: 'pro', currency: 'SEK', interval: 'year' });
+    // The price goes only with a plan and both of its parts.
     expect(sent.find((body) => body['email'] === 'jay@acme.test')).not.toHaveProperty('plan');
+    expect(sent.find((body) => body['email'] === 'jay@acme.test')).not.toHaveProperty('currency');
+    expect(sent.find((body) => body['email'] === 'kim@acme.test')).not.toHaveProperty('currency');
   });
 
   it('sends a sign-up\'s attribution with it, and nothing of it when there is none', async () => {

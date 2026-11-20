@@ -38,6 +38,9 @@ export interface HostedStartOptions {
   readonly page?: 'sign-in' | 'sign-up';
   /** On the sign-up form, the plan the new workspace starts on, by its key (see `SignUpInput.plan`). */
   readonly plan?: string;
+  /** With `plan`, the plan's price: its currency and interval (see `SignUpInput.currency`). */
+  readonly currency?: string;
+  readonly interval?: string;
 }
 
 /**
@@ -49,6 +52,8 @@ export interface HostedStartOptions {
 export interface InitiatedSignIn {
   readonly page: 'sign-in' | 'sign-up';
   readonly plan: string | null;
+  /** With the plan, the plan's price the link named: its currency and interval, or null. */
+  readonly price: { readonly currency: string; readonly interval: string } | null;
 }
 
 /** What waits in this browser for the return: kept where every tab of the origin reads it, as a sign-up's verifier is. */
@@ -101,7 +106,13 @@ export function createHosted(deps: HostedDeps) {
       url.searchParams.set('request', request);
       if (options.page === 'sign-up') {
         url.searchParams.set('page', 'sign-up');
-        if (options.plan !== undefined && options.plan !== '') url.searchParams.set('signupPlan', options.plan);
+        if (options.plan !== undefined && options.plan !== '') {
+          url.searchParams.set('signupPlan', options.plan);
+          if (options.currency && options.interval) {
+            url.searchParams.set('signupCurrency', options.currency);
+            url.searchParams.set('signupRecurrenceInterval', options.interval);
+          }
+        }
       }
       return url.toString();
     },
@@ -154,6 +165,10 @@ export function initiatedSignIn(location: string | URL, issuer: string): Initiat
   const iss = params.getAll('iss');
   if (iss.length !== 1 || iss[0] !== issuer) return null;
   const page = params.get('page') === 'sign-up' ? 'sign-up' : 'sign-in';
-  const plan = params.get('plan');
-  return { page, plan: page === 'sign-up' && plan !== null && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(plan) ? plan : null };
+  const given = params.get('plan');
+  const plan = page === 'sign-up' && given !== null && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(given) ? given : null;
+  const currency = params.get('currency');
+  const interval = params.get('interval')?.toLowerCase();
+  const price = plan !== null && currency !== null && /^[A-Za-z]{3}$/.test(currency) && interval !== undefined && ['day', 'week', 'month', 'year'].includes(interval) ? { currency: currency.toUpperCase(), interval } : null;
+  return { page, plan, price };
 }
