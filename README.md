@@ -375,7 +375,16 @@ When someone opens Bridge's page directly (a login or signup link, with no sign-
 
 ```ts
 const asked = initiatedSignIn(location.href, issuer);
-if (asked) location.replace(await bridge.hosted.start({ redirectUri, page: asked.page, ...(asked.plan ? { plan: asked.plan } : {}) }));
+if (asked) {
+  location.replace(
+    await bridge.hosted.start({
+      redirectUri,
+      page: asked.page,
+      ...(asked.plan ? { plan: asked.plan } : {}),
+      ...(asked.price ? { currency: asked.price.currency, interval: asked.price.interval } : {}),
+    }),
+  );
+}
 else await bridge.hosted.finish(location.href);
 ```
 
