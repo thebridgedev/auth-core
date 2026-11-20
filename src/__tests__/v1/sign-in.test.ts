@@ -88,6 +88,15 @@ describe('sign-up, finished from the email link on the same device', () => {
     expect(await storage.get(`bridge:${fake.issuer}:sign-up`)).toBeNull();
   });
 
+  it('sends the plan a sign-up names, and nothing of it when there is none', async () => {
+    const { fake } = issuerWithPeople();
+    await clientOn(fake, { storage: memoryStorage() }).signUp.start({ email: 'ivy@acme.test', password: PASSWORD, plan: 'pro' });
+    await clientOn(fake, { storage: memoryStorage() }).signUp.start({ email: 'jay@acme.test', password: PASSWORD });
+    const sent = fake.requests.filter((each) => each.path.endsWith('/sign-up')).map((each) => each.body as Record<string, unknown>);
+    expect(sent.find((body) => body['email'] === 'ivy@acme.test')?.['plan']).toBe('pro');
+    expect(sent.find((body) => body['email'] === 'jay@acme.test')).not.toHaveProperty('plan');
+  });
+
   it('sends a sign-up\'s attribution with it, and nothing of it when there is none', async () => {
     const { fake } = issuerWithPeople();
     const attribution = { first: { utm_source: 'reddit', rdt_cid: 'c1' }, last: { utm_source: 'youtube' }, marketingConsent: true };

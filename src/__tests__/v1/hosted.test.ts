@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { memoryStorage } from '../../core/storage.js';
-import { isHostedReturn } from '../../hosted.js';
+import { initiatedSignIn, isHostedReturn } from '../../hosted.js';
 import { clientOn, issuerWithPeople, PASSWORD } from './helpers.js';
 
 const RETURN = 'https://app.acme.test/auth/callback';
@@ -45,6 +45,27 @@ describe('hosted mode: the app starts a sign-in request, the hosted page signs i
     expect(traded.body).toMatchObject({ grant_type: 'authorization_code', redirect_uri: RETURN });
     // Finished once.
     await expect(app.hosted.finish(back)).rejects.toMatchObject({ kind: 'invalid' });
+  });
+
+  it('opens the page on its sign-up form with the plan when asked, and only then', async () => {
+    const { app } = setUp();
+    const signUp = new URL(await app.hosted.start({ redirectUri: RETURN, page: 'sign-up', plan: 'pro' }));
+    expect([signUp.searchParams.get('page'), signUp.searchParams.get('signupPlan')]).toEqual(['sign-up', 'pro']);
+    const signIn = new URL(await app.hosted.start({ redirectUri: RETURN, plan: 'pro' }));
+    expect([signIn.searchParams.has('page'), signIn.searchParams.has('signupPlan')]).toEqual([false, false]);
+  });
+
+  it('knows a sign-in the hosted page asked it to start: iss naming its own issuer exactly, no code, state or error', () => {
+    const issuer = 'https://api.acme.test/identity-access/apps/app-test';
+    const at = (query: string) => `${RETURN}?${query}`;
+    const iss = `iss=${encodeURIComponent(issuer)}`;
+    expect(initiatedSignIn(at(iss), issuer)).toEqual({ page: 'sign-in', plan: null });
+    expect(initiatedSignIn(at(`${iss}&page=sign-up&plan=pro`), issuer)).toEqual({ page: 'sign-up', plan: 'pro' });
+    expect(initiatedSignIn(at(`${iss}&page=sign-up&plan=..%2Fx`), issuer)).toEqual({ page: 'sign-up', plan: null });
+    expect(initiatedSignIn(at(`${iss}&plan=pro`), issuer)).toEqual({ page: 'sign-in', plan: null });
+    for (const query of ['', `iss=${encodeURIComponent('https://evil.test/identity-access/apps/app-test')}`, `${iss}&${iss}`, `${iss}&code=c&state=s`, `${iss}&state=s`, `${iss}&error=access_denied`]) {
+      expect(initiatedSignIn(at(query), issuer), query).toBeNull();
+    }
   });
 
   it('refuses a return with another state or issuer, or one this browser did not start', async () => {

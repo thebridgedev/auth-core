@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.15] - Unreleased
+
+### Added
+
+- **Plan-specific sign-up links.** `signUp.start({ plan })` names the plan the new workspace starts on, by its key. Bridge applies it when the app offers that plan, and otherwise ignores it: the app's plan at sign-up applies.
+- **Opening Bridge's hosted page on its sign-up form.** `hosted.start({ page: 'sign-up', plan })`.
+- **Sign-ins Bridge's hosted page asks the app to start.** `initiatedSignIn(location, issuer)` recognises the address the page sends a person to when they open it directly: the app's default sign-in return with `iss` naming the app's issuer (OpenID Connect third-party-initiated login). The app starts its own sign-in there, so it still only finishes sign-ins it started.
+
 ## [1.0.0-alpha.14] - Unreleased
 
 ### Added

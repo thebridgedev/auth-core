@@ -84,6 +84,11 @@ export interface SignUpInput {
    * new account once the address is proved. Leave out for none.
    */
   readonly attribution?: SignUpAttribution;
+  /**
+   * The plan the new workspace starts on, by its key, as a plan-specific sign-up link names it. Bridge applies it
+   * when the app offers that plan, and otherwise ignores it: the app's plan at sign-up applies. Leave out for none.
+   */
+  readonly plan?: string;
 }
 
 /** A sign-up's attribution: campaign tags as plain strings, and whether the visitor consented to marketing. */
@@ -366,6 +371,7 @@ export function createSignIn(deps: SignInDeps) {
           ...(input.lastName === undefined ? {} : { lastName: input.lastName }),
           ...(input.workspace === undefined || input.workspace === false ? {} : { workspace: input.workspace }),
           ...(input.attribution === undefined ? {} : { attribution: input.attribution }),
+          ...(input.plan === undefined || input.plan === '' ? {} : { plan: input.plan }),
         });
         return { next: 'verify_email' };
       },
