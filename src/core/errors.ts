@@ -78,6 +78,8 @@ export interface BridgeErrorInit {
   readonly step?: string | null;
   readonly problem?: Problem | null;
   readonly quota?: LimitReached | null;
+  readonly signInUrl?: string | null;
+  readonly failed?: readonly string[] | null;
   readonly cause?: unknown;
 }
 
@@ -103,6 +105,13 @@ export class BridgeError extends Error {
   readonly problem: Problem | null;
   /** For a refusal because the plan's limit is reached (`limit-reached`): the metric, the limit and what is used. */
   readonly quota: LimitReached | null;
+  /**
+   * For `passkey_on_app_page`: the app's own sign-in page, where the passkey belongs (an http or https address). Bridge's
+   * pages hand a passkey sign-in over to it.
+   */
+  readonly signInUrl: string | null;
+  /** For `password_change_required`: which of the app's password rules the person's password breaks. Never the password. */
+  readonly failed: readonly string[] | null;
 
   constructor(kind: BridgeErrorKind, message: string, init: BridgeErrorInit = {}) {
     super(message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -114,6 +123,8 @@ export class BridgeError extends Error {
     this.step = init.step ?? null;
     this.problem = init.problem ?? null;
     this.quota = init.quota ?? null;
+    this.signInUrl = init.signInUrl ?? null;
+    this.failed = init.failed ?? null;
   }
 }
 
@@ -155,6 +166,23 @@ const isLockName = (value: unknown): boolean => typeof value === 'string' && LOC
 export function isBillingLocked(error: unknown): boolean {
   if (!isBridgeError(error) || error.status !== 402) return false;
   return isLockName(error.code) || isLockName(error.problem?.type);
+}
+
+/**
+ * Where a passkey sign-in on Bridge's own pages is to continue: the app's sign-in page, when Bridge refused it with
+ * `passkey_on_app_page` (a passkey belongs to the app's own domain); null for any other error. Send the browser there.
+ */
+export function passkeyHandOver(error: unknown): string | null {
+  return isBridgeError(error) && error.code === 'passkey_on_app_page' ? error.signInUrl : null;
+}
+
+/**
+ * Whether Bridge refused a sign-in with the right password because the app's password rules changed and it no longer
+ * meets them (`password_change_required`). Bridge has already emailed a link to choose a new one; `error.failed` names
+ * the rules the password breaks.
+ */
+export function isPasswordChangeRequired(error: unknown): boolean {
+  return isBridgeError(error) && error.code === 'password_change_required';
 }
 
 export function isBridgeError(value: unknown, kind?: BridgeErrorKind): value is BridgeError {
@@ -227,6 +255,17 @@ export function parseRetryAfter(value: string | null | undefined, now = Date.now
   return Number.isNaN(at) ? null : Math.max(0, Math.ceil((at - now) / 1000));
 }
 
+/** An address a browser may be sent to: http or https, with no credentials in it. */
+function webAddress(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    return (url.protocol === 'https:' || url.protocol === 'http:') && url.username === '' && url.password === '' ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 function text(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
@@ -252,7 +291,15 @@ export function errorFromAnswer(status: number, body: unknown, headers?: { get(n
     const kind = CODE_KINDS[oauth] ?? kindOfStatus(status);
     const reason = text(record['reason']);
     const message = text(record['error_description']) ?? (reason !== undefined ? `Refused: ${reason}.` : `Bridge refused the request (${oauth}).`);
-    return new BridgeError(kind, message, { status, code: reason ?? oauth, retryAfterSeconds });
+    const handOverTo = oauth === 'passkey_on_app_page' ? webAddress(record['sign_in_url']) : null;
+    const failed = Array.isArray(record['failed']) ? record['failed'].filter((each): each is string => typeof each === 'string') : null;
+    return new BridgeError(kind, message, {
+      status,
+      code: reason ?? oauth,
+      retryAfterSeconds,
+      ...(handOverTo === null ? {} : { signInUrl: handOverTo }),
+      ...(oauth === 'password_change_required' && failed !== null ? { failed } : {}),
+    });
   }
 
   // Problem details: every API route.

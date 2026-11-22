@@ -40,6 +40,11 @@ export interface PasskeyInfo {
   readonly backedUp: boolean;
   /** The authenticator's model, all zeros when it gives none. */
   readonly aaguid: string;
+  /**
+   * False for a passkey made for another domain than the app's own (on Bridge's pages, before passkeys followed the
+   * app's main address): it cannot sign in any more. Tell the person, let them sign in another way, and offer a new one.
+   */
+  readonly usable: boolean;
 }
 
 export interface PasskeySignInInput {
@@ -159,8 +164,8 @@ export function createPasskeys<Step>(deps: PasskeyDeps) {
       return deps.signInSteps<Step>(answer, pkce.verifier);
     },
 
-    /** The signed-in person's passkeys, newest first. */
-    list: (): Promise<PasskeyInfo[]> => signedIn<PasskeyInfo[]>('GET', ROUTES.passkeys),
+    /** The signed-in person's passkeys, newest first. A passkey made for another domain says `usable: false`. */
+    list: async (): Promise<PasskeyInfo[]> => (await signedIn<(Omit<PasskeyInfo, 'usable'> & { usable?: boolean })[]>('GET', ROUTES.passkeys)).map((each) => ({ ...each, usable: each.usable !== false })),
 
     /**
      * Adds a passkey for the signed-in person, from this device. Needs a

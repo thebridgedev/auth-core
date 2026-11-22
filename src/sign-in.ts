@@ -40,6 +40,11 @@ export type SignInStep =
        */
       readonly handoff?: string;
       /**
+       * Set with `handoff` when the return goes to the person's own machine (localhost) on an app in production: the
+       * page shows a Continue button and goes back only when the person presses it, never by itself.
+       */
+      readonly confirmReturn?: true;
+      /**
        * Set when the link was one to confirm it is you (`recheck.email`): the
        * session already open here was renewed, and no new one was made.
        */
@@ -193,6 +198,8 @@ interface CodeAnswer {
   /** With `state`, on a code made for a sign-in request: where the code goes. */
   readonly redirect_uri?: unknown;
   readonly state?: unknown;
+  /** With `redirect_uri`: the person confirms with a click before the browser goes back. */
+  readonly confirm_return?: unknown;
   readonly next?: unknown;
   readonly flow?: unknown;
   readonly workspaces?: unknown;
@@ -291,7 +298,7 @@ export function createSignIn(deps: SignInDeps) {
       answer,
       async (code) => {
         // A code made for a sign-in request is the other app's: it goes to the app's return, and is never traded here.
-        if (typeof answer?.redirect_uri === 'string' && typeof answer.state === 'string') return { done: true, handoff: requestReturnUrl(answer.redirect_uri, code, answer.state, deps.issuer) };
+        if (typeof answer?.redirect_uri === 'string' && typeof answer.state === 'string') return { done: true, handoff: requestReturnUrl(answer.redirect_uri, code, answer.state, deps.issuer), ...(answer.confirm_return === true ? { confirmReturn: true as const } : {}) };
         await deps.session.exchangeCode(code, verifier);
         return { done: true };
       },

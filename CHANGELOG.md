@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Passkeys belong to the app's own domain.** A passkey sign-in on Bridge's own pages is refused with `passkey_on_app_page` (a 409), and `passkeyHandOver(error)` gives the app's sign-in page the browser goes on to. `passkeys.list()` says `usable: false` for a passkey made for another domain (on Bridge's pages, before the change): tell the person, let them sign in another way, and offer a new passkey.
+- **A return to localhost asks for a click.** On an app in production, a sign-in that returns to the person's own machine answers `confirmReturn: true` with its `handoff`, and the page shows a Continue button instead of going back by itself.
+- **Passwords that must change.** `isPasswordChangeRequired(error)` is true when Bridge refused a sign-in with the right password because the app's password rules changed (`password_change_required`): a link to choose a new password was already emailed, and `error.failed` names the rules the password breaks.
+
 ## [1.0.0-alpha.15] - Unreleased
 
 ### Added

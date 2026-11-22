@@ -42,6 +42,16 @@ export interface FakeIssuerOptions {
    */
   readonly returns?: readonly string[];
   /**
+   * An app in production whose sign-in request returns to the person's own machine (localhost): the answer carries
+   * `confirm_return: true`, so the page asks for a click before going back. @default false
+   */
+  readonly confirmReturn?: boolean;
+  /**
+   * The app's own sign-in page. Set, the passkey options asked for from Bridge's hosted page (an `Origin` that is the
+   * metadata's `sign_in_page`) are refused with 409 `passkey_on_app_page` and this address. @default none
+   */
+  readonly passkeysBelongTo?: string;
+  /**
    * Routes that want a recent sign-in, as `"METHOD /v2/path"`: called with a
    * token whose sign-in is older than `maxAgeSeconds` they answer 401
    * `identity-recheck`, as Bridge's do. See `signedInLongAgo`. @default none
@@ -170,8 +180,10 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   const recentMs = (options.recheck?.maxAgeSeconds ?? 300) * 1000;
   // Passkeys: each ceremony's challenge, used once; each registered passkey, by its credential id.
   const passkeyChallenges = new Map<string, { purpose: 'sign-in' | 'register' | 'recheck'; pkce?: string; email?: string | null; user?: string; link?: string; request?: SignInRequest }>();
-  const passkeys = new Map<string, { id: string; user: string; name: string; createdAt: string; lastUsedAt: string | null }>();
+  const passkeys = new Map<string, { id: string; user: string; name: string; createdAt: string; lastUsedAt: string | null; usable?: boolean }>();
   const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link' | 'passkey-setup' | 'recheck'; email: string; session?: string; challenge?: string; request?: SignInRequest; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
+  /** People whose password breaks the app's rules since it went to production, and which rules. */
+  const mustChange = new Map<string, readonly string[]>();
   const sentLinks: { to: string; purpose: string; token: string }[] = [];
   const requests: RecordedRequest[] = [];
   const invites: FakeInvite[] = [];
@@ -305,7 +317,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     const code = secret();
     if (request !== undefined) {
       codes.set(code, { user: person.id, workspace, challenge: request.challenge, redirectUri: request.redirectUri, used: false, session: null });
-      return json(200, { code, redirect_uri: request.redirectUri, state: request.state });
+      return json(200, { code, redirect_uri: request.redirectUri, state: request.state, ...(options.confirmReturn === true ? { confirm_return: true } : {}) });
     }
     codes.set(code, { user: person.id, workspace, challenge, used: false, session: null });
     return json(200, { code });
@@ -402,7 +414,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     passkeys.set(credential, { id: credential, user, name: typeof name === 'string' && name !== '' ? name : 'Passkey', createdAt: new Date(now()).toISOString(), lastUsedAt: null });
     return { id: credential };
   }
-  const passkeyView = (each: { id: string; name: string; createdAt: string; lastUsedAt: string | null }) => ({ id: each.id, name: each.name, createdAt: each.createdAt, lastUsedAt: each.lastUsedAt, deviceType: 'multiDevice', backedUp: true, aaguid: '00000000-0000-0000-0000-000000000000' });
+  const passkeyView = (each: { id: string; name: string; createdAt: string; lastUsedAt: string | null; usable?: boolean }) => ({ id: each.id, name: each.name, createdAt: each.createdAt, lastUsedAt: each.lastUsedAt, deviceType: 'multiDevice', backedUp: true, aaguid: '00000000-0000-0000-0000-000000000000', usable: each.usable !== false });
 
   function channelsFor(who: { session: Session; person: FakePerson } | null) {
     const channels = [{ kind: 'app', name: `/app/${appId}` }];
@@ -442,6 +454,14 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (request !== undefined && (body['code_challenge'] !== undefined || body['redirect_uri'] !== undefined)) return oauth(400, 'invalid_request');
         const person = [...people.values()].find((each) => each.email === String(body['email']).toLowerCase());
         if (person === undefined || person.password !== body['password']) return oauth(400, 'wrong_credentials');
+        const broken = mustChange.get(person.email);
+        if (broken !== undefined) {
+          // The password is right, but no longer enough: no code, a link to choose a new one, and the request not spent.
+          const token = secret();
+          links.set(token, { purpose: 'reset', email: person.email });
+          sentLinks.push({ to: person.email, purpose: 'reset-password', token });
+          return oauth(403, 'password_change_required', { error_description: "This app's password rules changed and your password no longer meets them. A link to choose a new one was sent to your address.", failed: broken, next: 'reset_password' });
+        }
         if (request !== undefined) request.used = true;
         return toWorkspace(person, request?.challenge ?? String(body['code_challenge']), typeof body['workspace'] === 'string' ? body['workspace'] : null, request);
       }
@@ -494,6 +514,9 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       }
       if (route.startsWith('/passkeys/') && !methods.includes('passkeys')) return oauth(403, 'method_disabled', { error_description: 'The app does not offer passkey sign-in.' });
       if (route === '/passkeys/sign-in/options') {
+        if (options.passkeysBelongTo !== undefined && headers.get('origin') === origin) {
+          return oauth(409, 'passkey_on_app_page', { error_description: "Passkeys belong to the app's own domain. Continue on the app's sign-in page.", sign_in_url: options.passkeysBelongTo });
+        }
         const request = openRequest(body);
         if (request instanceof Response) return request;
         if (request === undefined && (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string')) return oauth(400, 'invalid_request');
@@ -624,6 +647,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         links.delete(String(body['token']));
         const person = [...people.values()].find((each) => each.email === link.email) as FakePerson;
         person.password = String(body['password']);
+        mustChange.delete(person.email);
         for (const session of sessions.values()) if (session.user === person.id) endSession(session.id);
         return json(200, { done: true });
       }
@@ -956,6 +980,14 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     quotaReads,
     /** Ends a session as Bridge would: its refresh tokens stop working at once. */
     endSession,
+    /** Marks every passkey made so far as made for another domain than the app's own: the list says `usable: false`. */
+    retirePasskeys(): void {
+      for (const passkey of passkeys.values()) passkey.usable = false;
+    },
+    /** From now on a person's password is refused as breaking the app's rules: 403 `password_change_required`, with a link sent. */
+    requirePasswordChange(email: string, failed: readonly string[] = ['minLength']): void {
+      mustChange.set(email.toLowerCase(), failed);
+    },
     sessions: () => [...sessions.values()],
     /** Turns the Live connection endpoint off, as an issuer that does not offer it yet. */
     withoutLiveConnection(): void {
