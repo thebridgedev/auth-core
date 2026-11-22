@@ -17,6 +17,7 @@ import { Session, type ChannelLike, type LockManagerLike, type SessionEvents, ty
 import { browserCeremonies, type WebAuthnCeremonies } from './passkeys.js';
 import { createRecheck } from './recheck.js';
 import { createHosted } from './hosted.js';
+import { createLogout } from './logout.js';
 import { createSignIn } from './sign-in.js';
 
 export interface BridgeOptions {
@@ -54,6 +55,21 @@ export interface BridgeOptions {
    * English. A value that is not a language tag is left out.
    */
   readonly language?: string | (() => string | undefined);
+  /**
+   * The app's own origins, besides this page's, that `logout({ redirectTo })` may send a person to (for an app on
+   * several addresses). Any other address is refused. @default none: only this page's origin
+   */
+  readonly appOrigins?: readonly string[];
+  /**
+   * Where `logout()` goes when it is given no destination, or one it refuses: the app's own sign-in page, as a path on
+   * this page's origin or an address on one of `appOrigins`. @default '/auth/login'
+   */
+  readonly signedOutPage?: string;
+  /**
+   * How `logout()` takes the browser to its destination. A framework plugin gives its router's, so no page reloads.
+   * `null`: `logout()` only answers where to go. @default `location.assign` in a browser
+   */
+  readonly navigate?: ((to: string) => void | Promise<void>) | null;
   /** The browser's side of passkey ceremonies. @default `@simplewebauthn/browser` */
   readonly webauthn?: WebAuthnCeremonies;
   /** The fetch to call Bridge with. @default the platform fetch */
@@ -172,6 +188,16 @@ export function createBridge(options: BridgeOptions) {
   const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), language, ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const recheck = createRecheck({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), language, ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const hosted = createHosted({ issuer, endpoints, fetch: fetchFn, storage: options.signUpStorage ?? storage, session });
+  const defaultNavigate = (to: string): void => {
+    if (typeof location !== 'undefined' && typeof location.assign === 'function') location.assign(to);
+  };
+  const logout = createLogout({
+    signOut: () => session.signOut(),
+    pageOrigin: () => (typeof location !== 'undefined' && typeof location.origin === 'string' && location.origin !== 'null' ? location.origin : null),
+    appOrigins: options.appOrigins ?? [],
+    signedOutPage: options.signedOutPage ?? '/auth/login',
+    navigate: options.navigate === undefined ? defaultNavigate : options.navigate,
+  });
   const accounts = createAccounts({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh() });
   const billing = createBilling({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh(), changed: () => {
     void flags.load();
@@ -328,8 +354,14 @@ export function createBridge(options: BridgeOptions) {
         team: accounts.team,
         sessions: accounts.sessions,
         billing,
-        /** Signs out here, in every tab, and at Bridge. */
+        /** Signs out here, in every tab, and at Bridge. Stays where it is: see `logout` to choose where the person goes. */
         signOut: () => session.signOut(),
+        /**
+         * Signs out, then stays (`{ silent: true }`), goes where you chose (`{ redirectTo }`, only an address of the
+         * app's own), or goes to the app's own sign-in page. Everything listening hears `signed-out`, and the session
+         * ends at Bridge, so a copied token stops working.
+         */
+        logout: logout,
         /** The person's access token, for calling the Child App's own API by hand. Prefer `fetch`. */
         token: () => session.accessToken(),
       },
