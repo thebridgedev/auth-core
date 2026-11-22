@@ -41,6 +41,7 @@ export type EndpointName =
   | 'recheck'
   | 'invites'
   | 'invite_preview'
+  | 'links_preview'
   | 'accounts'
   | 'billing'
   | 'flags'
@@ -76,6 +77,7 @@ export const CONTRACT_PATHS: Readonly<Record<EndpointName, string>> = {
   recheck: '/v2/identity-access/recheck',
   invites: '/v2/identity-access/invites',
   invite_preview: '/v2/identity-access/apps/{appId}/invites/preview',
+  links_preview: '/v2/identity-access/apps/{appId}/links/preview',
   accounts: '/v2/accounts',
   billing: '/v2/billing',
   flags: '/v2/flags',
@@ -120,6 +122,8 @@ export const ROUTES = {
   passkeySetupOptions: route('POST', 'passkey_setup_options'),
   passkeySetup: route('POST', 'passkey_setup'),
   invitePreview: route('POST', 'invite_preview'),
+  // What an email link is, without using it: the one-button page asks this before anything is spent.
+  linksPreview: route('POST', 'links_preview'),
 
   // Identity and Access: the signed-in person accepts an invite.
   inviteAccept: route('POST', 'invites', '/accept'),

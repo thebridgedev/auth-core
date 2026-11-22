@@ -123,6 +123,21 @@ export type InvitePreview =
       readonly state: 'revoked' | 'used' | 'expired';
     };
 
+/**
+ * What an email link is, asked without using it. A mail scanner that opens the link first spoils nothing:
+ * nothing is used up until the page's button sends the token to the step's own method.
+ */
+export type LinkPreview =
+  | {
+      /** The link works. `step` is the page it opens, the same name as `#bridge=<step>` in the link. */
+      readonly state: 'open';
+      readonly step: Exclude<EmailLink['kind'], 'invite'>;
+    }
+  /** The link was used already. */
+  | { readonly state: 'used' }
+  /** The link is past its time, or names no link of this app. */
+  | { readonly state: 'expired' };
+
 /** A sign-up from an invite. The invite's link proves the address, so no second email is sent. */
 export interface InviteSignUpInput {
   /** The token from the invite's link. */
@@ -162,6 +177,12 @@ export interface SignInOptions {
   };
   /** Whether people may sign up. */
   readonly signUp: boolean;
+  /**
+   * The terms line: present when the app shows "By continuing you accept [app]'s Terms of Service and
+   * Privacy Policy" where an account can be made, with the app's own two pages. Absent when the app switched the line
+   * off or has no real pages: then nothing is shown.
+   */
+  readonly signUpNotice?: { readonly terms: string; readonly privacy: string };
   /** The sign-in methods on offer, such as `password` and `magicLink`. */
   readonly methods: readonly string[];
   /** The password's rules, to show before anyone types. Absent when the app does not offer passwords. */
@@ -233,6 +254,16 @@ function requestReturnUrl(redirectUri: string, code: string, state: string, issu
   return url.toString();
 }
 
+/**
+ * The screen's language as the field Bridge reads: a language tag such as `da`, `nb` or `sv-SE`. Anything else
+ * is left out, so a stray locale string never makes a request fail: the email then follows the user's own language.
+ */
+export function languageField(language: string | undefined): Record<string, string> {
+  if (typeof language !== 'string') return {};
+  const tag = language.trim();
+  return tag.length <= 20 && /^[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8})*$/.test(tag) ? { language: tag } : {};
+}
+
 function unknownStep(next: unknown): BridgeError {
   const step = typeof next === 'string' ? next : 'unknown';
   return new BridgeError('unsupported-step', `Bridge asked for a sign-in step this SDK version does not offer: "${step}".`, { step });
@@ -249,6 +280,8 @@ export interface SignInDeps {
   readonly ceremonies: WebAuthnCeremonies;
   /** Which of the app's email-links addresses an email's link goes to; the app's first when absent. */
   readonly linkAddress?: string;
+  /** The language of the screen the person is on, as a language tag (`da`, `sv-SE`). Sent with every request that makes an email. */
+  readonly language?: () => string | undefined;
 }
 
 export function createSignIn(deps: SignInDeps) {
@@ -264,6 +297,8 @@ export function createSignIn(deps: SignInDeps) {
   const proofOf = (pkce: { readonly challenge: string }): Record<string, string> => (request === null ? { code_challenge: pkce.challenge, code_challenge_method: 'S256' } : { request });
   /** Where an email's link goes: on a request, where the request says; otherwise this page's address, if set. */
   const linkOf = (): Record<string, string> => (request === null && deps.linkAddress !== undefined ? { link_address: deps.linkAddress } : {});
+  /** The screen's language for the email a step sends, when it is a language tag. */
+  const languageOf = (): Record<string, string> => languageField(deps.language?.());
 
   /**
    * A verifier waiting for its email link, read once: past its link's
@@ -373,6 +408,7 @@ export function createSignIn(deps: SignInDeps) {
           code_challenge_method: 'S256',
           ...(request === null ? {} : { request }),
           ...linkOf(),
+          ...languageOf(),
           ...(input.firstName === undefined ? {} : { firstName: input.firstName }),
           ...(input.lastName === undefined ? {} : { lastName: input.lastName }),
           ...(input.workspace === undefined || input.workspace === false ? {} : { workspace: input.workspace }),
@@ -416,7 +452,7 @@ export function createSignIn(deps: SignInDeps) {
         await deps.signUpStorage.set(magicLinkKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + MAGIC_LINK_KEEP_MS } satisfies StoredSignUp));
         try {
           // On a sign-in request, this device's challenge still binds the link to it: only the code is the other app's.
-          await post(ROUTES.magicLink, { email, code_challenge: pkce.challenge, code_challenge_method: 'S256', ...(request === null ? linkOf() : { request }) });
+          await post(ROUTES.magicLink, { email, code_challenge: pkce.challenge, code_challenge_method: 'S256', ...(request === null ? linkOf() : { request }), ...languageOf() });
         } catch (error) {
           // Nothing was sent: no verifier waits for a link that will not come.
           await deps.signUpStorage.remove(magicLinkKey);
@@ -450,7 +486,7 @@ export function createSignIn(deps: SignInDeps) {
       },
     },
 
-    passkeys: createPasskeys<SignInStep>({ ...deps, post, waitingVerifier, proofOf, signInSteps: (answer, verifier) => signInSteps(answer, verifier) as never }),
+    passkeys: createPasskeys<SignInStep>({ ...deps, languageOf, post, waitingVerifier, proofOf, signInSteps: (answer, verifier) => signInSteps(answer, verifier) as never }),
 
     request: {
       /**
@@ -477,11 +513,27 @@ export function createSignIn(deps: SignInDeps) {
     password: {
       /** Sends a reset link when the address has an account. The answer is the same either way. */
       async forgot(email: string): Promise<void> {
-        await post(ROUTES.passwordForgot, { email, ...linkOf() });
+        await post(ROUTES.passwordForgot, { email, ...linkOf(), ...languageOf() });
       },
       /** Sets a new password from a reset link. Signs nobody in, and ends every session of the account. */
       async set(token: string, password: string): Promise<void> {
         await post(ROUTES.passwordSet, { token, password });
+      },
+    },
+
+    links: {
+      /**
+       * What an email link is (a sign-up, sign-in, password or passkey setup link) without using it: `open` with the
+       * step it opens, `used` or `expired`. Always answers; a token that names no link is `expired`. Never says the
+       * address or the person. The token goes in the request body, never in an address.
+       */
+      async preview(token: string): Promise<LinkPreview> {
+        const answer = (await call<Record<string, unknown>>(deps.fetch, deps.endpoints().url(ROUTES.linksPreview), { method: 'POST', body: { token } })).body;
+        const state = answer?.['state'];
+        const step = answer?.['step'];
+        if (state === 'open' && (step === 'verify-email' || step === 'magic-link' || step === 'reset-password' || step === 'passkey-setup')) return { state, step };
+        if (state === 'used') return { state };
+        return { state: 'expired' };
       },
     },
 

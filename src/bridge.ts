@@ -47,6 +47,13 @@ export interface BridgeOptions {
    * did not register. @default the app's first email-links address
    */
   readonly linkAddress?: string;
+  /**
+   * The language of the screen the person is on, as a language tag (`da`, `nb`, `sv-SE`), or a function that gives it
+   * when asked. Sent with sign-up, sign-in link, password recovery, passkey setup and confirm-it-is-you requests, so
+   * Bridge writes the email in it: without one the email follows the person's own language, then the workspace's, then
+   * English. A value that is not a language tag is left out.
+   */
+  readonly language?: string | (() => string | undefined);
   /** The browser's side of passkey ceremonies. @default `@simplewebauthn/browser` */
   readonly webauthn?: WebAuthnCeremonies;
   /** The fetch to call Bridge with. @default the platform fetch */
@@ -161,8 +168,9 @@ export function createBridge(options: BridgeOptions) {
   });
   const flags = new Flags({ issuer, endpoints, fetch: watchedFetch, storage, session, onError });
   const live = new Live({ endpoints, fetch: fetchFn, session, onError }, options.live === false ? { enabled: false } : (options.live ?? {}));
-  const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
-  const recheck = createRecheck({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
+  const language = typeof options.language === 'function' ? options.language : () => options.language as string | undefined;
+  const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), language, ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
+  const recheck = createRecheck({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), language, ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const hosted = createHosted({ issuer, endpoints, fetch: fetchFn, storage: options.signUpStorage ?? storage, session });
   const accounts = createAccounts({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh() });
   const billing = createBilling({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh(), changed: () => {
@@ -307,6 +315,8 @@ export function createBridge(options: BridgeOptions) {
         passkeys: flows.passkeys,
         password: flows.password,
         invites: flows.invites,
+        /** What an email link is, without using it: see `links.preview`. */
+        links: flows.links,
         /** Another app's sign-in request, for Bridge's hosted page: see `request.use`. */
         request: flows.request,
         /** Hosted mode: sign in on the page Bridge hosts for the app, and come back signed in. */

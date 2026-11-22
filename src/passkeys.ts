@@ -111,6 +111,8 @@ export interface PasskeyDeps {
   readonly signUpStorage: BridgeStorage;
   readonly session: Session;
   readonly ceremonies: WebAuthnCeremonies;
+  /** The screen's language for the setup link's email. */
+  readonly languageOf?: () => Record<string, string>;
   readonly post: (route: (typeof ROUTES)[keyof typeof ROUTES], body: Readonly<Record<string, unknown>>) => Promise<CodeAnswer | undefined>;
   readonly waitingVerifier: (key: string) => Promise<string | null>;
   readonly signInSteps: <T>(answer: CodeAnswer | undefined, verifier: string) => Promise<T> | T;
@@ -193,7 +195,7 @@ export function createPasskeys<Step>(deps: PasskeyDeps) {
         const pkce = await createPkce();
         await deps.signUpStorage.set(setupKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + SETUP_KEEP_MS } satisfies StoredVerifier));
         try {
-          await deps.post(ROUTES.passkeySetupLink, { email, code_challenge: pkce.challenge, code_challenge_method: 'S256' });
+          await deps.post(ROUTES.passkeySetupLink, { email, code_challenge: pkce.challenge, code_challenge_method: 'S256', ...(deps.languageOf?.() ?? {}) });
         } catch (error) {
           await deps.signUpStorage.remove(setupKey);
           throw error;

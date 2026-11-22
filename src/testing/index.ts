@@ -41,6 +41,8 @@ export interface FakeIssuerOptions {
    * loopback IP on any port). @default none
    */
   readonly returns?: readonly string[];
+  /** The two pages the sign-in options list as `signUpNotice` (the terms line). @default none: no line */
+  readonly signUpNotice?: { readonly terms: string; readonly privacy: string };
   /**
    * Routes that want a recent sign-in, as `"METHOD /v2/path"`: called with a
    * token whose sign-in is older than `maxAgeSeconds` they answer 401
@@ -172,7 +174,16 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   const passkeyChallenges = new Map<string, { purpose: 'sign-in' | 'register' | 'recheck'; pkce?: string; email?: string | null; user?: string; link?: string; request?: SignInRequest }>();
   const passkeys = new Map<string, { id: string; user: string; name: string; createdAt: string; lastUsedAt: string | null }>();
   const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link' | 'passkey-setup' | 'recheck'; email: string; session?: string; challenge?: string; request?: SignInRequest; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
-  const sentLinks: { to: string; purpose: string; token: string }[] = [];
+  // A link that was used: told apart from one that never was, as Bridge's preview does.
+  const spentTokens = new Set<string>();
+  const dropLink = links.delete.bind(links);
+  links.delete = (key: string) => {
+    if (links.has(key)) spentTokens.add(key);
+    return dropLink(key);
+  };
+  const sentLinks: { to: string; purpose: string; token: string; language?: string }[] = [];
+  /** The language the screen named for the email being sent, when it named one. */
+  const screenLanguage = (body: Record<string, unknown>) => (typeof body['language'] === 'string' ? { language: body['language'] } : {});
   const requests: RecordedRequest[] = [];
   const invites: FakeInvite[] = [];
   const usage: unknown[] = [];
@@ -453,7 +464,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         signInRequests.set(id, { challenge: body['code_challenge'], redirectUri: body['redirect_uri'], state: body['state'], linkAddress: typeof body['link_address'] === 'string' ? body['link_address'] : `${origin}/sign-in/${appId}/`, expiresAt: now() + 10 * 60 * 1000, used: false });
         return json(201, { request: id, expires_in: 600 });
       }
-      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}) });
+      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, ...(options.signUpNotice === undefined ? {} : { signUpNotice: options.signUpNotice }), ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}) });
       if (route === '/magic-link') {
         if (!methods.includes('magicLink')) return oauth(403, 'method_disabled');
         const request = openRequest(body);
@@ -466,7 +477,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           for (const [token, link] of links) if (link.purpose === 'magic-link' && link.email === email) links.delete(token);
           const token = secret();
           links.set(token, { purpose: 'magic-link', email, challenge: String(body['code_challenge']), ...(request === undefined ? {} : { request }), expiresAt: now() + 15 * 60 * 1000 });
-          sentLinks.push({ to: email, purpose: 'magic-link', token });
+          sentLinks.push({ to: email, purpose: 'magic-link', token, ...screenLanguage(body) });
         }
         return json(202, { next: 'verify_email' });
       }
@@ -516,7 +527,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if ([...people.values()].some((each) => each.email === email)) {
           const token = secret();
           links.set(token, { purpose: 'passkey-setup', email, challenge: String(body['code_challenge']), expiresAt: now() + 24 * 3600 * 1000 });
-          sentLinks.push({ to: email, purpose: 'passkey-setup', token });
+          sentLinks.push({ to: email, purpose: 'passkey-setup', token, ...screenLanguage(body) });
         }
         return json(202, { next: 'verify_email' });
       }
@@ -569,6 +580,14 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (record !== undefined) endSession(record.session);
         return json(200, {});
       }
+      if (route === '/links/preview' && method === 'POST') {
+        const token = String(body['token']);
+        const link = links.get(token);
+        if (link === undefined) return json(200, { state: spentTokens.has(token) ? 'used' : 'expired' });
+        if (link.expiresAt !== undefined && link.expiresAt <= now()) return json(200, { state: 'expired' });
+        const step = { 'sign-up': 'verify-email', reset: 'reset-password', 'magic-link': 'magic-link', 'passkey-setup': 'passkey-setup', recheck: 'magic-link' }[link.purpose];
+        return json(200, { state: 'open', step });
+      }
       if (route === '/invites/preview' && method === 'POST') {
         const found = inviteFor(body['token']);
         if (typeof found === 'string') return json(200, { state: found === 'invite_revoked' ? 'revoked' : found === 'invite_used' ? 'used' : 'expired' });
@@ -592,7 +611,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (request instanceof Response) return request;
         if (![...people.values()].some((each) => each.email === email)) {
           links.set(token, { purpose: 'sign-up', email, challenge: String(body['code_challenge']), ...(request === undefined ? {} : { request }), signUp: { password: String(body['password']), firstName: (body['firstName'] as string) ?? null, lastName: (body['lastName'] as string) ?? null, workspace: (body['workspace'] as string | boolean) ?? null } });
-          sentLinks.push({ to: email, purpose: 'verify-sign-up', token });
+          sentLinks.push({ to: email, purpose: 'verify-sign-up', token, ...screenLanguage(body) });
         } else {
           sentLinks.push({ to: email, purpose: 'account-exists', token: '' });
         }
@@ -614,7 +633,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if ([...people.values()].some((each) => each.email === email)) {
           const token = secret();
           links.set(token, { purpose: 'reset', email });
-          sentLinks.push({ to: email, purpose: 'reset-password', token });
+          sentLinks.push({ to: email, purpose: 'reset-password', token, ...screenLanguage(body) });
         }
         return json(202, { next: 'verify_email' });
       }

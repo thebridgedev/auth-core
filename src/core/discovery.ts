@@ -120,6 +120,10 @@ export function readMetadata(issuer: string, document: unknown): IssuerMetadata 
     const url = listedUrl(listed[name], name) ?? (standard === undefined ? null : listedUrl(doc[standard], standard));
     if (url !== null) endpoints[name] = url;
   }
+  // The link preview is served next to the sign-in options but not listed in the metadata yet: until it is,
+  // it is found there, at the same address.
+  const optionsAt = endpoints['sign_in_options'];
+  if (endpoints['links_preview'] === undefined && optionsAt !== undefined && optionsAt.endsWith('/sign-in-options')) endpoints['links_preview'] = `${optionsAt.slice(0, -'/sign-in-options'.length)}/links/preview`;
   const appId = doc['bridge_app'];
   if (typeof appId !== 'string' || appId === '') throw misconfigured("The issuer's metadata does not name its app (bridge_app).");
   for (const required of ['sign_in', 'token', 'accounts'] as const) {
@@ -172,7 +176,7 @@ function derivedMetadata(issuer: string, doc: Readonly<Record<string, unknown>>)
     endpoints[name] = url ?? at(CONTRACT_PATHS[name]);
   }
   // An issuer that publishes no endpoint list predates these: refused as `not-offered` rather than called.
-  for (const pending of ['sign_in_options', 'invites', 'invite_preview', 'live_connection', 'sign_in_requests', 'recheck'] as const) delete endpoints[pending];
+  for (const pending of ['sign_in_options', 'invites', 'invite_preview', 'links_preview', 'live_connection', 'sign_in_requests', 'recheck'] as const) delete endpoints[pending];
   const lanes: Partial<Record<RevocationLane, string>> = {};
   for (const lane of REVOCATION_LANES) {
     lanes[lane] = at(`/v2/${lane}/apps/{appId}/revocations/${lane}`);

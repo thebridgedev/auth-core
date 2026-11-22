@@ -16,6 +16,7 @@ import { call, type Fetch } from './core/http.js';
 import { ROUTES } from './core/routes.js';
 import { storageKey, type BridgeStorage } from './core/storage.js';
 import { createPkce, readJwtPayload } from './core/util.js';
+import { languageField } from './sign-in.js';
 import { ceremonyError, type WebAuthnCeremonies } from './passkeys.js';
 import type { Session } from './session.js';
 
@@ -34,6 +35,8 @@ export interface RecheckDeps {
   readonly session: Session;
   readonly ceremonies: WebAuthnCeremonies;
   readonly linkAddress?: string;
+  /** The screen's language for the link's email. */
+  readonly language?: () => string | undefined;
 }
 
 /** Whether `error` is Bridge asking for a recent sign-in: the one refusal `confirm` answers. */
@@ -97,7 +100,7 @@ export function createRecheck(deps: RecheckDeps) {
       const pkce = await createPkce();
       await deps.signUpStorage.set(linkKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + LINK_KEEP_MS }));
       try {
-        await signedIn(ROUTES.recheckEmail, { code_challenge: pkce.challenge, code_challenge_method: 'S256', ...(deps.linkAddress === undefined ? {} : { link_address: deps.linkAddress }) });
+        await signedIn(ROUTES.recheckEmail, { code_challenge: pkce.challenge, code_challenge_method: 'S256', ...(deps.linkAddress === undefined ? {} : { link_address: deps.linkAddress }), ...languageField(deps.language?.()) });
       } catch (error) {
         await deps.signUpStorage.remove(linkKey);
         throw error;

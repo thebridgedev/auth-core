@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **The screen's language goes with every email request.** `createBridge({ language: 'da' })` (or a function that gives it) sends the language tag with sign-up, sign-in link, password recovery, passkey setup link and confirm-it-is-you requests, so Bridge writes the email in the language of the screen. A value that is not a language tag is left out.
+- **The terms line.** `signIn.options()` lists `signUpNotice: { terms, privacy }` when the app shows "By continuing you accept [app]'s Terms of Service and Privacy Policy" where an account can be made.
+- **Email links can be looked at without being used.** `links.preview(token)` answers `open` (with the page the link opens), `used` or `expired`, and spends nothing, so a page can show one button and a mail scanner that opens the link first spoils nothing. The testing issuer answers it too.
+
 ## [1.0.0-alpha.15] - Unreleased
 
 ### Added
