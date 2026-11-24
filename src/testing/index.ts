@@ -19,7 +19,9 @@ export interface FakePerson {
   password: string;
   firstName: string | null;
   lastName: string | null;
-  readonly workspaces: { id: string; name: string; role: string }[];
+  readonly workspaces: { id: string; name: string; role: string; mfa?: boolean }[];
+  /** The phone number the text-message second step goes to; none until set up. */
+  phone?: string | null;
 }
 
 export interface FakeIssuerOptions {
@@ -47,6 +49,13 @@ export interface FakeIssuerOptions {
    * `identity-recheck`, as Bridge's do. See `signedInLongAgo`. @default none
    */
   readonly recheck?: { readonly routes: readonly string[]; readonly maxAgeSeconds?: number };
+  /** The social providers the app offers (`google`, `github`, …), as its sign-in options list them. @default none */
+  readonly social?: readonly string[];
+  /**
+   * Whether the app offers the text-message second step: a workspace with `mfa: true` then asks for a code after the
+   * sign-in, sent to the person's phone (`lastText`), or a number to set up first. @default true
+   */
+  readonly secondStep?: boolean;
 }
 
 /** A Child App's sign-in request, held by the issuer: its challenge, return and state. */
@@ -163,6 +172,11 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   let refuseGivenBefore = 0;
   const codes = new Map<string, Code>();
   const flows = new Map<string, { user: string; challenge: string; request?: SignInRequest }>();
+  const socialStates = new Map<string, { provider: string; intent: string; challenge: string; returnPage: string; request?: SignInRequest; used: boolean }>();
+  const socialCodes = new Map<string, { email: string; verified: boolean; state: string }>();
+  const secondSteps = new Map<string, { user: string; challenge: string; workspace: string; request?: SignInRequest; code: string | null; tries: number; settingUp: string | null }>();
+  const sentTexts: { to: string; code: string }[] = [];
+  const social = options.social ?? [];
   const returns = options.returns ?? [];
   const signInRequests = new Map<string, SignInRequest>();
   const methods = options.methods ?? ['password', 'magicLink'];
@@ -232,6 +246,9 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           passkey_setup_options: `${at}/passkeys/setup/options`,
           passkey_setup: `${at}/passkeys/setup`,
           passkeys: `${v2}/identity-access/passkeys`,
+          social_start: `${at}/social/start`,
+          social_finish: `${at}/social/finish`,
+          second_step: `${at}/second-step`,
           recheck: `${v2}/identity-access/recheck`,
           password_forgot: `${at}/password/forgot`,
           password: `${at}/password`,
@@ -294,7 +311,17 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     return found;
   }
 
-  function toWorkspace(person: FakePerson, challenge: string, requested: string | null, request?: SignInRequest): Response {
+  /** Sends a new code to the second step's number, as Bridge's text message does. */
+  function textCode(handle: string, phone: string): Response {
+    const step = secondSteps.get(handle);
+    if (step === undefined) return oauth(400, 'flow_expired');
+    step.code = String(100000 + Math.floor(Math.random() * 900000));
+    step.tries = 0;
+    sentTexts.push({ to: phone, code: step.code });
+    return json(200, { next: 'second_step', flow: handle, phone: `${phone.slice(0, 3)} •••• ${phone.slice(-2)}`, sent: true });
+  }
+
+  function toWorkspace(person: FakePerson, challenge: string, requested: string | null, request?: SignInRequest, sms = false): Response {
     let workspace = requested;
     if (workspace === null) {
       if (person.workspaces.length > 1) {
@@ -305,6 +332,14 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       workspace = person.workspaces[0]?.id ?? null;
     }
     if (workspace !== null && !person.workspaces.some((each) => each.id === workspace)) return oauth(403, 'access_denied', { reason: 'not_a_member' });
+    // A workspace that requires a second step: a code by text message first, on an app that offers it.
+    if (workspace !== null && !sms && person.workspaces.some((each) => each.id === workspace && each.mfa === true)) {
+      if (options.secondStep === false) return oauth(403, 'insufficient_user_authentication', { needs: 'second_step' });
+      const handle = secret();
+      secondSteps.set(handle, { user: person.id, challenge, workspace, ...(request === undefined ? {} : { request }), code: null, tries: 0, settingUp: null });
+      if (person.phone == null) return json(200, { next: 'second_step_setup', flow: handle });
+      return textCode(handle, person.phone);
+    }
     const code = secret();
     if (request !== undefined) {
       codes.set(code, { user: person.id, workspace, challenge: request.challenge, redirectUri: request.redirectUri, used: false, session: null });
@@ -456,7 +491,60 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         signInRequests.set(id, { challenge: body['code_challenge'], redirectUri: body['redirect_uri'], state: body['state'], linkAddress: typeof body['link_address'] === 'string' ? body['link_address'] : `${origin}/sign-in/${appId}/`, expiresAt: now() + 10 * 60 * 1000, used: false });
         return json(201, { request: id, expires_in: 600 });
       }
-      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}) });
+      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, social, ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}) });
+      if (route === '/social/start') {
+        const provider = String(body['provider']);
+        if (!social.includes(provider)) return oauth(403, 'method_disabled');
+        const request = openRequest(body);
+        if (request instanceof Response) return request;
+        if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string' || typeof body['return_page'] !== 'string') return oauth(400, 'invalid_request');
+        const state = secret();
+        socialStates.set(state, { provider, intent: body['intent'] === 'sign-up' ? 'sign-up' : 'sign-in', challenge: body['code_challenge'], returnPage: body['return_page'], ...(request === undefined ? {} : { request }), used: false });
+        return json(200, { url: `${origin}/provider/${provider}/authorize?state=${state}` }, { 'cache-control': 'no-store' });
+      }
+      if (route === '/social/finish') {
+        const state = socialStates.get(String(body['state']));
+        const said = socialCodes.get(String(body['code']));
+        if (state === undefined || state.used || said === undefined || said.state !== String(body['state'])) return oauth(400, 'invalid_link');
+        const presented = typeof body['code_verifier'] === 'string' ? await s256(body['code_verifier']) : null;
+        if (presented !== state.challenge) return oauth(400, 'wrong_device', { error_description: 'Finish signing in in the browser you started in.' });
+        state.used = true;
+        if (!said.verified) return oauth(400, 'email_not_verified', { error_description: "Your account's email address is not verified there." });
+        let person = [...people.values()].find((each) => each.email === said.email);
+        if (person === undefined) {
+          if (state.intent !== 'sign-up') return oauth(400, 'no_account', { error_description: 'There is no account for this address yet. Sign up first.' });
+          person = addPerson({ email: said.email, password: secret(), workspaces: [{ id: id('ws'), name: `${said.email}'s workspace`, role: 'OWNER' }] });
+        }
+        if (state.request !== undefined) state.request.used = true;
+        return toWorkspace(person, state.request?.challenge ?? state.challenge, null, state.request);
+      }
+      if (route.startsWith('/second-step')) {
+        const handle = String(body['flow']);
+        const step = secondSteps.get(handle);
+        if (step === undefined) return oauth(400, 'flow_expired');
+        const person = people.get(step.user) as FakePerson;
+        if (route === '/second-step/setup') {
+          const phone = String(body['phone']).replace(/[\s\-().]/g, '');
+          if (!/^\+[1-9]\d{6,14}$/.test(phone)) return oauth(400, 'invalid_phone', { error_description: 'Enter your phone number with its country code, such as +46 70 123 45 67.' });
+          step.settingUp = phone;
+          return textCode(handle, phone);
+        }
+        if (route === '/second-step/resend') return textCode(handle, step.settingUp ?? person.phone ?? '');
+        if (route === '/second-step/reset') {
+          if (body['backup_code'] !== 'BACK-UPCO-DE12') return oauth(400, 'wrong_backup_code', { error_description: 'The backup code is not right.' });
+          person.phone = null;
+          return json(200, { next: 'second_step_setup', flow: handle });
+        }
+        if (step.code === null || step.tries >= 5) return oauth(400, 'code_expired', { error_description: 'The code has expired or was tried too many times. Ask for a new one.' });
+        step.tries += 1;
+        if (body['code'] !== step.code) return oauth(400, 'wrong_code', { error_description: 'The code is not right.', tries_left: 5 - step.tries });
+        secondSteps.delete(handle);
+        const setUp = step.settingUp !== null;
+        if (setUp) person.phone = step.settingUp;
+        const answer = toWorkspace(person, step.challenge, step.workspace, step.request, true);
+        if (!setUp) return answer;
+        return json(answer.status, { ...((await answer.json()) as object), backup_code: 'BACK-UPCO-DE12' });
+      }
       if (route === '/magic-link') {
         if (!methods.includes('magicLink')) return oauth(403, 'method_disabled');
         const request = openRequest(body);
@@ -853,14 +941,15 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     return handle(request.method, url, request.headers, body);
   }) as typeof fetch;
 
-  function addPerson(person: { email: string; password: string; firstName?: string | null; lastName?: string | null; workspaces?: { id: string; name: string; role?: string }[] }): FakePerson {
+  function addPerson(person: { email: string; password: string; firstName?: string | null; lastName?: string | null; phone?: string | null; workspaces?: { id: string; name: string; role?: string; mfa?: boolean }[] }): FakePerson {
     const made: FakePerson = {
       id: id('usr'),
       email: person.email.toLowerCase(),
       password: person.password,
       firstName: person.firstName ?? null,
       lastName: person.lastName ?? null,
-      workspaces: (person.workspaces ?? []).map((each) => ({ id: each.id, name: each.name, role: each.role ?? 'MEMBER' })),
+      workspaces: (person.workspaces ?? []).map((each) => ({ id: each.id, name: each.name, role: each.role ?? 'MEMBER', ...(each.mfa === true ? { mfa: true } : {}) })),
+      phone: person.phone ?? null,
     };
     people.set(made.id, made);
     return made;
@@ -912,6 +1001,20 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     websocket,
     requests,
     addPerson,
+    /**
+     * The person at a social provider: answers the provider's address from `social.start` as the provider would after
+     * they signed in there, with the fragment the app's page gets back (`#bridge=social&state=…&code=…`).
+     */
+    socialReturn(url: string, person: { email: string; verified?: boolean }): string {
+      const state = String(new URL(url).searchParams.get('state'));
+      const found = socialStates.get(state);
+      if (found === undefined) throw new Error('No social sign-in started with this address.');
+      const code = secret();
+      socialCodes.set(code, { email: person.email.toLowerCase(), verified: person.verified !== false, state });
+      return `${found.returnPage}#${new URLSearchParams({ bridge: 'social', state, code }).toString()}`;
+    },
+    /** The last second-step code texted to a number, or null. The backup code every setup gives is `BACK-UPCO-DE12`. */
+    lastText: (to: string): string | null => [...sentTexts].reverse().find((each) => each.to === to)?.code ?? null,
     /** The person, by email. */
     person: (email: string) => [...people.values()].find((each) => each.email === email.toLowerCase()),
     /**

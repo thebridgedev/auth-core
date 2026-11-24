@@ -169,7 +169,7 @@ describe('the quota store', () => {
     const { fake } = issuerWithPeople();
     fake.setQuota('projects', PROJECTS);
     const client = clientOn(fake);
-    await client.signIn.start({ email: 'bob@acme.test', password: PASSWORD }).then((step) => (step.done ? undefined : step.choose('ws-acme')));
+    await client.signIn.start({ email: 'bob@acme.test', password: PASSWORD }).then((step) => (step.done || step.next !== 'workspace' ? undefined : step.choose('ws-acme')));
     await client.quotas.read('projects');
     expect(quotaReads(fake)).toBe(1);
     fake.setQuota('projects', { ...PROJECTS, used: 1, remaining: 4, warningLevel: null });

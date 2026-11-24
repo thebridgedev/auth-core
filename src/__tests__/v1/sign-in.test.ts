@@ -25,7 +25,7 @@ describe('sign-in with email and password', () => {
     const client = clientOn(fake);
     const step = await client.signIn.start({ email: 'bob@acme.test', password: PASSWORD });
     expect(step.done).toBe(false);
-    if (step.done) return;
+    if (step.done || step.next !== 'workspace') return;
     expect(step.workspaces).toEqual([
       { id: 'ws-acme', name: 'Acme', logo: null },
       { id: 'ws-globex', name: 'Globex', logo: null },
@@ -51,7 +51,7 @@ describe('sign-in with email and password', () => {
     const { fake } = issuerWithPeople();
     const client = clientOn(fake);
     const step = await client.signIn.start({ email: 'bob@acme.test', password: PASSWORD });
-    if (step.done) throw new Error('expected a step');
+    if (step.done || step.next !== 'workspace') throw new Error('expected a step');
     await step.choose('ws-acme');
     await expect(step.choose('ws-acme')).rejects.toMatchObject({ kind: 'flow-expired' });
   });
@@ -60,10 +60,10 @@ describe('sign-in with email and password', () => {
     const { fake } = issuerWithPeople();
     const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
-      return url.endsWith('/sign-in') ? Response.json({ next: 'second_step', flow: 'f1' }) : fake.fetch(input, init);
+      return url.endsWith('/sign-in') ? Response.json({ next: 'email_code', flow: 'f1' }) : fake.fetch(input, init);
     }) as typeof fetch;
     const client = clientOn(fake, { fetch: fetchFn });
-    await expect(client.signIn.start({ email: 'alice@acme.test', password: PASSWORD })).rejects.toMatchObject({ kind: 'unsupported-step', step: 'second_step' });
+    await expect(client.signIn.start({ email: 'alice@acme.test', password: PASSWORD })).rejects.toMatchObject({ kind: 'unsupported-step', step: 'email_code' });
   });
 
   it('never sends an invite with a sign-in: accepting is its own call', async () => {
@@ -269,7 +269,7 @@ describe('passkeys', () => {
     await bob.passkeys.add();
     const step = await clientOn(fake, { webauthn: bobDevice }).passkeys.signIn({ email: 'bob@acme.test' });
     expect(step).toMatchObject({ done: false, next: 'workspace' });
-    if (!step.done) await expect(step.choose('ws-globex')).resolves.toEqual({ done: true });
+    if (!step.done && step.next === 'workspace') await expect(step.choose('ws-globex')).resolves.toEqual({ done: true });
   });
 
   it('says plainly what went wrong: a closed dialog, a passkey Bridge does not know, a browser without passkeys, an app that does not offer them', async () => {
@@ -347,10 +347,10 @@ describe('forgot and reset password', () => {
 describe('sign-in options and invites', () => {
   it('reads the sign-in options when the issuer lists them', async () => {
     const { fake } = issuerWithPeople();
-    await expect(clientOn(fake).signIn.options()).resolves.toEqual({ app: { id: fake.appId }, signUp: true, methods: ['password', 'magicLink'], password: { minLength: 8, maxLength: 128 } });
+    await expect(clientOn(fake).signIn.options()).resolves.toEqual({ app: { id: fake.appId }, signUp: true, methods: ['password', 'magicLink'], social: [], password: { minLength: 8, maxLength: 128 } });
     // An app that offers no passwords lists no password rules.
     const linksOnly = issuerWithPeople({ methods: ['magicLink'] }).fake;
-    await expect(clientOn(linksOnly).signIn.options()).resolves.toEqual({ app: { id: linksOnly.appId }, signUp: true, methods: ['magicLink'] });
+    await expect(clientOn(linksOnly).signIn.options()).resolves.toEqual({ app: { id: linksOnly.appId }, signUp: true, methods: ['magicLink'], social: [] });
   });
 
   it('answers not-offered while the issuer does not list them', async () => {
@@ -432,7 +432,7 @@ describe('invites: preview, sign up from one, or sign in and accept', () => {
     const token = fake.invite(bob.email, { id: 'ws-initech', name: 'Initech' }, 'EDITOR');
     const client = clientOn(fake);
     const step = await client.signIn.start({ email: bob.email, password: PASSWORD });
-    if (!step.done) await step.choose('ws-acme');
+    if (!step.done && step.next === 'workspace') await step.choose('ws-acme');
     await expect(client.invites.accept(token)).resolves.toEqual({ workspace: { id: 'ws-initech', name: 'Initech' }, member: { id: `mem-${bob.id}`, role: 'EDITOR' } });
     expect(client.session.get()).toMatchObject({ status: 'signed-in', workspace: { id: 'ws-initech' } });
     const accept = fake.requests.find((request) => request.path === '/v2/identity-access/invites/accept')!;
