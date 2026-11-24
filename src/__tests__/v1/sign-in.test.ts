@@ -285,6 +285,19 @@ describe('passkeys', () => {
     await expect(clientOn(off, { webauthn: device }).passkeys.signIn()).rejects.toMatchObject({ kind: 'forbidden', code: 'method_disabled' });
   });
 
+  it('an autofill wait the browser cannot run is `cancelled`, so a page shows no error on load; a dialog the person opened still says it', async () => {
+    const { fake } = withPasskeys();
+    const { device } = await aliceWithPasskey(fake);
+    // What headless Chromium does: the conditional-mediation request fails with something that is not "closed" or "timed out".
+    const cannot = { ...device, get: () => Promise.reject(Object.assign(new Error('The operation is not supported.'), { name: 'NotSupportedError' })) };
+    await expect(clientOn(fake, { webauthn: cannot }).passkeys.signIn({ autofill: true })).rejects.toMatchObject({ kind: 'cancelled' });
+    await expect(clientOn(fake, { webauthn: cannot }).passkeys.signIn()).rejects.toMatchObject({ kind: 'not-supported' });
+    // An answer Bridge refuses after the person picked a passkey is not hidden.
+    const stranger = fakeWebAuthn();
+    await stranger.create({ challenge: 'x' });
+    await expect(clientOn(fake, { webauthn: stranger }).passkeys.signIn({ autofill: true })).rejects.toMatchObject({ kind: 'wrong-credentials', code: 'unknown_passkey' });
+  });
+
   it('refuses the same device twice, and removes a passkey', async () => {
     const { fake } = withPasskeys();
     const { client, device, added } = await aliceWithPasskey(fake);

@@ -10,6 +10,7 @@
 
 ### Changed
 
+- A passkey autofill wait that the browser cannot run (headless Chromium, a browser with no passkey provider) now fails with `cancelled`, not `not-supported`: it is passive, so a page that treats `cancelled` as quiet shows no error on load. Without it, the sign-in form showed "Invalid email or password." as soon as it loaded. A passkey dialog the person opens still says what went wrong.
 - The wrong-device message for a sign-up link now says the link works only in the browser where the sign-up was started (12 languages).
 - `SignInStep` has more than one `done: false` step now: tell them apart by `next` (`'workspace'`, `'second_step'`, `'second_step_setup'`) before reading `workspaces` or calling `choose`.
 
