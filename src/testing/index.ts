@@ -167,6 +167,16 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   const people = new Map<string, FakePerson>();
   const sessions = new Map<string, Session>();
   const accessTokens = new Map<string, { session: string; user: string; workspace: string | null; exp: number; authTime: number; refused?: true }>();
+  /** Per session, the latest sign-in time (ms, in whole seconds) one of its tokens carried. */
+  const claimedAuthTimes = new Map<string, number>();
+  /**
+   * The sign-in time a confirmation gives the session: now, and always later
+   * than any sign-in time its tokens carried. On Bridge the refusal itself
+   * means the sign-in is old; here `signedInLongAgo` makes it old without
+   * changing the time the tokens already given carry, so a confirmation within
+   * the same second as the sign-in would otherwise not look like a renewal.
+   */
+  const confirmedAuthTime = (session: string) => Math.max(now(), (claimedAuthTimes.get(session) ?? -Infinity) + 1000);
   const refreshTokens = new Map<string, { session: string; rotatedAt: number | null }>();
   // Tokens given before this time are refused too: a lock's revocation entry takes effect a little after it is written.
   let refuseGivenBefore = 0;
@@ -273,6 +283,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     const person = people.get(session.user) as FakePerson;
     const membership = person.workspaces.find((each) => each.id === session.workspace) ?? null;
     const exp = Math.floor(now() / 1000) + accessSeconds;
+    const claimed = Math.floor(session.authTime / 1000) * 1000;
+    claimedAuthTimes.set(session.id, Math.max(claimedAuthTimes.get(session.id) ?? -Infinity, claimed));
     const access = fakeJwt('at+jwt', {
       iss: issuer, aud: `${origin}/api`, sub: person.id, aid: appId, sid: session.id, jti: secret(), exp, auth_time: Math.floor(session.authTime / 1000),
       ...(membership === null ? {} : { tid: membership.id, wst: 'active' }),
@@ -585,7 +597,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           links.delete(String(body['token']));
           const renewed = sessions.get(link.session as string);
           if (renewed === undefined || renewed.ended) return oauth(400, 'invalid_link');
-          renewed.authTime = now();
+          renewed.authTime = confirmedAuthTime(renewed.id);
           return json(200, { rechecked: true }, { 'cache-control': 'no-store' });
         }
         if (link?.purpose !== 'magic-link' || (link.expiresAt ?? 0) <= now()) return oauth(400, 'invalid_link');
@@ -763,7 +775,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     if (path === '/v2/identity-access/recheck' && method === 'POST') {
       const confirmed = () => {
         const open = sessions.get(session.id);
-        if (open !== undefined) open.authTime = now();
+        if (open !== undefined) open.authTime = confirmedAuthTime(open.id);
         return new Response(null, { status: 204 });
       };
       if (typeof body['password'] === 'string') {
@@ -1059,6 +1071,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     /**
      * Every session, and every token already given, signed in an hour ago:
      * routes in `recheck` refuse them until the person confirms it is them.
+     * The tokens already given keep the sign-in time they carry; a
+     * confirmation is always later than it, as it is on Bridge.
      */
     signedInLongAgo(): void {
       const then = now() - 3_600_000;

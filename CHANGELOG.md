@@ -15,6 +15,10 @@
 - The wrong-device message for a sign-up link now says the link works only in the browser where the sign-up was started (12 languages).
 - `SignInStep` has more than one `done: false` step now: tell them apart by `next` (`'workspace'`, `'second_step'`, `'second_step_setup'`) before reading `workspaces` or calling `choose`.
 
+### Fixed
+
+- The test issuer (`@nebulr-group/bridge-auth-core/testing`): after `signedInLongAgo`, confirming it is you within the same second as the sign-in left a page waiting for the link (`recheck.emailOpened`) waiting. The tokens given before keep the sign-in time they carry, and a confirmation now always gives a later one, as Bridge does.
+
 ## [1.0.0-alpha.15] - Unreleased
 
 ### Added
