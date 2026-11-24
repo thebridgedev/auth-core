@@ -183,6 +183,9 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   let flagsRevision = 1;
   let visitorFlags: Record<string, unknown>[] = [];
   const forcedAnswers = new Map<string, { status: number; body: unknown }>();
+  const planChoices: { plan: string; returnUrl: string | null }[] = [];
+  const portalReturns: (string | null)[] = [];
+  let checkoutOrigins: string[] | null = null;
   let facts: Record<string, unknown> = { plan: null, status: 'none', access: 'needs_plan', features: {}, limits: {}, usage: {}, periodStart: null, periodEnd: null, trialEnd: null, cancelAtPeriodEnd: false, waiting: null, locked: false };
   let plans: Record<string, unknown>[] = [];
   const checkouts = new Set<string>();
@@ -776,15 +779,45 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     if (path === '/v2/billing/payer/plan' && method === 'POST') {
       const plan = plans.find((each) => each['key'] === body['plan']);
       if (plan === undefined) return problem(400, 'bad-request', 'No such plan.');
+      const returnUrl = typeof body['returnUrl'] === 'string' ? body['returnUrl'] : null;
+      planChoices.push({ plan: String(plan['key']), returnUrl });
+      const held = facts['plan'] as { key: string } | null;
+      const waitingNow = facts['waiting'] as { plan: string; waitsFor: string } | null;
+      // The plan the person holds, asked for again while a downgrade waits for the period's end: kept, the change dropped.
+      if (held?.key === plan['key'] && waitingNow?.waitsFor === 'period_end' && body['currency'] === undefined && body['interval'] === undefined) {
+        facts = { ...facts, waiting: null };
+        return json(200, { status: 'changed' });
+      }
+      if (held?.key === plan['key']) return problem(409, 'conflict', 'The payer is on this plan already.');
+      const heldPlan = held === null ? undefined : plans.find((each) => each['key'] === held.key);
+      const paying = heldPlan !== undefined && heldPlan['free'] !== true;
+      const amountOf = (each: Record<string, unknown>) => ((each['prices'] as { amount: number }[] | undefined)?.[0]?.amount ?? 0);
+      const periodEnd = typeof facts['periodEnd'] === 'string' ? (facts['periodEnd'] as string) : new Date(now() + 30 * 86_400_000).toISOString();
+      if (paying && (plan['free'] === true || amountOf(plan) < amountOf(heldPlan))) {
+        facts = { ...facts, waiting: { plan: plan['key'], waitsFor: 'period_end', at: periodEnd } };
+        return json(200, { status: 'scheduled' });
+      }
       if (plan['free'] === true) {
         facts = { ...facts, plan: { key: plan['key'], name: plan['name'] }, status: 'active', access: 'ok' };
         return json(200, { status: 'changed' });
+      }
+      // The payment provider runs the paid subscription: a dearer plan is charged now, and applies once paid.
+      if (paying) {
+        facts = { ...facts, waiting: { plan: plan['key'], waitsFor: 'payment', at: null } };
+        return json(200, { status: 'waiting_for_payment' });
+      }
+      if (checkoutOrigins !== null) {
+        if (returnUrl === null) return problem(409, 'conflict', 'no-return-url: Billing was not told where the payer comes back to after checkout.');
+        const origin = (() => { try { return new URL(returnUrl).origin; } catch { return null; } })();
+        if (origin === null || !checkoutOrigins.includes(origin)) return problem(409, 'conflict', `return-url-not-registered: ${origin ?? returnUrl} is not one of the app's registered browser origins, so a payer is not sent back to it.`);
       }
       const checkout = `cs_${secret()}`;
       checkouts.add(checkout);
       facts = { ...facts, waiting: { plan: plan['key'], waitsFor: 'payment', at: null } };
       return json(200, { status: 'payment_required', checkout: { session: checkout, url: `https://checkout.bridge.test/${checkout}` } });
     }
+    // Bridge reads the subscription from the payment provider again; here the facts are what they are.
+    if (path === '/v2/billing/payer/refresh' && method === 'POST') return workspaceRequired() ?? json(200, facts);
     const confirm = path.match(/^\/v2\/billing\/payer\/checkouts\/([^/]+)\/confirm$/);
     if (confirm !== null && method === 'POST') {
       if (!checkouts.has(confirm[1] as string)) return problem(404, 'not-found', '');
@@ -793,7 +826,10 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       facts = { ...facts, plan: plan === undefined ? null : { key: plan['key'], name: plan['name'] }, status: 'active', access: 'ok', waiting: null };
       return json(200, facts);
     }
-    if (path === '/v2/billing/payer/portal' && method === 'GET') return json(200, { url: 'https://portal.bridge.test/session' });
+    if (path === '/v2/billing/payer/portal' && method === 'GET') {
+      portalReturns.push(url.searchParams.get('returnUrl'));
+      return json(200, { url: 'https://portal.bridge.test/session' });
+    }
 
     if (path === '/v2/live/channels' && method === 'GET') return json(200, { channels: channelsFor(who) });
     if (path === '/v2/live/history' && method === 'GET') return json(200, historyFrom(url.searchParams.get('cursor') ?? ''));
@@ -941,6 +977,25 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     },
     setFacts(given: Record<string, unknown>): void {
       facts = { ...facts, ...given };
+    },
+    /** Every plan the person chose, with the return address the call carried. */
+    planChoices,
+    /** The return address each billing portal call carried (null: none). */
+    portalReturns,
+    /** Makes a checkout need a return address on one of these origins, as Bridge does (`null`: none is checked). */
+    requireCheckoutReturnOn(origins: readonly string[] | null): void {
+      checkoutOrigins = origins === null ? null : [...origins];
+    },
+    /** The payment for the plan the person is waiting for goes through: they are on it. */
+    settlePayment(): void {
+      const waiting = facts['waiting'] as { plan: string } | null;
+      const plan = plans.find((each) => each['key'] === waiting?.plan);
+      if (plan === undefined) return;
+      facts = { ...facts, plan: { key: plan['key'], name: plan['name'] }, status: 'active', access: 'ok', waiting: null };
+    },
+    /** The payment for the plan the person is waiting for fails: the subscription is past due. */
+    failPayment(): void {
+      facts = { ...facts, status: 'past_due', access: 'payment_due' };
     },
     /** Answers every call of a path (such as `/v2/billing/payer/plan`) with this status and body, until `null` clears it. */
     answerWith(path: string, status: number | null, body: unknown = {}): void {

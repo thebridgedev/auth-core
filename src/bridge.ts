@@ -55,6 +55,12 @@ export interface BridgeOptions {
   readonly live?: LiveOptions | false;
   /** Fetch flag results as soon as the SDK is ready. @default true */
   readonly loadFlags?: boolean;
+  /**
+   * The page a payer comes back to after checkout or the billing portal, such as the app's subscription page: sent with
+   * `billing.choosePlan` and `billing.portal`. Bridge takes it only on one of the app's registered browser origins, and an
+   * address the app's owner set in Bridge overrides it. A function is read at each call. @default none
+   */
+  readonly billingReturn?: string | (() => string | undefined);
   /** Refresh tokens shortly before they expire, while the page is visible. @default true in a browser */
   readonly autoRefresh?: boolean;
   /** When another tab switches workspace: follow it, or raise `session-stale`. @default 'follow' */
@@ -165,7 +171,8 @@ export function createBridge(options: BridgeOptions) {
   const recheck = createRecheck({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const hosted = createHosted({ issuer, endpoints, fetch: fetchFn, storage: options.signUpStorage ?? storage, session });
   const accounts = createAccounts({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh() });
-  const billing = createBilling({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh(), changed: () => {
+  const billingReturn = options.billingReturn;
+  const billing = createBilling({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh(), ...(billingReturn === undefined ? {} : { returnUrl: typeof billingReturn === 'function' ? billingReturn : () => billingReturn }), changed: () => {
     void flags.load();
     void gate.refresh();
   } });
