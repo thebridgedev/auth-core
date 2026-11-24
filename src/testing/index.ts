@@ -19,7 +19,9 @@ export interface FakePerson {
   password: string;
   firstName: string | null;
   lastName: string | null;
-  readonly workspaces: { id: string; name: string; role: string }[];
+  readonly workspaces: { id: string; name: string; role: string; mfa?: boolean }[];
+  /** The phone number the text-message second step goes to; none until set up. */
+  phone?: string | null;
 }
 
 export interface FakeIssuerOptions {
@@ -47,6 +49,13 @@ export interface FakeIssuerOptions {
    * `identity-recheck`, as Bridge's do. See `signedInLongAgo`. @default none
    */
   readonly recheck?: { readonly routes: readonly string[]; readonly maxAgeSeconds?: number };
+  /** The social providers the app offers (`google`, `github`, …), as its sign-in options list them. @default none */
+  readonly social?: readonly string[];
+  /**
+   * Whether the app offers the text-message second step: a workspace with `mfa: true` then asks for a code after the
+   * sign-in, sent to the person's phone (`lastText`), or a number to set up first. @default true
+   */
+  readonly secondStep?: boolean;
 }
 
 /** A Child App's sign-in request, held by the issuer: its challenge, return and state. */
@@ -158,11 +167,26 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   const people = new Map<string, FakePerson>();
   const sessions = new Map<string, Session>();
   const accessTokens = new Map<string, { session: string; user: string; workspace: string | null; exp: number; authTime: number; refused?: true }>();
+  /** Per session, the latest sign-in time (ms, in whole seconds) one of its tokens carried. */
+  const claimedAuthTimes = new Map<string, number>();
+  /**
+   * The sign-in time a confirmation gives the session: now, and always later
+   * than any sign-in time its tokens carried. On Bridge the refusal itself
+   * means the sign-in is old; here `signedInLongAgo` makes it old without
+   * changing the time the tokens already given carry, so a confirmation within
+   * the same second as the sign-in would otherwise not look like a renewal.
+   */
+  const confirmedAuthTime = (session: string) => Math.max(now(), (claimedAuthTimes.get(session) ?? -Infinity) + 1000);
   const refreshTokens = new Map<string, { session: string; rotatedAt: number | null }>();
   // Tokens given before this time are refused too: a lock's revocation entry takes effect a little after it is written.
   let refuseGivenBefore = 0;
   const codes = new Map<string, Code>();
   const flows = new Map<string, { user: string; challenge: string; request?: SignInRequest }>();
+  const socialStates = new Map<string, { provider: string; intent: string; challenge: string; returnPage: string; request?: SignInRequest; used: boolean }>();
+  const socialCodes = new Map<string, { email: string; verified: boolean; unconfirmed: boolean; state: string }>();
+  const secondSteps = new Map<string, { user: string; challenge: string; workspace: string; request?: SignInRequest; code: string | null; tries: number; settingUp: string | null }>();
+  const sentTexts: { to: string; code: string }[] = [];
+  const social = options.social ?? [];
   const returns = options.returns ?? [];
   const signInRequests = new Map<string, SignInRequest>();
   const methods = options.methods ?? ['password', 'magicLink'];
@@ -183,6 +207,9 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   let flagsRevision = 1;
   let visitorFlags: Record<string, unknown>[] = [];
   const forcedAnswers = new Map<string, { status: number; body: unknown }>();
+  const planChoices: { plan: string; returnUrl: string | null }[] = [];
+  const portalReturns: (string | null)[] = [];
+  let checkoutOrigins: string[] | null = null;
   let facts: Record<string, unknown> = { plan: null, status: 'none', access: 'needs_plan', features: {}, limits: {}, usage: {}, periodStart: null, periodEnd: null, trialEnd: null, cancelAtPeriodEnd: false, waiting: null, locked: false };
   let plans: Record<string, unknown>[] = [];
   const checkouts = new Set<string>();
@@ -229,6 +256,9 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           passkey_setup_options: `${at}/passkeys/setup/options`,
           passkey_setup: `${at}/passkeys/setup`,
           passkeys: `${v2}/identity-access/passkeys`,
+          social_start: `${at}/social/start`,
+          social_finish: `${at}/social/finish`,
+          second_step: `${at}/second-step`,
           recheck: `${v2}/identity-access/recheck`,
           password_forgot: `${at}/password/forgot`,
           password: `${at}/password`,
@@ -253,6 +283,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     const person = people.get(session.user) as FakePerson;
     const membership = person.workspaces.find((each) => each.id === session.workspace) ?? null;
     const exp = Math.floor(now() / 1000) + accessSeconds;
+    const claimed = Math.floor(session.authTime / 1000) * 1000;
+    claimedAuthTimes.set(session.id, Math.max(claimedAuthTimes.get(session.id) ?? -Infinity, claimed));
     const access = fakeJwt('at+jwt', {
       iss: issuer, aud: `${origin}/api`, sub: person.id, aid: appId, sid: session.id, jti: secret(), exp, auth_time: Math.floor(session.authTime / 1000),
       ...(membership === null ? {} : { tid: membership.id, wst: 'active' }),
@@ -291,7 +323,17 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     return found;
   }
 
-  function toWorkspace(person: FakePerson, challenge: string, requested: string | null, request?: SignInRequest): Response {
+  /** Sends a new code to the second step's number, as Bridge's text message does. */
+  function textCode(handle: string, phone: string): Response {
+    const step = secondSteps.get(handle);
+    if (step === undefined) return oauth(400, 'flow_expired');
+    step.code = String(100000 + Math.floor(Math.random() * 900000));
+    step.tries = 0;
+    sentTexts.push({ to: phone, code: step.code });
+    return json(200, { next: 'second_step', flow: handle, phone: `${phone.slice(0, 3)} •••• ${phone.slice(-2)}`, sent: true });
+  }
+
+  function toWorkspace(person: FakePerson, challenge: string, requested: string | null, request?: SignInRequest, sms = false): Response {
     let workspace = requested;
     if (workspace === null) {
       if (person.workspaces.length > 1) {
@@ -302,6 +344,14 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       workspace = person.workspaces[0]?.id ?? null;
     }
     if (workspace !== null && !person.workspaces.some((each) => each.id === workspace)) return oauth(403, 'access_denied', { reason: 'not_a_member' });
+    // A workspace that requires a second step: a code by text message first, on an app that offers it.
+    if (workspace !== null && !sms && person.workspaces.some((each) => each.id === workspace && each.mfa === true)) {
+      if (options.secondStep === false) return oauth(403, 'insufficient_user_authentication', { needs: 'second_step' });
+      const handle = secret();
+      secondSteps.set(handle, { user: person.id, challenge, workspace, ...(request === undefined ? {} : { request }), code: null, tries: 0, settingUp: null });
+      if (person.phone == null) return json(200, { next: 'second_step_setup', flow: handle });
+      return textCode(handle, person.phone);
+    }
     const code = secret();
     if (request !== undefined) {
       codes.set(code, { user: person.id, workspace, challenge: request.challenge, redirectUri: request.redirectUri, used: false, session: null });
@@ -453,7 +503,75 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         signInRequests.set(id, { challenge: body['code_challenge'], redirectUri: body['redirect_uri'], state: body['state'], linkAddress: typeof body['link_address'] === 'string' ? body['link_address'] : `${origin}/sign-in/${appId}/`, expiresAt: now() + 10 * 60 * 1000, used: false });
         return json(201, { request: id, expires_in: 600 });
       }
-      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}) });
+      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, social, ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}) });
+      if (route === '/social/start') {
+        const provider = String(body['provider']);
+        if (!social.includes(provider)) return oauth(403, 'method_disabled');
+        const request = openRequest(body);
+        if (request instanceof Response) return request;
+        if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string' || typeof body['return_page'] !== 'string') return oauth(400, 'invalid_request');
+        const state = secret();
+        socialStates.set(state, { provider, intent: body['intent'] === 'sign-up' ? 'sign-up' : 'sign-in', challenge: body['code_challenge'], returnPage: body['return_page'], ...(request === undefined ? {} : { request }), used: false });
+        return json(200, { url: `${origin}/provider/${provider}/authorize?state=${state}` }, { 'cache-control': 'no-store' });
+      }
+      if (route === '/social/finish') {
+        const state = socialStates.get(String(body['state']));
+        const said = socialCodes.get(String(body['code']));
+        if (state === undefined || state.used || said === undefined || said.state !== String(body['state'])) return oauth(400, 'invalid_link');
+        const presented = typeof body['code_verifier'] === 'string' ? await s256(body['code_verifier']) : null;
+        if (presented !== state.challenge) return oauth(400, 'wrong_device', { error_description: 'Finish signing in in the browser you started in.' });
+        state.used = true;
+        if (said.unconfirmed) {
+          // A provider that gives an address without saying it confirmed it (Facebook): never linked to an account that holds it, and a
+          // sign-up is proved by Bridge's own link first, which only this device's verifier finishes.
+          // An address that has an account is never linked: it is answered as a password sign-up answers it (the same step, and the
+          // email says the account exists), so nothing tells the page which it is.
+          if ([...people.values()].some((each) => each.email === said.email)) {
+            sentLinks.push({ to: said.email, purpose: 'account-exists', token: '' });
+            return json(202, { next: 'verify_email', email: said.email });
+          }
+          if (state.intent !== 'sign-up') return oauth(400, 'no_account', { error_description: 'There is no account for this address yet. Sign up first.' });
+          const token = secret();
+          links.set(token, { purpose: 'sign-up', email: said.email, challenge: state.challenge, ...(state.request === undefined ? {} : { request: state.request }), signUp: { password: secret(), firstName: null, lastName: null, workspace: null } });
+          sentLinks.push({ to: said.email, purpose: 'verify-sign-up', token });
+          return json(202, { next: 'verify_email', email: said.email });
+        }
+        if (!said.verified) return oauth(400, 'email_not_verified', { error_description: "Your account's email address is not verified there." });
+        let person = [...people.values()].find((each) => each.email === said.email);
+        if (person === undefined) {
+          if (state.intent !== 'sign-up') return oauth(400, 'no_account', { error_description: 'There is no account for this address yet. Sign up first.' });
+          person = addPerson({ email: said.email, password: secret(), workspaces: [{ id: id('ws'), name: `${said.email}'s workspace`, role: 'OWNER' }] });
+        }
+        if (state.request !== undefined) state.request.used = true;
+        return toWorkspace(person, state.request?.challenge ?? state.challenge, null, state.request);
+      }
+      if (route.startsWith('/second-step')) {
+        const handle = String(body['flow']);
+        const step = secondSteps.get(handle);
+        if (step === undefined) return oauth(400, 'flow_expired');
+        const person = people.get(step.user) as FakePerson;
+        if (route === '/second-step/setup') {
+          const phone = String(body['phone']).replace(/[\s\-().]/g, '');
+          if (!/^\+[1-9]\d{6,14}$/.test(phone)) return oauth(400, 'invalid_phone', { error_description: 'Enter your phone number with its country code, such as +46 70 123 45 67.' });
+          step.settingUp = phone;
+          return textCode(handle, phone);
+        }
+        if (route === '/second-step/resend') return textCode(handle, step.settingUp ?? person.phone ?? '');
+        if (route === '/second-step/reset') {
+          if (body['backup_code'] !== 'BACK-UPCO-DE12') return oauth(400, 'wrong_backup_code', { error_description: 'The backup code is not right.' });
+          person.phone = null;
+          return json(200, { next: 'second_step_setup', flow: handle });
+        }
+        if (step.code === null || step.tries >= 5) return oauth(400, 'code_expired', { error_description: 'The code has expired or was tried too many times. Ask for a new one.' });
+        step.tries += 1;
+        if (body['code'] !== step.code) return oauth(400, 'wrong_code', { error_description: 'The code is not right.', tries_left: 5 - step.tries });
+        secondSteps.delete(handle);
+        const setUp = step.settingUp !== null;
+        if (setUp) person.phone = step.settingUp;
+        const answer = toWorkspace(person, step.challenge, step.workspace, step.request, true);
+        if (!setUp) return answer;
+        return json(answer.status, { ...((await answer.json()) as object), backup_code: 'BACK-UPCO-DE12' });
+      }
       if (route === '/magic-link') {
         if (!methods.includes('magicLink')) return oauth(403, 'method_disabled');
         const request = openRequest(body);
@@ -479,7 +597,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           links.delete(String(body['token']));
           const renewed = sessions.get(link.session as string);
           if (renewed === undefined || renewed.ended) return oauth(400, 'invalid_link');
-          renewed.authTime = now();
+          renewed.authTime = confirmedAuthTime(renewed.id);
           return json(200, { rechecked: true }, { 'cache-control': 'no-store' });
         }
         if (link?.purpose !== 'magic-link' || (link.expiresAt ?? 0) <= now()) return oauth(400, 'invalid_link');
@@ -601,7 +719,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       if (route === '/sign-up/verify') {
         const link = links.get(String(body['token']));
         if (link?.purpose !== 'sign-up' || link.signUp === undefined) return oauth(400, 'invalid_link');
-        if (typeof body['code_verifier'] !== 'string' || (await s256(body['code_verifier'])) !== link.challenge) return oauth(400, 'wrong_device', { error_description: 'Open the link on the device you signed up on.' });
+        if (typeof body['code_verifier'] !== 'string' || (await s256(body['code_verifier'])) !== link.challenge) return oauth(400, 'wrong_device', { error_description: 'This link finishes the sign-up only in the browser where it was started. Open it there, or sign up again here.' });
         if (link.request?.used === true) return oauth(400, 'invalid_request_uri');
         links.delete(String(body['token']));
         if (link.request !== undefined) link.request.used = true;
@@ -657,7 +775,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     if (path === '/v2/identity-access/recheck' && method === 'POST') {
       const confirmed = () => {
         const open = sessions.get(session.id);
-        if (open !== undefined) open.authTime = now();
+        if (open !== undefined) open.authTime = confirmedAuthTime(open.id);
         return new Response(null, { status: 204 });
       };
       if (typeof body['password'] === 'string') {
@@ -776,15 +894,45 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     if (path === '/v2/billing/payer/plan' && method === 'POST') {
       const plan = plans.find((each) => each['key'] === body['plan']);
       if (plan === undefined) return problem(400, 'bad-request', 'No such plan.');
+      const returnUrl = typeof body['returnUrl'] === 'string' ? body['returnUrl'] : null;
+      planChoices.push({ plan: String(plan['key']), returnUrl });
+      const held = facts['plan'] as { key: string } | null;
+      const waitingNow = facts['waiting'] as { plan: string; waitsFor: string } | null;
+      // The plan the person holds, asked for again while a downgrade waits for the period's end: kept, the change dropped.
+      if (held?.key === plan['key'] && waitingNow?.waitsFor === 'period_end' && body['currency'] === undefined && body['interval'] === undefined) {
+        facts = { ...facts, waiting: null };
+        return json(200, { status: 'changed' });
+      }
+      if (held?.key === plan['key']) return problem(409, 'conflict', 'The payer is on this plan already.');
+      const heldPlan = held === null ? undefined : plans.find((each) => each['key'] === held.key);
+      const paying = heldPlan !== undefined && heldPlan['free'] !== true;
+      const amountOf = (each: Record<string, unknown>) => ((each['prices'] as { amount: number }[] | undefined)?.[0]?.amount ?? 0);
+      const periodEnd = typeof facts['periodEnd'] === 'string' ? (facts['periodEnd'] as string) : new Date(now() + 30 * 86_400_000).toISOString();
+      if (paying && (plan['free'] === true || amountOf(plan) < amountOf(heldPlan))) {
+        facts = { ...facts, waiting: { plan: plan['key'], waitsFor: 'period_end', at: periodEnd } };
+        return json(200, { status: 'scheduled' });
+      }
       if (plan['free'] === true) {
         facts = { ...facts, plan: { key: plan['key'], name: plan['name'] }, status: 'active', access: 'ok' };
         return json(200, { status: 'changed' });
+      }
+      // The payment provider runs the paid subscription: a dearer plan is charged now, and applies once paid.
+      if (paying) {
+        facts = { ...facts, waiting: { plan: plan['key'], waitsFor: 'payment', at: null } };
+        return json(200, { status: 'waiting_for_payment' });
+      }
+      if (checkoutOrigins !== null) {
+        if (returnUrl === null) return problem(409, 'conflict', 'no-return-url: Billing was not told where the payer comes back to after checkout.');
+        const origin = (() => { try { return new URL(returnUrl).origin; } catch { return null; } })();
+        if (origin === null || !checkoutOrigins.includes(origin)) return problem(409, 'conflict', `return-url-not-registered: ${origin ?? returnUrl} is not one of the app's registered browser origins, so a payer is not sent back to it.`);
       }
       const checkout = `cs_${secret()}`;
       checkouts.add(checkout);
       facts = { ...facts, waiting: { plan: plan['key'], waitsFor: 'payment', at: null } };
       return json(200, { status: 'payment_required', checkout: { session: checkout, url: `https://checkout.bridge.test/${checkout}` } });
     }
+    // Bridge reads the subscription from the payment provider again; here the facts are what they are.
+    if (path === '/v2/billing/payer/refresh' && method === 'POST') return workspaceRequired() ?? json(200, facts);
     const confirm = path.match(/^\/v2\/billing\/payer\/checkouts\/([^/]+)\/confirm$/);
     if (confirm !== null && method === 'POST') {
       if (!checkouts.has(confirm[1] as string)) return problem(404, 'not-found', '');
@@ -793,7 +941,10 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       facts = { ...facts, plan: plan === undefined ? null : { key: plan['key'], name: plan['name'] }, status: 'active', access: 'ok', waiting: null };
       return json(200, facts);
     }
-    if (path === '/v2/billing/payer/portal' && method === 'GET') return json(200, { url: 'https://portal.bridge.test/session' });
+    if (path === '/v2/billing/payer/portal' && method === 'GET') {
+      portalReturns.push(url.searchParams.get('returnUrl'));
+      return json(200, { url: 'https://portal.bridge.test/session' });
+    }
 
     if (path === '/v2/live/channels' && method === 'GET') return json(200, { channels: channelsFor(who) });
     if (path === '/v2/live/history' && method === 'GET') return json(200, historyFrom(url.searchParams.get('cursor') ?? ''));
@@ -817,14 +968,15 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     return handle(request.method, url, request.headers, body);
   }) as typeof fetch;
 
-  function addPerson(person: { email: string; password: string; firstName?: string | null; lastName?: string | null; workspaces?: { id: string; name: string; role?: string }[] }): FakePerson {
+  function addPerson(person: { email: string; password: string; firstName?: string | null; lastName?: string | null; phone?: string | null; workspaces?: { id: string; name: string; role?: string; mfa?: boolean }[] }): FakePerson {
     const made: FakePerson = {
       id: id('usr'),
       email: person.email.toLowerCase(),
       password: person.password,
       firstName: person.firstName ?? null,
       lastName: person.lastName ?? null,
-      workspaces: (person.workspaces ?? []).map((each) => ({ id: each.id, name: each.name, role: each.role ?? 'MEMBER' })),
+      workspaces: (person.workspaces ?? []).map((each) => ({ id: each.id, name: each.name, role: each.role ?? 'MEMBER', ...(each.mfa === true ? { mfa: true } : {}) })),
+      phone: person.phone ?? null,
     };
     people.set(made.id, made);
     return made;
@@ -876,6 +1028,20 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     websocket,
     requests,
     addPerson,
+    /**
+     * The person at a social provider: answers the provider's address from `social.start` as the provider would after
+     * they signed in there, with the fragment the app's page gets back (`#bridge=social&state=…&code=…`).
+     */
+    socialReturn(url: string, person: { email: string; verified?: boolean; unconfirmed?: boolean }): string {
+      const state = String(new URL(url).searchParams.get('state'));
+      const found = socialStates.get(state);
+      if (found === undefined) throw new Error('No social sign-in started with this address.');
+      const code = secret();
+      socialCodes.set(code, { email: person.email.toLowerCase(), verified: person.verified !== false, unconfirmed: person.unconfirmed === true, state });
+      return `${found.returnPage}#${new URLSearchParams({ bridge: 'social', state, code }).toString()}`;
+    },
+    /** The last second-step code texted to a number, or null. The backup code every setup gives is `BACK-UPCO-DE12`. */
+    lastText: (to: string): string | null => [...sentTexts].reverse().find((each) => each.to === to)?.code ?? null,
     /** The person, by email. */
     person: (email: string) => [...people.values()].find((each) => each.email === email.toLowerCase()),
     /**
@@ -905,6 +1071,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     /**
      * Every session, and every token already given, signed in an hour ago:
      * routes in `recheck` refuse them until the person confirms it is them.
+     * The tokens already given keep the sign-in time they carry; a
+     * confirmation is always later than it, as it is on Bridge.
      */
     signedInLongAgo(): void {
       const then = now() - 3_600_000;
@@ -941,6 +1109,25 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     },
     setFacts(given: Record<string, unknown>): void {
       facts = { ...facts, ...given };
+    },
+    /** Every plan the person chose, with the return address the call carried. */
+    planChoices,
+    /** The return address each billing portal call carried (null: none). */
+    portalReturns,
+    /** Makes a checkout need a return address on one of these origins, as Bridge does (`null`: none is checked). */
+    requireCheckoutReturnOn(origins: readonly string[] | null): void {
+      checkoutOrigins = origins === null ? null : [...origins];
+    },
+    /** The payment for the plan the person is waiting for goes through: they are on it. */
+    settlePayment(): void {
+      const waiting = facts['waiting'] as { plan: string } | null;
+      const plan = plans.find((each) => each['key'] === waiting?.plan);
+      if (plan === undefined) return;
+      facts = { ...facts, plan: { key: plan['key'], name: plan['name'] }, status: 'active', access: 'ok', waiting: null };
+    },
+    /** The payment for the plan the person is waiting for fails: the subscription is past due. */
+    failPayment(): void {
+      facts = { ...facts, status: 'past_due', access: 'payment_due' };
     },
     /** Answers every call of a path (such as `/v2/billing/payer/plan`) with this status and body, until `null` clears it. */
     answerWith(path: string, status: number | null, body: unknown = {}): void {

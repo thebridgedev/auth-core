@@ -154,7 +154,12 @@ export function createPasskeys<Step>(deps: PasskeyDeps) {
     async signIn(input: PasskeySignInInput = {}): Promise<Step> {
       const pkce = await createPkce();
       const options = optionsOf(await deps.post(ROUTES.passkeySignInOptions, { ...deps.proofOf(pkce), ...(input.email === undefined ? {} : { email: input.email }) }));
-      const response = await ceremony(() => deps.ceremonies.get(options, input.autofill === true));
+      const response = await ceremony(() => deps.ceremonies.get(options, input.autofill === true)).catch((error: unknown) => {
+        // An autofill wait is passive: the person has asked for nothing. A browser that cannot run it (headless Chromium, a
+        // browser without a passkey provider) is the same as a list that was never opened: `cancelled`, so a page stays quiet.
+        if (input.autofill === true && error instanceof BridgeError && error.kind === 'not-supported') throw new BridgeError('cancelled', 'This browser cannot offer passkeys in the autofill list.', { cause: error });
+        throw error;
+      });
       const answer = await deps.post(ROUTES.passkeySignIn, { response, ...(input.workspace === undefined ? {} : { workspace: input.workspace }) });
       return deps.signInSteps<Step>(answer, pkce.verifier);
     },
