@@ -576,8 +576,8 @@ export function createSignIn(deps: SignInDeps) {
        * (`email_not_verified`); signing in with an address that has no account,
        * with `invalid` (`no_account`): sign up instead. Facebook gives an
        * address without saying it confirmed it: a sign-up through it answers
-       * the step `verify_email` (Bridge emailed its own link), and an address
-       * that already has an account fails with `account_exists`.
+       * the step `verify_email` (Bridge emailed its own link; an address that
+       * already has an account gets the same answer and is never linked).
        */
       async finish(answer: SocialReturn): Promise<SignInStep> {
         if ('error' in answer) throw new BridgeError(answer.error === 'access_denied' ? 'cancelled' : 'unavailable', answer.error === 'access_denied' ? 'The sign-in was cancelled at the provider.' : 'The provider did not confirm the sign-in. Try again.', { code: answer.error });

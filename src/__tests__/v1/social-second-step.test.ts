@@ -42,7 +42,7 @@ describe('social sign-in', () => {
     await expect(other.social.finish({ error: 'access_denied' })).rejects.toMatchObject({ kind: 'cancelled' });
   });
 
-  it('a provider that does not confirm the address (Facebook) answers verify_email: the link finishes the sign-up on this device, an existing address is refused', async () => {
+  it('a provider that does not confirm the address (Facebook) answers verify_email: the link finishes the sign-up on this device, an existing address gets the same answer', async () => {
     const { fake } = issuerWithPeople({ social: ['facebook'] });
     const storage = memoryStorage();
     const client = clientOn(fake, { storage });
@@ -58,9 +58,10 @@ describe('social sign-in', () => {
     await expect(clientOn(fake).signUp.finish(token)).rejects.toMatchObject({ kind: 'wrong-device' });
     await expect(client.signUp.finish(token)).resolves.toMatchObject({ done: true });
     expect(client.session.get()).toMatchObject({ status: 'signed-in', user: { email: 'fresh@acme.test' } });
-    // An address that has an account is never linked by the provider's say-so.
+    // An address that has an account is never linked by the provider's say-so, and is answered as a password sign-up answers it.
     const again = await client.social.start('facebook', { returnPage: PAGE, intent: 'sign-up' });
-    await expect(client.social.finish(readSocialReturn(fake.socialReturn(again, { email: 'alice@acme.test', unconfirmed: true }))!)).rejects.toMatchObject({ code: 'account_exists' });
+    await expect(client.social.finish(readSocialReturn(fake.socialReturn(again, { email: 'alice@acme.test', unconfirmed: true }))!)).resolves.toEqual({ done: false, next: 'verify_email', email: 'alice@acme.test' });
+    expect(fake.lastLink('alice@acme.test', 'verify-sign-up')).toBeNull();
   });
 
   it('takes the provider\'s answer from the address and clears it, and only a social one', () => {

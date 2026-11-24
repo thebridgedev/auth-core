@@ -512,7 +512,12 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (said.unconfirmed) {
           // A provider that gives an address without saying it confirmed it (Facebook): never linked to an account that holds it, and a
           // sign-up is proved by Bridge's own link first, which only this device's verifier finishes.
-          if ([...people.values()].some((each) => each.email === said.email)) return oauth(400, 'account_exists', { error_description: 'An account with this email address already exists. Sign in with your existing method.' });
+          // An address that has an account is never linked: it is answered as a password sign-up answers it (the same step, and the
+          // email says the account exists), so nothing tells the page which it is.
+          if ([...people.values()].some((each) => each.email === said.email)) {
+            sentLinks.push({ to: said.email, purpose: 'account-exists', token: '' });
+            return json(202, { next: 'verify_email', email: said.email });
+          }
           if (state.intent !== 'sign-up') return oauth(400, 'no_account', { error_description: 'There is no account for this address yet. Sign up first.' });
           const token = secret();
           links.set(token, { purpose: 'sign-up', email: said.email, challenge: state.challenge, ...(state.request === undefined ? {} : { request: state.request }), signUp: { password: secret(), firstName: null, lastName: null, workspace: null } });
