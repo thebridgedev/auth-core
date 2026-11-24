@@ -123,7 +123,7 @@ function afterReady<T extends object>(api: T, started: () => Promise<void>): T {
  * const bridge = createBridge({ issuer: 'https://…' });
  * await bridge.ready;
  * const step = await bridge.signIn.start({ email, password });
- * if (!step.done) await step.choose(step.workspaces[0].id);
+ * if (!step.done && step.next === 'workspace') await step.choose(step.workspaces[0].id);
  * if (bridge.flags.enabled('reports')) showReports();
  * ```
  */
@@ -304,6 +304,7 @@ export function createBridge(options: BridgeOptions) {
         signIn: flows.signIn,
         signUp: flows.signUp,
         magicLink: flows.magicLink,
+        social: flows.social,
         passkeys: flows.passkeys,
         password: flows.password,
         invites: flows.invites,

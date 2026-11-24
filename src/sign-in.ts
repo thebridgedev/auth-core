@@ -16,8 +16,10 @@ import type { Session } from './session.js';
  * device with PKCE and traded for tokens at once.
  *
  * Today's steps are email and password, an email link that signs in (a magic
- * link), a passkey, and the workspace choice. Other steps (a second factor,
- * email codes, company login) arrive as new
+ * link), a passkey, a social provider (Google, LinkedIn, Facebook, GitHub,
+ * Microsoft), the workspace choice and a text-message code (the second step,
+ * for a workspace that requires it). Other steps (email codes, company login)
+ * arrive as new
  * `next` values; this version refuses one it does not know with
  * `unsupported-step` rather than guessing.
  */
@@ -44,6 +46,12 @@ export type SignInStep =
        * session already open here was renewed, and no new one was made.
        */
       readonly rechecked?: true;
+      /**
+       * Set once, when the person has just set up the text-message second step:
+       * the backup code that resets it if they lose their phone. Show it once
+       * and ask them to keep it; Bridge keeps only its hash.
+       */
+      readonly backupCode?: string;
     }
   | {
       readonly done: false;
@@ -51,6 +59,28 @@ export type SignInStep =
       readonly workspaces: readonly WorkspaceChoice[];
       /** Goes on with the chosen workspace. Works once. */
       choose(workspaceId: string): Promise<SignInStep>;
+    }
+  | {
+      /** The workspace requires a second step: a code was sent by text message to `phone`. */
+      readonly done: false;
+      readonly next: 'second_step';
+      /** The number the code went to, partly hidden, such as `+46 •••• 67`. */
+      readonly phone: string;
+      /** False when the message could not be sent: offer `resend`. */
+      readonly sent: boolean;
+      /** Goes on with the code from the message. A wrong code fails with `invalid` (`wrong_code`); five tries spend it. */
+      verify(code: string): Promise<SignInStep>;
+      /** Sends a new code to the same number; the one before stops working. */
+      resend(): Promise<SignInStep>;
+      /** Lost the phone: the backup code given at setup removes the number, and the next step sets up a new one. */
+      reset(backupCode: string): Promise<SignInStep>;
+    }
+  | {
+      /** The workspace requires a second step, and the person has no phone number set up yet. */
+      readonly done: false;
+      readonly next: 'second_step_setup';
+      /** Sends a code to this number (with its country code, such as `+46 70 123 45 67`); the next step verifies it. */
+      setUp(phone: string): Promise<SignInStep>;
     };
 
 /** A hand-off step: like sign-in, but it ends with the code instead of trading it. */
@@ -166,7 +196,29 @@ export interface SignInOptions {
   readonly methods: readonly string[];
   /** The password's rules, to show before anyone types. Absent when the app does not offer passwords. */
   readonly password?: PasswordRules;
+  /** The social providers the app offers a button for, such as `google` and `github`. */
+  readonly social?: readonly SocialProvider[];
 }
+
+/** The social sign-in providers Bridge offers. */
+export type SocialProvider = 'google' | 'linkedin' | 'facebook' | 'github' | 'azure';
+
+/** Where a social sign-in starts, and what a sign-up through it asks for. */
+export interface SocialStartInput {
+  /** `sign-up` makes an account for an address that has none (when the app takes sign-ups); `sign-in` (the default) does not. */
+  readonly intent?: 'sign-in' | 'sign-up';
+  /** The page the provider's answer comes back to, on one of the app's browser origins. Default: this page. */
+  readonly returnPage?: string;
+  /** For a sign-up: as `SignUpInput`. */
+  readonly workspace?: boolean | string;
+  readonly attribution?: SignUpAttribution;
+  readonly plan?: string;
+  readonly currency?: string;
+  readonly interval?: 'day' | 'week' | 'month' | 'year';
+}
+
+/** A social provider's answer, as it lands on the page: `#bridge=social&state=…&code=…`, or `&error=…`. */
+export type SocialReturn = { readonly state: string; readonly code: string } | { readonly error: 'access_denied' | 'provider_error' };
 
 /** An app's password rules, as Bridge checks every new password against them. */
 export interface PasswordRules {
@@ -196,6 +248,10 @@ interface CodeAnswer {
   readonly next?: unknown;
   readonly flow?: unknown;
   readonly workspaces?: unknown;
+  /** The second step: the number the code went to, whether it was sent, and the backup code after setup. */
+  readonly phone?: unknown;
+  readonly sent?: unknown;
+  readonly backup_code?: unknown;
 }
 
 interface StoredSignUp {
@@ -207,6 +263,8 @@ interface StoredSignUp {
 const SIGN_UP_KEEP_MS = 15 * 60 * 1000;
 /** How long a sign-in link works, and so how long its verifier is kept. */
 const MAGIC_LINK_KEEP_MS = 15 * 60 * 1000;
+/** How long a social sign-in may take at the provider, and so how long its verifier is kept. */
+const SOCIAL_KEEP_MS = 10 * 60 * 1000;
 
 function choicesOf(value: unknown): WorkspaceChoice[] {
   if (!Array.isArray(value)) return [];
@@ -256,6 +314,7 @@ export function createSignIn(deps: SignInDeps) {
     (await call<CodeAnswer>(deps.fetch, deps.endpoints().url(route), { method: 'POST', body, ...(token === undefined ? {} : { token }) })).body;
   const signUpKey = storageKey(deps.issuer, 'sign-up');
   const magicLinkKey = storageKey(deps.issuer, 'magic-link');
+  const socialKey = storageKey(deps.issuer, 'social');
   /** Where hosted mode keeps the app's own verifier for its sign-in request (see `hosted.ts`). */
   const hostedKey = storageKey(deps.issuer, 'hosted');
   /** The sign-in request this page signs in for, if any (see `request.use`). */
@@ -286,14 +345,31 @@ export function createSignIn(deps: SignInDeps) {
     throw unknownStep(answer?.next);
   }
 
+  /** The text-message second step, as Bridge asks for it: the code, or a number to set up first. Its answers go on as `onward`. */
+  function secondStepOf(answer: CodeAnswer, onward: (next: CodeAnswer | undefined) => Promise<SignInStep> | SignInStep): SignInStep {
+    const flow = String(answer.flow);
+    if (answer.next === 'second_step_setup') return { done: false, next: 'second_step_setup', setUp: async (phone) => onward(await post(ROUTES.secondStepSetup, { flow, phone })) };
+    return {
+      done: false,
+      next: 'second_step',
+      phone: typeof answer.phone === 'string' ? answer.phone : '',
+      sent: answer.sent !== false,
+      verify: async (code) => onward(await post(ROUTES.secondStep, { flow, code })),
+      resend: async () => onward(await post(ROUTES.secondStepResend, { flow })),
+      reset: async (backupCode) => onward(await post(ROUTES.secondStepReset, { flow, backup_code: backupCode })),
+    };
+  }
+
   function signInSteps(answer: CodeAnswer | undefined, verifier: string): Promise<SignInStep> | SignInStep {
+    if ((answer?.next === 'second_step' || answer?.next === 'second_step_setup') && typeof answer.flow === 'string') return secondStepOf(answer, (next) => signInSteps(next, verifier));
+    const backupCode = typeof answer?.backup_code === 'string' ? { backupCode: answer.backup_code } : {};
     return stepOf<SignInStep>(
       answer,
       async (code) => {
         // A code made for a sign-in request is the other app's: it goes to the app's return, and is never traded here.
-        if (typeof answer?.redirect_uri === 'string' && typeof answer.state === 'string') return { done: true, handoff: requestReturnUrl(answer.redirect_uri, code, answer.state, deps.issuer) };
+        if (typeof answer?.redirect_uri === 'string' && typeof answer.state === 'string') return { done: true, handoff: requestReturnUrl(answer.redirect_uri, code, answer.state, deps.issuer), ...backupCode };
         await deps.session.exchangeCode(code, verifier);
-        return { done: true };
+        return { done: true, ...backupCode };
       },
       (flow, workspaces) => ({
         done: false,
@@ -450,6 +526,57 @@ export function createSignIn(deps: SignInDeps) {
       },
     },
 
+    social: {
+      /**
+       * Starts signing in, or up, with a social provider the app offers
+       * (`options().social`): answers the provider's address, for the page to
+       * send the browser to. The provider's answer comes back to `returnPage`
+       * (this page by default) as `#bridge=social&…`: finish it there with
+       * `takeSocialReturn` and `finish`, in this browser. On a sign-in
+       * request, the sign-in ends with the other app's code, as every step.
+       */
+      async start(provider: SocialProvider, input: SocialStartInput = {}): Promise<string> {
+        const pkce = await createPkce();
+        const page = input.returnPage ?? (typeof window === 'undefined' ? undefined : `${window.location.origin}${window.location.pathname}${window.location.search}`);
+        if (page === undefined) throw new BridgeError('invalid', 'Name the page the provider comes back to: returnPage.');
+        await deps.signUpStorage.set(socialKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + SOCIAL_KEEP_MS } satisfies StoredSignUp));
+        const signingUp = input.intent === 'sign-up';
+        const answer = (await post(ROUTES.socialStart, {
+          provider,
+          intent: signingUp ? 'sign-up' : 'sign-in',
+          code_challenge: pkce.challenge,
+          code_challenge_method: 'S256',
+          return_page: page,
+          ...(request === null ? {} : { request }),
+          ...(signingUp && input.workspace !== undefined && input.workspace !== false ? { workspace: input.workspace } : {}),
+          ...(signingUp && input.attribution !== undefined ? { attribution: input.attribution } : {}),
+          ...(signingUp && input.plan !== undefined && input.plan !== '' ? { plan: input.plan } : {}),
+          ...(signingUp && input.plan !== undefined && input.plan !== '' && input.currency && input.interval ? { currency: input.currency, interval: input.interval } : {}),
+        })) as Record<string, unknown> | undefined;
+        const url = answer?.['url'];
+        if (typeof url !== 'string' || !/^https?:\/\//.test(url)) throw new BridgeError('unavailable', 'Bridge did not give the provider\'s address.');
+        return url;
+      },
+
+      /**
+       * Finishes a social sign-in from the provider's answer (`takeSocialReturn`),
+       * in the browser that started it: elsewhere it fails with `wrong-device`.
+       * An address the provider does not vouch for fails with `invalid`
+       * (`email_not_verified`); signing in with an address that has no account,
+       * with `invalid` (`no_account`): sign up instead.
+       */
+      async finish(answer: SocialReturn): Promise<SignInStep> {
+        if ('error' in answer) throw new BridgeError(answer.error === 'access_denied' ? 'cancelled' : 'unavailable', answer.error === 'access_denied' ? 'The sign-in was cancelled at the provider.' : 'The provider did not confirm the sign-in. Try again.', { code: answer.error });
+        const verifier = await waitingVerifier(socialKey);
+        const reply = await post(ROUTES.socialFinish, { state: answer.state, code: answer.code, ...(verifier === null ? {} : { code_verifier: verifier }) });
+        if (verifier === null) throw new BridgeError('wrong-device', 'Finish signing in in the browser you started in.', { code: 'wrong_device' });
+        await deps.signUpStorage.remove(socialKey);
+        // On a sign-in request the code is the other app's, and goes to its return.
+        if (typeof reply?.redirect_uri === 'string') return signInSteps(reply, '');
+        return signInSteps(reply, verifier);
+      },
+    },
+
     passkeys: createPasskeys<SignInStep>({ ...deps, post, waitingVerifier, proofOf, signInSteps: (answer, verifier) => signInSteps(answer, verifier) as never }),
 
     request: {
@@ -571,6 +698,30 @@ export function readEmailLink(hashOrUrl: string): EmailLink | null {
   if (token === null || token === '') return null;
   if (kind !== 'verify-email' && kind !== 'reset-password' && kind !== 'invite' && kind !== 'magic-link' && kind !== 'passkey-setup') return null;
   return { kind, token };
+}
+
+/**
+ * Reads a social provider's answer from the page's address
+ * (`#bridge=social&state=…&code=…`, or `&error=…`). Null when there is none.
+ */
+export function readSocialReturn(hashOrUrl: string): SocialReturn | null {
+  const hash = hashOrUrl.includes('#') ? hashOrUrl.slice(hashOrUrl.indexOf('#') + 1) : hashOrUrl;
+  const params = new URLSearchParams(hash);
+  if (params.get('bridge') !== 'social') return null;
+  const error = params.get('error');
+  if (error !== null) return { error: error === 'access_denied' ? 'access_denied' : 'provider_error' };
+  const state = params.get('state');
+  const code = params.get('code');
+  return state === null || state === '' || code === null || code === '' ? null : { state, code };
+}
+
+/** Takes a social provider's answer from the page's address and clears it, as `takeEmailLink` does. Null when there is none. */
+export function takeSocialReturn(win: EmailLinkWindow | undefined = typeof window === 'undefined' ? undefined : window): SocialReturn | null {
+  if (win === undefined) return null;
+  const answer = readSocialReturn(win.location.hash);
+  if (answer === null) return null;
+  win.history.replaceState(win.history.state, '', `${win.location.pathname}${win.location.search}`);
+  return answer;
 }
 
 /** The parts of a window `takeEmailLink` reads and changes. */

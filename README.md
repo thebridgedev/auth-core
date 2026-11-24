@@ -33,10 +33,12 @@ Sign-in is a short conversation: you send what the person typed, and The Bridge 
 
 ```ts
 const step = await bridge.signIn.start({ email, password });
-if (!step.done) {
-  // step.next === 'workspace': show step.workspaces (id, name, logo)
+if (!step.done && step.next === 'workspace') {
+  // show step.workspaces (id, name, logo)
   await step.choose(chosenWorkspaceId);
 }
+// step.next === 'second_step': a code was texted to step.phone; step.verify(code)
+// step.next === 'second_step_setup': ask for a mobile number; step.setUp(phone)
 ```
 
 A wrong email and a wrong password give the same error, `wrong-credentials`, so nobody learns which addresses have an account.
