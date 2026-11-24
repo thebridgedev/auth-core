@@ -1,14 +1,16 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.0-alpha.16] - Unreleased
 
 ### Added
 
+- **Billing return page.** `billingReturn` is the page a payer returns to after checkout: the plugin sends its own subscription page. Choosing the plan the workspace holds while a downgrade waits (`keepPlan`) drops the downgrade. A checkout that cannot start because of the app's setup is named in the error.
 - **Social sign-in.** `social.start(provider, { intent, returnPage, … })` answers the provider's address (Google, LinkedIn, Facebook, GitHub, Microsoft: the app's sign-in options list the ones it offers in `social`); the provider's answer comes back to the page as `#bridge=social&…`, read with `takeSocialReturn()` and finished with `social.finish(answer)` in the browser that started. `intent: 'sign-up'` makes an account for an address that has none.
 - **The text-message second step.** A workspace that requires it answers a sign-in step `next: 'second_step'` (`verify(code)`, `resend()`, `reset(backupCode)`) or `next: 'second_step_setup'` (`setUp(phone)`); after setup the done step carries `backupCode`, once. The test issuer offers both (`social`, `mfa` workspaces, `socialReturn`, `lastText`).
 
 ### Changed
 
+- The wrong-device message for a sign-up link now says the link works only in the browser where the sign-up was started (12 languages).
 - `SignInStep` has more than one `done: false` step now: tell them apart by `next` (`'workspace'`, `'second_step'`, `'second_step_setup'`) before reading `workspaces` or calling `choose`.
 
 ## [1.0.0-alpha.15] - Unreleased
