@@ -200,7 +200,7 @@ export const en: Messages = {
 
 
   'verify.finishing': 'Finishing sign-up…',
-  'verify.error.wrongDevice': 'Open the link on the device you signed up on.',
+  'verify.error.wrongDevice': 'This link works only in the browser where you signed up. Open it there, or sign up again here.',
   'link.error.invalid': 'This link is no longer valid. Ask for a new one.',
   'login.error.flowExpired': 'That took too long. Please sign in again.',
   'login.error.unsupportedStep': 'This workspace needs a sign-in step this app does not offer yet.',
@@ -303,7 +303,7 @@ export const sv: Messages = {
 
 
   'verify.finishing': 'Slutför registreringen…',
-  'verify.error.wrongDevice': 'Öppna länken på enheten där du registrerade dig.',
+  'verify.error.wrongDevice': 'Länken fungerar bara i webbläsaren där du registrerade dig. Öppna den där, eller registrera dig igen här.',
   'link.error.invalid': 'Länken är inte längre giltig. Be om en ny.',
   'login.error.flowExpired': 'Det tog för lång tid. Logga in igen.',
   'login.error.unsupportedStep': 'Den här arbetsytan kräver ett inloggningssteg som appen inte erbjuder ännu.',
@@ -385,7 +385,7 @@ export const da: Messages = {
 
 
   'verify.finishing': 'Afslutter tilmeldingen…',
-  'verify.error.wrongDevice': 'Åbn linket på den enhed, du tilmeldte dig på.',
+  'verify.error.wrongDevice': 'Linket virker kun i den browser, hvor du tilmeldte dig. Åbn det der, eller tilmeld dig igen her.',
   'link.error.invalid': 'Linket er ikke længere gyldigt. Bed om et nyt.',
   'login.error.flowExpired': 'Det tog for lang tid. Log ind igen.',
   'login.error.unsupportedStep': 'Dette arbejdsområde kræver et login-trin, som appen ikke tilbyder endnu.',
@@ -467,7 +467,7 @@ export const nb: Messages = {
 
 
   'verify.finishing': 'Fullfører registreringen…',
-  'verify.error.wrongDevice': 'Åpne lenken på enheten du registrerte deg på.',
+  'verify.error.wrongDevice': 'Lenken virker bare i nettleseren der du registrerte deg. Åpne den der, eller registrer deg på nytt her.',
   'link.error.invalid': 'Lenken er ikke lenger gyldig. Be om en ny.',
   'login.error.flowExpired': 'Det tok for lang tid. Logg inn på nytt.',
   'login.error.unsupportedStep': 'Dette arbeidsområdet krever et innloggingstrinn som appen ikke tilbyr ennå.',
@@ -549,7 +549,7 @@ export const nl: Messages = {
 
 
   'verify.finishing': 'Aanmelding afronden…',
-  'verify.error.wrongDevice': 'Open de link op het apparaat waarop je je hebt aangemeld.',
+  'verify.error.wrongDevice': 'Deze link werkt alleen in de browser waarin je je hebt aangemeld. Open hem daar, of meld je hier opnieuw aan.',
   'link.error.invalid': 'Deze link is niet meer geldig. Vraag een nieuwe aan.',
   'login.error.flowExpired': 'Dat duurde te lang. Log opnieuw in.',
   'login.error.unsupportedStep': 'Deze workspace vraagt een inlogstap die deze app nog niet biedt.',
@@ -631,7 +631,7 @@ export const de: Messages = {
 
 
   'verify.finishing': 'Registrierung wird abgeschlossen…',
-  'verify.error.wrongDevice': 'Öffne den Link auf dem Gerät, auf dem du dich registriert hast.',
+  'verify.error.wrongDevice': 'Dieser Link funktioniert nur in dem Browser, in dem du dich registriert hast. Öffne ihn dort oder registriere dich hier erneut.',
   'link.error.invalid': 'Dieser Link ist nicht mehr gültig. Fordere einen neuen an.',
   'login.error.flowExpired': 'Das hat zu lange gedauert. Melde dich erneut an.',
   'login.error.unsupportedStep': 'Dieser Workspace verlangt einen Anmeldeschritt, den diese App noch nicht anbietet.',
@@ -713,7 +713,7 @@ export const fi: Messages = {
 
 
   'verify.finishing': 'Viimeistellään rekisteröitymistä…',
-  'verify.error.wrongDevice': 'Avaa linkki laitteella, jolla rekisteröidyit.',
+  'verify.error.wrongDevice': 'Linkki toimii vain selaimessa, jossa rekisteröidyit. Avaa se siellä tai rekisteröidy uudelleen tässä.',
   'link.error.invalid': 'Linkki ei ole enää voimassa. Pyydä uusi.',
   'login.error.flowExpired': 'Se kesti liian kauan. Kirjaudu sisään uudelleen.',
   'login.error.unsupportedStep': 'Tämä työtila vaatii kirjautumisvaiheen, jota sovellus ei vielä tarjoa.',
@@ -795,7 +795,7 @@ export const fr: Messages = {
 
 
   'verify.finishing': 'Finalisation de l’inscription…',
-  'verify.error.wrongDevice': 'Ouvre le lien sur l’appareil avec lequel tu t’es inscrit.',
+  'verify.error.wrongDevice': 'Ce lien ne fonctionne que dans le navigateur où tu t’es inscrit. Ouvre-le là-bas, ou inscris-toi de nouveau ici.',
   'link.error.invalid': 'Ce lien n’est plus valide. Demandes-en un nouveau.',
   'login.error.flowExpired': 'C’était trop long. Reconnecte-toi.',
   'login.error.unsupportedStep': 'Cet espace de travail demande une étape de connexion que cette appli ne propose pas encore.',
@@ -877,7 +877,7 @@ export const es: Messages = {
 
 
   'verify.finishing': 'Completando el registro…',
-  'verify.error.wrongDevice': 'Abre el enlace en el dispositivo con el que te registraste.',
+  'verify.error.wrongDevice': 'Este enlace solo funciona en el navegador en el que te registraste. Ábrelo allí o regístrate de nuevo aquí.',
   'link.error.invalid': 'Este enlace ya no es válido. Pide uno nuevo.',
   'login.error.flowExpired': 'Ha tardado demasiado. Vuelve a iniciar sesión.',
   'login.error.unsupportedStep': 'Este espacio de trabajo pide un paso de inicio de sesión que esta app aún no ofrece.',
@@ -959,7 +959,7 @@ export const it: Messages = {
 
 
   'verify.finishing': 'Completamento della registrazione…',
-  'verify.error.wrongDevice': 'Apri il link sul dispositivo con cui ti sei registrato.',
+  'verify.error.wrongDevice': 'Questo link funziona solo nel browser in cui ti sei registrato. Aprilo lì oppure registrati di nuovo qui.',
   'link.error.invalid': 'Questo link non è più valido. Richiedine uno nuovo.',
   'login.error.flowExpired': 'Ci è voluto troppo tempo. Accedi di nuovo.',
   'login.error.unsupportedStep': 'Questo spazio di lavoro richiede un passaggio di accesso che questa app non offre ancora.',
@@ -1041,7 +1041,7 @@ export const pt: Messages = {
 
 
   'verify.finishing': 'A concluir o registo…',
-  'verify.error.wrongDevice': 'Abre a ligação no dispositivo em que te registaste.',
+  'verify.error.wrongDevice': 'Esta ligação só funciona no navegador em que te registaste. Abre-a lá ou regista-te de novo aqui.',
   'link.error.invalid': 'Esta ligação já não é válida. Pede uma nova.',
   'login.error.flowExpired': 'Demorou demasiado. Inicia sessão novamente.',
   'login.error.unsupportedStep': 'Este espaço de trabalho pede um passo de início de sessão que esta app ainda não oferece.',
@@ -1123,7 +1123,7 @@ export const pl: Messages = {
 
 
   'verify.finishing': 'Kończenie rejestracji…',
-  'verify.error.wrongDevice': 'Otwórz link na urządzeniu, na którym się rejestrowałeś.',
+  'verify.error.wrongDevice': 'Ten link działa tylko w przeglądarce, w której się rejestrowałeś. Otwórz go tam albo zarejestruj się ponownie tutaj.',
   'link.error.invalid': 'Ten link nie jest już ważny. Poproś o nowy.',
   'login.error.flowExpired': 'Trwało to zbyt długo. Zaloguj się ponownie.',
   'login.error.unsupportedStep': 'Ta przestrzeń robocza wymaga kroku logowania, którego ta aplikacja jeszcze nie oferuje.',

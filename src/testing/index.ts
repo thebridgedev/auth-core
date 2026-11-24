@@ -604,7 +604,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       if (route === '/sign-up/verify') {
         const link = links.get(String(body['token']));
         if (link?.purpose !== 'sign-up' || link.signUp === undefined) return oauth(400, 'invalid_link');
-        if (typeof body['code_verifier'] !== 'string' || (await s256(body['code_verifier'])) !== link.challenge) return oauth(400, 'wrong_device', { error_description: 'Open the link on the device you signed up on.' });
+        if (typeof body['code_verifier'] !== 'string' || (await s256(body['code_verifier'])) !== link.challenge) return oauth(400, 'wrong_device', { error_description: 'This link finishes the sign-up only in the browser where it was started. Open it there, or sign up again here.' });
         if (link.request?.used === true) return oauth(400, 'invalid_request_uri');
         links.delete(String(body['token']));
         if (link.request !== undefined) link.request.used = true;

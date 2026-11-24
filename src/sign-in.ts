@@ -394,7 +394,7 @@ export function createSignIn(deps: SignInDeps) {
       async finish(token: string, password?: string): Promise<SignInStep> {
         const verifier = await waitingVerifier(signUpKey);
         const answer = await post(ROUTES.signUpVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }), ...(password === undefined ? {} : { password }) });
-        if (verifier === null) throw new BridgeError('wrong-device', 'Open the link on the device you signed up on.', { code: 'wrong_device' });
+        if (verifier === null) throw new BridgeError('wrong-device', 'This link finishes the sign-up only in the browser where it was started. Open it there, or sign up again here.', { code: 'wrong_device' });
         // Bridge took the verifier: it is spent, and the rest needs it only in memory.
         await deps.signUpStorage.remove(signUpKey);
         return signInSteps(answer, verifier);
