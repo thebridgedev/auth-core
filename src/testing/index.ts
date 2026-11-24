@@ -173,7 +173,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   const codes = new Map<string, Code>();
   const flows = new Map<string, { user: string; challenge: string; request?: SignInRequest }>();
   const socialStates = new Map<string, { provider: string; intent: string; challenge: string; returnPage: string; request?: SignInRequest; used: boolean }>();
-  const socialCodes = new Map<string, { email: string; verified: boolean; state: string }>();
+  const socialCodes = new Map<string, { email: string; verified: boolean; unconfirmed: boolean; state: string }>();
   const secondSteps = new Map<string, { user: string; challenge: string; workspace: string; request?: SignInRequest; code: string | null; tries: number; settingUp: string | null }>();
   const sentTexts: { to: string; code: string }[] = [];
   const social = options.social ?? [];
@@ -509,6 +509,16 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         const presented = typeof body['code_verifier'] === 'string' ? await s256(body['code_verifier']) : null;
         if (presented !== state.challenge) return oauth(400, 'wrong_device', { error_description: 'Finish signing in in the browser you started in.' });
         state.used = true;
+        if (said.unconfirmed) {
+          // A provider that gives an address without saying it confirmed it (Facebook): never linked to an account that holds it, and a
+          // sign-up is proved by Bridge's own link first, which only this device's verifier finishes.
+          if ([...people.values()].some((each) => each.email === said.email)) return oauth(400, 'account_exists', { error_description: 'An account with this email address already exists. Sign in with your existing method.' });
+          if (state.intent !== 'sign-up') return oauth(400, 'no_account', { error_description: 'There is no account for this address yet. Sign up first.' });
+          const token = secret();
+          links.set(token, { purpose: 'sign-up', email: said.email, challenge: state.challenge, ...(state.request === undefined ? {} : { request: state.request }), signUp: { password: secret(), firstName: null, lastName: null, workspace: null } });
+          sentLinks.push({ to: said.email, purpose: 'verify-sign-up', token });
+          return json(202, { next: 'verify_email', email: said.email });
+        }
         if (!said.verified) return oauth(400, 'email_not_verified', { error_description: "Your account's email address is not verified there." });
         let person = [...people.values()].find((each) => each.email === said.email);
         if (person === undefined) {
@@ -1005,12 +1015,12 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
      * The person at a social provider: answers the provider's address from `social.start` as the provider would after
      * they signed in there, with the fragment the app's page gets back (`#bridge=social&state=…&code=…`).
      */
-    socialReturn(url: string, person: { email: string; verified?: boolean }): string {
+    socialReturn(url: string, person: { email: string; verified?: boolean; unconfirmed?: boolean }): string {
       const state = String(new URL(url).searchParams.get('state'));
       const found = socialStates.get(state);
       if (found === undefined) throw new Error('No social sign-in started with this address.');
       const code = secret();
-      socialCodes.set(code, { email: person.email.toLowerCase(), verified: person.verified !== false, state });
+      socialCodes.set(code, { email: person.email.toLowerCase(), verified: person.verified !== false, unconfirmed: person.unconfirmed === true, state });
       return `${found.returnPage}#${new URLSearchParams({ bridge: 'social', state, code }).toString()}`;
     },
     /** The last second-step code texted to a number, or null. The backup code every setup gives is `BACK-UPCO-DE12`. */

@@ -8,6 +8,8 @@
 - **Social sign-in.** `social.start(provider, { intent, returnPage, … })` answers the provider's address (Google, LinkedIn, Facebook, GitHub, Microsoft: the app's sign-in options list the ones it offers in `social`); the provider's answer comes back to the page as `#bridge=social&…`, read with `takeSocialReturn()` and finished with `social.finish(answer)` in the browser that started. `intent: 'sign-up'` makes an account for an address that has none.
 - **The text-message second step.** A workspace that requires it answers a sign-in step `next: 'second_step'` (`verify(code)`, `resend()`, `reset(backupCode)`) or `next: 'second_step_setup'` (`setUp(phone)`); after setup the done step carries `backupCode`, once. The test issuer offers both (`social`, `mfa` workspaces, `socialReturn`, `lastText`).
 
+- **A social sign-up with an address the provider did not confirm (Facebook).** `social.finish` answers the step `{ done: false, next: 'verify_email', email }`: Bridge emailed its own link, as after a password sign-up, and `signUp.finish(token)` (the verify-email page) finishes it in this browser. An address that already has an account fails with `account_exists`; Facebook never links to it.
+
 ### Changed
 
 - A passkey autofill wait that the browser cannot run (headless Chromium, a browser with no passkey provider) now fails with `cancelled`, not `not-supported`: it is passive, so a page that treats `cancelled` as quiet shows no error on load. Without it, the sign-in form showed "Invalid email or password." as soon as it loaded. A passkey dialog the person opens still says what went wrong.

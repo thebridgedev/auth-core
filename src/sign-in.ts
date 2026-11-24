@@ -34,6 +34,15 @@ export interface WorkspaceChoice {
 
 export type SignInStep =
   | {
+      /**
+       * A social sign-up with an address the provider did not confirm (Facebook): Bridge emailed `email` a link, as a password sign-up
+       * does, and the person finishes by opening it in this browser (`signUp.finish`, or the app's verify-email page).
+       */
+      readonly done: false;
+      readonly next: 'verify_email';
+      readonly email: string;
+    }
+  | {
       readonly done: true;
       /**
        * Set when the sign-in was for another app's sign-in request (see
@@ -246,6 +255,8 @@ interface CodeAnswer {
   readonly redirect_uri?: unknown;
   readonly state?: unknown;
   readonly next?: unknown;
+  /** With `next: 'verify_email'` after a social finish: the address Bridge emailed. */
+  readonly email?: unknown;
   readonly flow?: unknown;
   readonly workspaces?: unknown;
   /** The second step: the number the code went to, whether it was sent, and the backup code after setup. */
@@ -563,7 +574,10 @@ export function createSignIn(deps: SignInDeps) {
        * in the browser that started it: elsewhere it fails with `wrong-device`.
        * An address the provider does not vouch for fails with `invalid`
        * (`email_not_verified`); signing in with an address that has no account,
-       * with `invalid` (`no_account`): sign up instead.
+       * with `invalid` (`no_account`): sign up instead. Facebook gives an
+       * address without saying it confirmed it: a sign-up through it answers
+       * the step `verify_email` (Bridge emailed its own link), and an address
+       * that already has an account fails with `account_exists`.
        */
       async finish(answer: SocialReturn): Promise<SignInStep> {
         if ('error' in answer) throw new BridgeError(answer.error === 'access_denied' ? 'cancelled' : 'unavailable', answer.error === 'access_denied' ? 'The sign-in was cancelled at the provider.' : 'The provider did not confirm the sign-in. Try again.', { code: answer.error });
@@ -571,6 +585,12 @@ export function createSignIn(deps: SignInDeps) {
         const reply = await post(ROUTES.socialFinish, { state: answer.state, code: answer.code, ...(verifier === null ? {} : { code_verifier: verifier }) });
         if (verifier === null) throw new BridgeError('wrong-device', 'Finish signing in in the browser you started in.', { code: 'wrong_device' });
         await deps.signUpStorage.remove(socialKey);
+        // An address the provider did not confirm (Facebook): Bridge emailed its own link, as a password sign-up does. The link opens in a
+        // new tab and finishes the sign-up only with this device's verifier, so it waits where a sign-up's does.
+        if (reply?.next === 'verify_email') {
+          await deps.signUpStorage.set(signUpKey, JSON.stringify({ verifier, expiresAt: Date.now() + SIGN_UP_KEEP_MS } satisfies StoredSignUp));
+          return { done: false, next: 'verify_email', email: typeof reply.email === 'string' ? reply.email : '' };
+        }
         // On a sign-in request the code is the other app's, and goes to its return.
         if (typeof reply?.redirect_uri === 'string') return signInSteps(reply, '');
         return signInSteps(reply, verifier);

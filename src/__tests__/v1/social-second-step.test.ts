@@ -42,6 +42,27 @@ describe('social sign-in', () => {
     await expect(other.social.finish({ error: 'access_denied' })).rejects.toMatchObject({ kind: 'cancelled' });
   });
 
+  it('a provider that does not confirm the address (Facebook) answers verify_email: the link finishes the sign-up on this device, an existing address is refused', async () => {
+    const { fake } = issuerWithPeople({ social: ['facebook'] });
+    const storage = memoryStorage();
+    const client = clientOn(fake, { storage });
+    const url = await client.social.start('facebook', { returnPage: PAGE, intent: 'sign-up' });
+    const step = await client.social.finish(readSocialReturn(fake.socialReturn(url, { email: 'fresh@acme.test', unconfirmed: true }))!);
+    expect(step).toEqual({ done: false, next: 'verify_email', email: 'fresh@acme.test' });
+    expect(client.session.get()).toMatchObject({ status: 'signed-out' });
+    // The verifier waits where the link's tab reads it, as after a password sign-up; the social one is gone.
+    expect(await storage.get(`bridge:${fake.issuer}:social`)).toBeNull();
+    expect(await storage.get(`bridge:${fake.issuer}:sign-up`)).not.toBeNull();
+    const token = fake.lastLink('fresh@acme.test', 'verify-sign-up')!;
+    // Another browser holds no verifier: refused; this one finishes and is signed in.
+    await expect(clientOn(fake).signUp.finish(token)).rejects.toMatchObject({ kind: 'wrong-device' });
+    await expect(client.signUp.finish(token)).resolves.toMatchObject({ done: true });
+    expect(client.session.get()).toMatchObject({ status: 'signed-in', user: { email: 'fresh@acme.test' } });
+    // An address that has an account is never linked by the provider's say-so.
+    const again = await client.social.start('facebook', { returnPage: PAGE, intent: 'sign-up' });
+    await expect(client.social.finish(readSocialReturn(fake.socialReturn(again, { email: 'alice@acme.test', unconfirmed: true }))!)).rejects.toMatchObject({ code: 'account_exists' });
+  });
+
   it('takes the provider\'s answer from the address and clears it, and only a social one', () => {
     const replaced: string[] = [];
     const win = (hash: string): EmailLinkWindow => ({ location: { hash, pathname: '/auth', search: '?x=1' }, history: { state: null, replaceState: (_d, _u, url) => void replaced.push(String(url)) } });
