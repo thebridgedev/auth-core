@@ -157,6 +157,12 @@ export function isBillingLocked(error: unknown): boolean {
   return isLockName(error.code) || isLockName(error.problem?.type);
 }
 
+/** Why a checkout could not start because of how the app is set up (no return address, or one that is not registered), or null. */
+export function checkoutSetupProblem(error: unknown): 'no-return-url' | 'return-url-not-registered' | null {
+  if (!isBridgeError(error)) return null;
+  return error.code === 'no-return-url' || error.code === 'return-url-not-registered' ? error.code : null;
+}
+
 export function isBridgeError(value: unknown, kind?: BridgeErrorKind): value is BridgeError {
   return value instanceof BridgeError && (kind === undefined || value.kind === kind);
 }
@@ -280,5 +286,7 @@ export function errorFromAnswer(status: number, body: unknown, headers?: { get(n
   const used = record['used'];
   const quota: LimitReached | null =
     code === 'limit-reached' && text(record['metric']) !== undefined && typeof limit === 'number' && typeof used === 'number' ? { metric: text(record['metric'])!, limit, used } : null;
-  return new BridgeError(kind, message, { status, code, retryAfterSeconds, entitlement, problem, quota });
+  // A checkout that could not start because of how the app is set up says which, in the words of its detail.
+  const setup = /^(no-return-url|return-url-not-registered):/.exec(message)?.[1] ?? null;
+  return new BridgeError(kind, message, { status, code: setup ?? code, retryAfterSeconds, entitlement, problem, quota });
 }

@@ -55,7 +55,7 @@ describe('contract: the SDK calls only what Bridge promises at version 2', () =>
   });
 
   it('every route before sign-in is public, and every signed-in route takes a person', () => {
-    const beforeSignIn = ['signIn', 'token', 'revoke', 'introspect', 'jwks', 'signInOptions', 'signInRequest', 'signUp', 'signUpVerify', 'passwordForgot', 'passwordSet', 'magicLink', 'magicLinkVerify', 'passkeySignInOptions', 'passkeySignIn', 'passkeySetupLink', 'passkeySetupOptions', 'passkeySetup', 'invitePreview', 'linksPreview', 'flagsVisitorEvaluate', 'liveVisitorChannels', 'liveVisitorHistory', 'liveConnection'];
+    const beforeSignIn = ['signIn', 'token', 'revoke', 'introspect', 'jwks', 'signInOptions', 'signInRequest', 'signUp', 'signUpVerify', 'passwordForgot', 'passwordSet', 'magicLink', 'magicLinkVerify', 'passkeySignInOptions', 'passkeySignIn', 'passkeySetupLink', 'passkeySetupOptions', 'passkeySetup', 'invitePreview', 'linksPreview', 'socialStart', 'socialFinish', 'secondStep', 'secondStepSetup', 'secondStepResend', 'secondStepReset', 'flagsVisitorEvaluate', 'liveVisitorChannels', 'liveVisitorHistory', 'liveConnection'];
     for (const { name, key } of routes) {
       const endpoint = promised.get(key);
       if (endpoint === undefined) continue;
@@ -82,7 +82,7 @@ describe('contract: every field the SDK sends is one Bridge accepts', () => {
     fake.setPlans([{ key: 'pro', name: 'Pro', free: false, prices: [{ currency: 'eur', interval: 'month', amount: 2000 }], features: [], limits: {}, archived: false, description: null, trial: null }]);
     const client = clientOn(fake);
     const step = await client.signIn.start({ email: 'bob@acme.test', password: PASSWORD });
-    if (!step.done) await step.choose('ws-acme');
+    if (!step.done && step.next === 'workspace') await step.choose('ws-acme');
     await client.workspaces.switch('ws-globex');
     await client.me.update({ firstName: 'Bob', lastName: 'B' });
     await client.workspaces.create({ name: 'New' });

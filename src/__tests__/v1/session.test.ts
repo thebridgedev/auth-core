@@ -5,7 +5,7 @@ import { bodyOf, clientOn, flush, holdingRefreshes, issuerWithPeople, PASSWORD, 
 async function signedIn(client: ReturnType<typeof clientOn>, email = 'alice@acme.test') {
   await client.ready;
   const step = await client.signIn.start({ email, password: PASSWORD });
-  if (!step.done) await step.choose(step.workspaces[0]!.id);
+  if (!step.done && step.next === 'workspace') await step.choose(step.workspaces[0]!.id);
 }
 
 describe('session: tokens and refresh rotation', () => {

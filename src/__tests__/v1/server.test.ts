@@ -88,7 +88,7 @@ function personToken(ring: KeyRing, overrides: Record<string, unknown> = {}, typ
       mid: 'mem-1',
       role: 'OWNER',
       wst: 'active',
-      privileges: ['billing:manage', 'USER_WRITE'],
+      privileges: ['billing:manage', 'users:write'],
       sid: 'ses-1',
       client_id: APP,
       auth_time: now,

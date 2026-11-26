@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { billingNotice, readCheckoutReturn, type BillingFacts } from '../../billing.js';
+import { checkoutSetupProblem } from '../../core/errors.js';
 import { clientOn, issuerWithPeople, PASSWORD } from './helpers.js';
 
 async function aliceClient() {
@@ -100,6 +101,57 @@ describe('billing: the payer, checkout and the portal', () => {
   it('gives the billing portal address', async () => {
     const { client } = await aliceClient();
     await expect(client.billing.portal()).resolves.toEqual({ url: 'https://portal.bridge.test/session' });
+  });
+
+  it('sends the page a payer comes back to, with a plan choice and with the portal, when the app names one', async () => {
+    const { fake } = issuerWithPeople();
+    const client = clientOn(fake, { billingReturn: () => 'https://app.test/subscription' });
+    await client.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    fake.setPlans(plans);
+    await client.billing.choosePlan({ plan: 'pro', currency: 'eur', interval: 'month' });
+    await client.billing.portal();
+    expect(fake.planChoices).toEqual([{ plan: 'pro', returnUrl: 'https://app.test/subscription' }]);
+    expect(fake.portalReturns).toEqual(['https://app.test/subscription']);
+    // A call that names its own wins; with none named, none is sent.
+    await client.billing.choosePlan({ plan: 'pro', returnUrl: 'https://app.test/elsewhere' });
+    expect(fake.planChoices.at(-1)).toEqual({ plan: 'pro', returnUrl: 'https://app.test/elsewhere' });
+    const plain = await aliceClient();
+    plain.fake.setPlans(plans);
+    await plain.client.billing.choosePlan({ plan: 'pro' });
+    expect(plain.fake.planChoices).toEqual([{ plan: 'pro', returnUrl: null }]);
+  });
+
+  it('names a checkout that could not start because of how the app is set up, so a screen can tell the payer plainly and the developer exactly', async () => {
+    const { fake } = issuerWithPeople();
+    fake.setPlans(plans);
+    fake.requireCheckoutReturnOn(['https://app.test']);
+    const client = clientOn(fake, { billingReturn: 'https://other.test/subscription' });
+    await client.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    const refused = await client.billing.choosePlan({ plan: 'pro' }).catch((error: unknown) => error);
+    expect(checkoutSetupProblem(refused)).toBe('return-url-not-registered');
+    expect(refused).toMatchObject({ kind: 'conflict', code: 'return-url-not-registered' });
+    const plain = clientOn(fake);
+    await plain.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    expect(checkoutSetupProblem(await plain.billing.choosePlan({ plan: 'pro' }).catch((error: unknown) => error))).toBe('no-return-url');
+    expect(checkoutSetupProblem(new Error('x'))).toBeNull();
+    const allowed = clientOn(fake, { billingReturn: 'https://app.test/subscription' });
+    await allowed.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    await expect(allowed.billing.choosePlan({ plan: 'pro' })).resolves.toMatchObject({ status: 'payment_required' });
+  });
+
+  it('schedules a downgrade for the end of the period, keeps the plan on request, and waits for the payment of an upgrade', async () => {
+    const { client, fake } = await aliceClient();
+    const mega = { key: 'mega', name: 'Mega', free: false, prices: [{ currency: 'eur', interval: 'month', amount: 9000 }], features: [], limits: {}, archived: false, description: null, trial: null };
+    fake.setPlans([...plans, mega]);
+    fake.setFacts({ plan: { key: 'pro', name: 'Pro' }, status: 'active', access: 'ok', periodEnd: '2026-12-24T00:00:00.000Z' });
+    await expect(client.billing.choosePlan({ plan: 'free' })).resolves.toEqual({ status: 'scheduled' });
+    await expect(client.billing.state()).resolves.toMatchObject({ plan: { key: 'pro' }, waiting: { plan: 'free', waitsFor: 'period_end', at: '2026-12-24T00:00:00.000Z' } });
+    await expect(client.billing.keepPlan('pro')).resolves.toEqual({ status: 'changed' });
+    await expect(client.billing.state()).resolves.toMatchObject({ plan: { key: 'pro' }, waiting: null });
+    await expect(client.billing.choosePlan({ plan: 'mega' })).resolves.toEqual({ status: 'waiting_for_payment' });
+    await expect(client.billing.state()).resolves.toMatchObject({ plan: { key: 'pro' }, waiting: { plan: 'mega', waitsFor: 'payment' } });
+    fake.settlePayment();
+    await expect(client.billing.state()).resolves.toMatchObject({ plan: { key: 'mega' }, waiting: null });
   });
 
   it('reads a return from checkout', () => {

@@ -38,6 +38,9 @@ export type EndpointName =
   | 'passkey_setup_options'
   | 'passkey_setup'
   | 'passkeys'
+  | 'social_start'
+  | 'social_finish'
+  | 'second_step'
   | 'recheck'
   | 'invites'
   | 'invite_preview'
@@ -74,6 +77,9 @@ export const CONTRACT_PATHS: Readonly<Record<EndpointName, string>> = {
   passkey_setup_options: '/v2/identity-access/apps/{appId}/passkeys/setup/options',
   passkey_setup: '/v2/identity-access/apps/{appId}/passkeys/setup',
   passkeys: '/v2/identity-access/passkeys',
+  social_start: '/v2/identity-access/apps/{appId}/social/start',
+  social_finish: '/v2/identity-access/apps/{appId}/social/finish',
+  second_step: '/v2/identity-access/apps/{appId}/second-step',
   recheck: '/v2/identity-access/recheck',
   invites: '/v2/identity-access/invites',
   invite_preview: '/v2/identity-access/apps/{appId}/invites/preview',
@@ -124,6 +130,14 @@ export const ROUTES = {
   invitePreview: route('POST', 'invite_preview'),
   // What an email link is, without using it: the one-button page asks this before anything is spent.
   linksPreview: route('POST', 'links_preview'),
+  // Social sign-in: the provider's address to go to, then the provider's answer finished on this page.
+  socialStart: route('POST', 'social_start'),
+  socialFinish: route('POST', 'social_finish'),
+  // The text-message second step: the code, a phone number to set up, a new code, or the backup code's reset.
+  secondStep: route('POST', 'second_step'),
+  secondStepSetup: route('POST', 'second_step', '/setup'),
+  secondStepResend: route('POST', 'second_step', '/resend'),
+  secondStepReset: route('POST', 'second_step', '/reset'),
 
   // Identity and Access: the signed-in person accepts an invite.
   inviteAccept: route('POST', 'invites', '/accept'),

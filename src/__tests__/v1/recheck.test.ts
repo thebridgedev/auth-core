@@ -71,6 +71,22 @@ describe('confirming it is you', () => {
     await expect(client.magicLink.finish(link)).rejects.toMatchObject({ kind: 'link-invalid' });
   });
 
+  it('by a link within the same second as the sign-in: the local issuer\'s renewed sign-in time is still later, so the page waiting for it goes on', async () => {
+    // Bridge's clock stands still: the sign-in, the refusal and the link all fall in one second.
+    const at = Date.parse('2026-11-24T12:00:00.250Z');
+    const { fake } = issuerWithPeople({ methods: ['password', 'magicLink'], recheck: { routes: ['PATCH /v2/accounts/me'], maxAgeSeconds: 300 }, now: () => at });
+    const client = clientOn(fake, { signUpStorage: memoryStorage() });
+    await client.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    fake.signedInLongAgo();
+    await expect(rename(client)).rejects.toMatchObject({ kind: 'reauthenticate' });
+    await client.recheck.email();
+    const waiting = client.recheck.emailOpened({ everyMs: 60_000 });
+    await expect(client.magicLink.finish(fake.lastLink('alice@acme.test', 'magic-link')!)).resolves.toEqual({ done: true, rechecked: true });
+    const outcome = await Promise.race([waiting.then(() => 'went on'), new Promise((resolve) => setTimeout(() => resolve('still waiting'), 500))]);
+    expect(outcome).toBe('went on');
+    await expect(rename(client)).resolves.toMatchObject({ firstName: 'Alicia' });
+  });
+
   it('a link opened on another device confirms nothing', async () => {
     const { client, fake } = await aliceSignedInLongAgo();
     await client.recheck.email();
