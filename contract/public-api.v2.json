@@ -2,7 +2,7 @@
   "about": "A pinned copy of the endpoints Bridge's public API promises, from Bridge's API contract: each one's method, path, callers and the body fields it accepts. The contract test checks every route the SDK calls, and the fields it sends, against it. To update: copy the contract's endpoints at a newer commit and change `source`.",
   "source": {"file": "tools/access/public-api.json", "commit": "92d61ad80c714080f034cebe825029f5190e35a1"},
   "alsoFrom": {"commit": "711adf82b922cdb2cf616a3e99314b9e6ddcaa90", "endpoints": ["GET /v2/billing/payer/gate", "POST /v2/billing/usage/holds", "DELETE /v2/billing/usage/holds/{holdId}", "POST /v2/billing/usage/holds/{holdId}/confirm", "GET /v2/billing/usage/quota/{metric}"]},
-  "alsoFromLater": {"commit": "bridge-server branch parity/p1-h (key doors of the app, branding and setup signals)", "endpoints": ["GET /v2/events-and-logs/audit", "GET /v2/app-registry/app", "PATCH /v2/app-registry/app", "GET /v2/app-registry/branding", "PATCH /v2/app-registry/branding", "GET /v2/events-and-logs/setup-signals"]},
+  "alsoFromLater": {"commit": "bridge-server branch parity/p1-h (key doors of the app, branding and setup signals)", "endpoints": ["GET /v2/events-and-logs/audit", "GET /v2/app-registry/app", "PATCH /v2/app-registry/app", "GET /v2/app-registry/branding", "PATCH /v2/app-registry/branding", "GET /v2/events-and-logs/setup-signals"]}, "alsoFromSignIn": {"commit": "bridge-server (social sign-in and the text-message second step)", "endpoints": ["GET /v2/identity-access/apps/{appId}/federated/{provider}/return", "POST /v2/identity-access/apps/{appId}/second-step", "POST /v2/identity-access/apps/{appId}/second-step/resend", "POST /v2/identity-access/apps/{appId}/second-step/reset", "POST /v2/identity-access/apps/{appId}/second-step/setup", "PUT /v2/identity-access/apps/{appId}/sign-in-settings/providers/{provider}", "POST /v2/identity-access/apps/{appId}/social/finish", "POST /v2/identity-access/apps/{appId}/social/start", "PUT /v2/identity-access/sign-in-settings/providers/{provider}"]},
   "endpoints": [
     {"method": "GET", "path": "/v2/events-and-logs/audit", "public": false, "callers": ["app_key", "person"], "fields": []},
     {"method": "GET", "path": "/v2/app-registry/app", "public": false, "callers": ["app_key"], "fields": []},
@@ -288,6 +288,15 @@
     {"method": "GET", "path": "/v2/webhooks/apps/{appId}/event-types", "public": false, "callers": ["person"], "fields": []},
     {"method": "POST", "path": "/v2/webhooks/apps/{appId}/secret/rotate", "public": false, "callers": ["person"], "fields": []},
     {"method": "GET", "path": "/v2/webhooks/apps/{appId}/settings", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PUT", "path": "/v2/webhooks/apps/{appId}/settings", "public": false, "callers": ["person"], "fields": ["enabled", "events", "url"]}
+    {"method": "PUT", "path": "/v2/webhooks/apps/{appId}/settings", "public": false, "callers": ["person"], "fields": ["enabled", "events", "url"]},
+    {"method": "GET", "path": "/v2/identity-access/apps/{appId}/federated/{provider}/return", "public": true, "callers": [], "fields": []},
+    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/second-step", "public": true, "callers": [], "fields": ["code", "flow"]},
+    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/second-step/resend", "public": true, "callers": [], "fields": ["flow"]},
+    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/second-step/reset", "public": true, "callers": [], "fields": ["backup_code", "flow"]},
+    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/second-step/setup", "public": true, "callers": [], "fields": ["flow", "phone"]},
+    {"method": "PUT", "path": "/v2/identity-access/apps/{appId}/sign-in-settings/providers/{provider}", "public": false, "callers": ["person"], "fields": ["clientId", "clientSecret", "tenantId"]},
+    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/social/finish", "public": true, "callers": [], "fields": ["code", "code_verifier", "state"]},
+    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/social/start", "public": true, "callers": [], "fields": ["attribution", "client_id", "code_challenge", "code_challenge_method", "currency", "intent", "interval", "plan", "provider", "redirect_uri", "request", "return_page", "workspace"]},
+    {"method": "PUT", "path": "/v2/identity-access/sign-in-settings/providers/{provider}", "public": false, "callers": ["app_key"], "fields": ["clientId", "clientSecret", "tenantId"]}
   ]
 }

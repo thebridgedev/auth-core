@@ -147,7 +147,7 @@ describe('hosted mode: the app starts a sign-in request, the hosted page signs i
     const hosted = page();
     await hosted.request.use(requestOf(address));
     const step = await hosted.signIn.start({ email: 'bob@acme.test', password: PASSWORD });
-    if (step.done) throw new Error('expected the workspace step');
+    if (step.done || step.next !== 'workspace') throw new Error('expected the workspace step');
     const chosen = await step.choose('ws-globex');
     await app.hosted.finish((chosen as { handoff: string }).handoff);
     expect(app.session.get()).toMatchObject({ status: 'signed-in', workspace: { id: 'ws-globex' } });

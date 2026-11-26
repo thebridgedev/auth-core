@@ -139,19 +139,28 @@ export interface BillingDeps {
   readonly changed: () => void;
   /** Called when a call was refused as signed out and went through after the session was renewed: the lock may have changed. */
   readonly renewed?: () => void;
+  /**
+   * The page a payer comes back to after checkout or the billing portal: sent with the call, and accepted by Bridge only
+   * on an origin the app registered. Absent or undefined: none is sent, and the app's own setting decides.
+   */
+  readonly returnUrl?: () => string | undefined;
 }
 
 export function createBilling(deps: BillingDeps) {
-  async function send<T>(route: Route, options: { params?: Record<string, string>; body?: unknown } = {}, announce = true): Promise<T> {
+  async function send<T>(route: Route, options: { params?: Record<string, string>; body?: unknown; query?: Record<string, string | undefined> } = {}, announce = true): Promise<T> {
     return renewing(
       deps.session,
       async () => {
         const token = await deps.session.accessToken();
-        return (await call<T>(deps.fetch, deps.endpoints().url(route, options.params), { method: route.method, token, ...(options.body === undefined ? {} : { body: options.body }) })).body;
+        return (await call<T>(deps.fetch, deps.endpoints().url(route, options.params, options.query), { method: route.method, token, ...(options.body === undefined ? {} : { body: options.body }) })).body;
       },
       announce ? deps.renewed : undefined,
     );
   }
+  const returnTo = (): { returnUrl: string } | Record<string, never> => {
+    const url = deps.returnUrl?.();
+    return url === undefined || url === '' ? {} : { returnUrl: url };
+  };
   async function changing<T>(work: Promise<T>): Promise<T> {
     const result = await work;
     deps.changed();
@@ -172,11 +181,17 @@ export function createBilling(deps: BillingDeps) {
      * answers `payment_required` with a checkout: send the person to its
      * `url`, and confirm the session when they come back.
      */
-    choosePlan: (choice: { readonly plan: string; readonly currency?: string; readonly interval?: string }) => changing(send<PlanChange>(ROUTES.payerPlan, { body: choice })),
+    choosePlan: (choice: { readonly plan: string; readonly currency?: string; readonly interval?: string; readonly returnUrl?: string }) =>
+      changing(send<PlanChange>(ROUTES.payerPlan, { body: { ...returnTo(), ...choice } })),
+    /**
+     * Keeps the plan the workspace is on while a change to another plan waits for the end of the period: the change is
+     * dropped. Does nothing the plan change does not: it fails when no change waits.
+     */
+    keepPlan: (plan: string) => changing(send<PlanChange>(ROUTES.payerPlan, { body: { plan } })),
     /** Confirms a checkout the person came back from (see `readCheckoutReturn`). */
     confirmCheckout: (session: string) => changing(send<BillingFacts>(ROUTES.checkoutConfirm, { params: { session } })),
     /** The billing portal's address, to send the person to. */
-    portal: () => send<{ url: string }>(ROUTES.portal),
+    portal: () => send<{ url: string }>(ROUTES.portal, { query: returnTo() }),
     startTrial: (plan: string) => changing(send<BillingFacts>(ROUTES.payerTrial, { body: { plan } })),
     cancel: () => changing(send<BillingFacts>(ROUTES.payerCancel)),
     reactivate: () => changing(send<BillingFacts>(ROUTES.payerReactivate)),

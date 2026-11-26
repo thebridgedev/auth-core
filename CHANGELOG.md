@@ -8,6 +8,25 @@
 - **A return to localhost asks for a click.** On an app in production, a sign-in that returns to the person's own machine answers `confirmReturn: true` with its `handoff`, and the page shows a Continue button instead of going back by itself.
 - **Passwords that must change.** `isPasswordChangeRequired(error)` is true when Bridge refused a sign-in with the right password because the app's password rules changed (`password_change_required`): a link to choose a new password was already emailed, and `error.failed` names the rules the password breaks.
 
+## [1.0.0-alpha.16] - Unreleased
+
+### Added
+
+- **Billing return page.** `billingReturn` is the page a payer returns to after checkout: the plugin sends its own subscription page. Choosing the plan the workspace holds while a downgrade waits (`keepPlan`) drops the downgrade. A checkout that cannot start because of the app's setup is named in the error.
+- **Social sign-in.** `social.start(provider, { intent, returnPage, … })` answers the provider's address (Google, LinkedIn, Facebook, GitHub, Microsoft: the app's sign-in options list the ones it offers in `social`); the provider's answer comes back to the page as `#bridge=social&…`, read with `takeSocialReturn()` and finished with `social.finish(answer)` in the browser that started. `intent: 'sign-up'` makes an account for an address that has none.
+- **The text-message second step.** A workspace that requires it answers a sign-in step `next: 'second_step'` (`verify(code)`, `resend()`, `reset(backupCode)`) or `next: 'second_step_setup'` (`setUp(phone)`); after setup the done step carries `backupCode`, once. The test issuer offers both (`social`, `mfa` workspaces, `socialReturn`, `lastText`).
+- **A social sign-up with an address the provider did not confirm (Facebook).** `social.finish` answers the step `{ done: false, next: 'verify_email', email }`: Bridge emailed its own link, as after a password sign-up, and `signUp.finish(token)` (the verify-email page) finishes it in this browser. An address that already has an account gets the same answer (Bridge emails it that the account exists, as for a password sign-up); Facebook never links to it.
+
+### Changed
+
+- A passkey autofill wait that the browser cannot run (headless Chromium, a browser with no passkey provider) now fails with `cancelled`, not `not-supported`: it is passive, so a page that treats `cancelled` as quiet shows no error on load. Without it, the sign-in form showed "Invalid email or password." as soon as it loaded. A passkey dialog the person opens still says what went wrong.
+- The wrong-device message for a sign-up link now says the link works only in the browser where the sign-up was started (12 languages).
+- `SignInStep` has more than one `done: false` step now: tell them apart by `next` (`'workspace'`, `'second_step'`, `'second_step_setup'`) before reading `workspaces` or calling `choose`.
+
+### Fixed
+
+- The test issuer (`@nebulr-group/bridge-auth-core/testing`): after `signedInLongAgo`, confirming it is you within the same second as the sign-in left a page waiting for the link (`recheck.emailOpened`) waiting. The tokens given before keep the sign-in time they carry, and a confirmation now always gives a later one, as Bridge does.
+
 ## [1.0.0-alpha.15] - Unreleased
 
 ### Added
