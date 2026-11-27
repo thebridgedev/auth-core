@@ -15,13 +15,33 @@
 
 export interface FakePerson {
   readonly id: string;
-  readonly email: string;
+  /** Changes only through an email change, both inboxes confirmed (or an admin's change). */
+  email: string;
   password: string;
   firstName: string | null;
   lastName: string | null;
   readonly workspaces: { id: string; name: string; role: string; mfa?: boolean }[];
   /** The phone number the text-message second step goes to; none until set up. */
   phone?: string | null;
+  /** The profile's phone number (`me`), apart from the second step's. */
+  phoneNumber?: string | null;
+  /** The person's own language, as `me` has it. */
+  language?: string | null;
+  /** Who manages the person's address (`google`, a company's provider…): it cannot be changed here. */
+  managedBy?: string | null;
+  /** The app's own fields on the profile, as `me` sends them. */
+  customFields?: { label: string; userLabel?: string; type: string; value: string | null; editable?: boolean }[];
+}
+
+/** A change of address waiting for its two inboxes, as the issuer holds it. */
+interface PendingEmailChangeRecord {
+  readonly user: string;
+  readonly from: string;
+  readonly to: string;
+  stage: 'current' | 'new';
+  readonly expiresAt: number;
+  /** False when the new address is taken: the current inbox still confirms, but no link reaches the taken one. */
+  readonly usable: boolean;
 }
 
 export interface FakeIssuerOptions {
@@ -197,6 +217,15 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   const passkeys = new Map<string, { id: string; user: string; name: string; createdAt: string; lastUsedAt: string | null }>();
   const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link' | 'passkey-setup' | 'recheck'; email: string; session?: string; challenge?: string; request?: SignInRequest; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null; existing?: string } }>();
   const sentLinks: { to: string; purpose: string; token: string }[] = [];
+  // Changing the address: the change waiting per person, each link's token, and the notices to old addresses.
+  const emailChange = {
+    offered: true,
+    recentMs: 10 * 60 * 1000,
+    pending: new Map<string, PendingEmailChangeRecord>(),
+    links: new Map<string, { kind: 'confirm' | 'revert'; user: string; stage?: 'current' | 'new'; from?: string; to?: string; expiresAt: number }>(),
+    notices: [] as { to: string; kind: 'changed' | 'reverted' | 'admin-changed'; newEmail: string }[],
+  };
+  const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   // Login security: what the app's owner set, and what the issuer found.
   const security = {
     leaked: new Set<string>(),
@@ -280,6 +309,9 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           social_finish: `${at}/social/finish`,
           second_step: `${at}/second-step`,
           recheck: `${v2}/identity-access/recheck`,
+          ...(emailChange.offered
+            ? { me_login: `${v2}/identity-access/me/login`, email_change: `${v2}/identity-access/me/email-change`, email_change_confirm: `${at}/email-change/confirm`, email_change_revert: `${at}/email-change/revert` }
+            : {}),
           password_forgot: `${at}/password/forgot`,
           password: `${at}/password`,
           sign_out: `${v2}/identity-access/sign-out`,
@@ -805,6 +837,46 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         for (const session of sessions.values()) if (session.user === person.id) endSession(session.id);
         return json(200, { done: true });
       }
+      if (route === '/email-change/confirm' || route === '/email-change/revert') {
+        const token = String(body['token'] ?? '');
+        const link = emailChange.links.get(token);
+        const kind = route === '/email-change/confirm' ? 'confirm' : 'revert';
+        if (link === undefined || link.kind !== kind || link.expiresAt <= now()) return oauth(400, 'invalid_link', { error_description: 'This link is not valid any more.' });
+        emailChange.links.delete(token);
+        const person = people.get(link.user) as FakePerson;
+        if (kind === 'revert') {
+          // "This wasn't me": the old address back, every device signed out, a link to set a new password.
+          person.email = link.from as string;
+          emailChange.pending.delete(person.id);
+          for (const session of sessions.values()) if (session.user === person.id) endSession(session.id);
+          for (const each of accessTokens.values()) if (each.user === person.id) each.refused = true;
+          const reset = secret();
+          links.set(reset, { purpose: 'reset', email: person.email });
+          sentLinks.push({ to: person.email, purpose: 'reset-password', token: reset });
+          emailChange.notices.push({ to: person.email, kind: 'reverted', newEmail: person.email });
+          return json(200, { next: 'reset_password' });
+        }
+        const waiting = emailChange.pending.get(person.id);
+        if (waiting === undefined || waiting.stage !== link.stage) return oauth(400, 'invalid_link');
+        if (waiting.stage === 'current') {
+          waiting.stage = 'new';
+          // A taken address gets nothing; the person is told the same either way.
+          if (waiting.usable) {
+            const next = secret();
+            emailChange.links.set(next, { kind: 'confirm', user: person.id, stage: 'new', expiresAt: waiting.expiresAt });
+            sentLinks.push({ to: waiting.to, purpose: 'email-change', token: next });
+          }
+          return json(200, { next: 'confirm_new' });
+        }
+        emailChange.pending.delete(person.id);
+        if ([...people.values()].some((each) => each.id !== person.id && each.email === waiting.to)) return oauth(400, 'invalid_link');
+        person.email = waiting.to;
+        const revert = secret();
+        emailChange.links.set(revert, { kind: 'revert', user: person.id, from: waiting.from, to: waiting.to, expiresAt: now() + 7 * 24 * 3600 * 1000 });
+        sentLinks.push({ to: waiting.from, purpose: 'email-revert', token: revert });
+        emailChange.notices.push({ to: waiting.from, kind: 'changed', newEmail: waiting.to });
+        return json(200, { done: true, email: person.email });
+      }
       return problem(404, 'not-found', 'No such route.');
     }
 
@@ -886,13 +958,55 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       passkeys.delete(found.id);
       return new Response(null, { status: 204 });
     }
+    if (path === '/v2/identity-access/me/login' && method === 'GET') {
+      const waiting = emailChange.pending.get(person.id);
+      const open = waiting !== undefined && waiting.expiresAt > now() ? waiting : null;
+      return json(200, {
+        email: person.email,
+        emailChangeable: (person.managedBy ?? null) === null,
+        managedBy: person.managedBy ?? null,
+        pendingChange: open === null ? null : { newEmail: open.to, stage: open.stage, expiresAt: new Date(open.expiresAt).toISOString() },
+      });
+    }
+    if (path === '/v2/identity-access/me/email-change' && method === 'POST') {
+      if (now() - who.authTime > emailChange.recentMs) return problem(401, 'identity-recheck', 'Sign in again to confirm it is you.');
+      if ((person.managedBy ?? null) !== null) return oauth(409, 'managed_by_provider', { provider: person.managedBy, error_description: 'This address is managed by the provider you sign in with.' });
+      const to = String(body['email'] ?? '').trim().toLowerCase();
+      if (!EMAIL.test(to) || to === person.email) return problem(400, 'invalid', 'Enter a new, valid email address.');
+      const taken = [...people.values()].some((each) => each.email === to);
+      const expiresAt = now() + 24 * 3600 * 1000;
+      for (const [token, link] of emailChange.links) if (link.kind === 'confirm' && link.user === person.id) emailChange.links.delete(token);
+      emailChange.pending.set(person.id, { user: person.id, from: person.email, to, stage: 'current', expiresAt, usable: !taken });
+      const token = secret();
+      emailChange.links.set(token, { kind: 'confirm', user: person.id, stage: 'current', expiresAt });
+      sentLinks.push({ to: person.email, purpose: 'email-change', token });
+      return json(202, { next: 'confirm_current' });
+    }
+    if (path === '/v2/identity-access/me/email-change' && method === 'DELETE') {
+      emailChange.pending.delete(person.id);
+      for (const [token, link] of emailChange.links) if (link.kind === 'confirm' && link.user === person.id) emailChange.links.delete(token);
+      return new Response(null, { status: 204 });
+    }
     if (path === '/v2/accounts/me' && method === 'GET') {
-      return json(200, { id: person.id, email: person.email, firstName: person.firstName, lastName: person.lastName, phoneNumber: null, onboarded: false, consentsToPrivacyPolicy: false, suspended: false, workspaces: person.workspaces.map((each) => ({ id: each.id, name: each.name, logo: null, member: `mem-${each.id}`, role: each.role, status: 'active' })) });
+      return json(200, { id: person.id, email: person.email, firstName: person.firstName, lastName: person.lastName, phoneNumber: person.phoneNumber ?? null, language: person.language ?? null, ...(person.customFields === undefined ? {} : { customFields: person.customFields }), onboarded: false, consentsToPrivacyPolicy: false, suspended: false, workspaces: person.workspaces.map((each) => ({ id: each.id, name: each.name, logo: null, member: `mem-${each.id}`, role: each.role, status: 'active' })) });
     }
     if (path === '/v2/accounts/me' && method === 'PATCH') {
       if (typeof body['firstName'] === 'string') person.firstName = body['firstName'];
       if (typeof body['lastName'] === 'string') person.lastName = body['lastName'];
-      return json(200, { id: person.id, email: person.email, firstName: person.firstName, lastName: person.lastName });
+      if (typeof body['phoneNumber'] === 'string') person.phoneNumber = body['phoneNumber'];
+      if (body['language'] !== undefined) {
+        const languages = ['en', 'da', 'de', 'es', 'fi', 'fr', 'it', 'nb', 'nl', 'pl', 'pt', 'sv'];
+        if (body['language'] !== null && !languages.includes(String(body['language']))) return problem(400, 'invalid', 'language is one of the screen languages.');
+        person.language = body['language'] as string | null;
+      }
+      if (Array.isArray(body['customFields'])) {
+        for (const given of body['customFields'] as { label?: unknown; value?: unknown }[]) {
+          const field = person.customFields?.find((each) => each.label === given.label);
+          if (field === undefined || field.editable === false) return problem(409, 'member-fields', `${String(given.label)} is not one of the app's custom fields.`);
+          field.value = String(given.value ?? '');
+        }
+      }
+      return json(200, { id: person.id, email: person.email, firstName: person.firstName, lastName: person.lastName, phoneNumber: person.phoneNumber ?? null, language: person.language ?? null, ...(person.customFields === undefined ? {} : { customFields: person.customFields }) });
     }
     if (path === '/v2/accounts/workspaces' && method === 'POST') {
       const made = { id: id('ws'), name: String(body['name'] ?? ''), role: 'OWNER' };
@@ -1028,7 +1142,17 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     return handle(request.method, url, request.headers, body);
   }) as typeof fetch;
 
-  function addPerson(person: { email: string; password: string; firstName?: string | null; lastName?: string | null; phone?: string | null; workspaces?: { id: string; name: string; role?: string; mfa?: boolean }[] }): FakePerson {
+  function addPerson(person: {
+    email: string;
+    password: string;
+    firstName?: string | null;
+    lastName?: string | null;
+    phone?: string | null;
+    language?: string | null;
+    managedBy?: string | null;
+    customFields?: FakePerson['customFields'];
+    workspaces?: { id: string; name: string; role?: string; mfa?: boolean }[];
+  }): FakePerson {
     const made: FakePerson = {
       id: id('usr'),
       email: person.email.toLowerCase(),
@@ -1037,6 +1161,9 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       lastName: person.lastName ?? null,
       workspaces: (person.workspaces ?? []).map((each) => ({ id: each.id, name: each.name, role: each.role ?? 'MEMBER', ...(each.mfa === true ? { mfa: true } : {}) })),
       phone: person.phone ?? null,
+      ...(person.language === undefined ? {} : { language: person.language }),
+      ...(person.managedBy === undefined ? {} : { managedBy: person.managedBy }),
+      ...(person.customFields === undefined ? {} : { customFields: person.customFields.map((each) => ({ ...each })) }),
     };
     people.set(made.id, made);
     return made;
@@ -1102,6 +1229,28 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     },
     /** The last second-step code texted to a number, or null. The backup code every setup gives is `BACK-UPCO-DE12`. */
     lastText: (to: string): string | null => [...sentTexts].reverse().find((each) => each.to === to)?.code ?? null,
+    /**
+     * Changing the address: the notices sent to an old address ("Your email was changed", with "This wasn't me"),
+     * and the admin's change for someone who lost their inbox, which tells both addresses.
+     */
+    emailChangeNotices: emailChange.notices,
+    /** Takes the email change's routes out of the metadata, as an issuer that predates them. */
+    withoutEmailChange(): void {
+      emailChange.offered = false;
+    },
+    /** How recent a sign-in an email change wants. @default 10 minutes */
+    emailChangeWantsSignInWithin(ms: number): void {
+      emailChange.recentMs = ms;
+    },
+    /** As the app's admin does for someone who lost their inbox: the address changes at once, and both are told. */
+    adminChangeEmail(email: string, to: string): void {
+      const found = [...people.values()].find((each) => each.email === email.toLowerCase());
+      if (found === undefined) throw new Error(`No person ${email}.`);
+      const from = found.email;
+      found.email = to.toLowerCase();
+      emailChange.pending.delete(found.id);
+      emailChange.notices.push({ to: from, kind: 'admin-changed', newEmail: found.email }, { to: found.email, kind: 'admin-changed', newEmail: found.email });
+    },
     /** The person, by email. */
     person: (email: string) => [...people.values()].find((each) => each.email === email.toLowerCase()),
     /**

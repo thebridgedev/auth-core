@@ -42,6 +42,10 @@ export type EndpointName =
   | 'social_finish'
   | 'second_step'
   | 'recheck'
+  | 'me_login'
+  | 'email_change'
+  | 'email_change_confirm'
+  | 'email_change_revert'
   | 'invites'
   | 'invite_preview'
   | 'accounts'
@@ -80,6 +84,10 @@ export const CONTRACT_PATHS: Readonly<Record<EndpointName, string>> = {
   social_finish: '/v2/identity-access/apps/{appId}/social/finish',
   second_step: '/v2/identity-access/apps/{appId}/second-step',
   recheck: '/v2/identity-access/recheck',
+  me_login: '/v2/identity-access/me/login',
+  email_change: '/v2/identity-access/me/email-change',
+  email_change_confirm: '/v2/identity-access/apps/{appId}/email-change/confirm',
+  email_change_revert: '/v2/identity-access/apps/{appId}/email-change/revert',
   invites: '/v2/identity-access/invites',
   invite_preview: '/v2/identity-access/apps/{appId}/invites/preview',
   accounts: '/v2/accounts',
@@ -150,6 +158,13 @@ export const ROUTES = {
   passkeyOptions: route('POST', 'passkeys', '/options'),
   passkeyAdd: route('POST', 'passkeys'),
   passkeyRemove: route('DELETE', 'passkeys', '/{passkeyId}'),
+  // Changing the sign-in address: the person's login, a change asked for, and its cancel; then the links in
+  // the two inboxes, and the "This wasn't me" in the notice to the old address, which need no session.
+  myLogin: route('GET', 'me_login', '', 'changing the email address'),
+  emailChangeStart: route('POST', 'email_change', '', 'changing the email address'),
+  emailChangeCancel: route('DELETE', 'email_change', '', 'changing the email address'),
+  emailChangeConfirm: route('POST', 'email_change_confirm', '', 'changing the email address'),
+  emailChangeRevert: route('POST', 'email_change_revert', '', 'changing the email address'),
 
   // Accounts.
   me: route('GET', 'accounts', '/me'),

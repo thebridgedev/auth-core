@@ -80,7 +80,12 @@ export type BridgeErrorKind =
    * The password was right, but it must be changed before signing in (`code` says why, such as `leaked_password`): no
    * session was made. Offer the recovery link (`password.forgot`) to set a new one.
    */
-  | 'password-change-required';
+  | 'password-change-required'
+  /**
+   * The person's sign-in address belongs to the provider they sign in with (Google, Microsoft, a company's
+   * identity provider…): it cannot be changed in the app. `provider` names it, for "Managed by Google".
+   */
+  | 'managed-by-provider';
 
 /** An RFC 9457 problem, as Bridge sent it. */
 export interface Problem {
@@ -100,6 +105,7 @@ export interface BridgeErrorInit {
   readonly problem?: Problem | null;
   readonly quota?: LimitReached | null;
   readonly leakedPasswords?: 'warn' | 'refuse' | null;
+  readonly provider?: string | null;
   readonly cause?: unknown;
 }
 
@@ -127,6 +133,8 @@ export class BridgeError extends Error {
   readonly quota: LimitReached | null;
   /** For `password-leaked`: the app's setting. `warn` lets the person go on once they confirm (`acceptLeaked: true`). */
   readonly leakedPasswords: 'warn' | 'refuse' | null;
+  /** For `managed-by-provider`: who manages the address (`google`, `microsoft`, `apple`, a company's provider…). */
+  readonly provider: string | null;
 
   constructor(kind: BridgeErrorKind, message: string, init: BridgeErrorInit = {}) {
     super(message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -139,6 +147,7 @@ export class BridgeError extends Error {
     this.problem = init.problem ?? null;
     this.quota = init.quota ?? null;
     this.leakedPasswords = init.leakedPasswords ?? null;
+    this.provider = init.provider ?? null;
   }
 }
 
@@ -188,6 +197,11 @@ export function checkoutSetupProblem(error: unknown): 'no-return-url' | 'return-
   return error.code === 'no-return-url' || error.code === 'return-url-not-registered' ? error.code : null;
 }
 
+/** Who manages the person's address, for "Managed by Google", when `error` refused a change for that; null otherwise. */
+export function managedByProvider(error: unknown): string | null {
+  return isBridgeError(error, 'managed-by-provider') ? (error.provider ?? 'provider') : null;
+}
+
 export function isBridgeError(value: unknown, kind?: BridgeErrorKind): value is BridgeError {
   return value instanceof BridgeError && (kind === undefined || value.kind === kind);
 }
@@ -222,6 +236,8 @@ const CODE_KINDS: Readonly<Record<string, BridgeErrorKind>> = {
   bot_check_failed: 'bot-check-failed',
   password_leaked: 'password-leaked',
   password_change_required: 'password-change-required',
+  // Changing the sign-in address: one a provider manages (Google, a company's sign-in) cannot be changed here.
+  managed_by_provider: 'managed-by-provider',
 };
 
 /** A refusal's `reason` whose kind is its own, whatever the `error` it came with: `access_denied` with `user_suspended`. */
@@ -237,6 +253,7 @@ const PROBLEM_KINDS: Readonly<Record<string, BridgeErrorKind>> = {
   'origin-not-allowed': 'origin-not-allowed',
   'rate-limited': 'rate-limited',
   unavailable: 'unavailable',
+  'managed-by-provider': 'managed-by-provider',
 };
 
 function kindOfStatus(status: number): BridgeErrorKind {
@@ -296,7 +313,7 @@ export function errorFromAnswer(status: number, body: unknown, headers?: { get(n
     const message = text(record['error_description']) ?? (reason !== undefined ? `Refused: ${reason}.` : `Bridge refused the request (${oauth}).`);
     const mode = record['mode'];
     const leakedPasswords = oauth === 'password_leaked' && (mode === 'warn' || mode === 'refuse') ? mode : null;
-    return new BridgeError(kind, message, { status, code: reason ?? oauth, retryAfterSeconds, leakedPasswords });
+    return new BridgeError(kind, message, { status, code: reason ?? oauth, retryAfterSeconds, leakedPasswords, provider: text(record['provider']) ?? null });
   }
 
   // Problem details: every API route.
@@ -326,5 +343,5 @@ export function errorFromAnswer(status: number, body: unknown, headers?: { get(n
     code === 'limit-reached' && text(record['metric']) !== undefined && typeof limit === 'number' && typeof used === 'number' ? { metric: text(record['metric'])!, limit, used } : null;
   // A checkout that could not start because of how the app is set up says which, in the words of its detail.
   const setup = /^(no-return-url|return-url-not-registered):/.exec(message)?.[1] ?? null;
-  return new BridgeError(kind, message, { status, code: setup ?? code, retryAfterSeconds, entitlement, problem, quota });
+  return new BridgeError(kind, message, { status, code: setup ?? code, retryAfterSeconds, entitlement, problem, quota, provider: text(record['provider']) ?? null });
 }

@@ -12,12 +12,33 @@ import type { Session } from './session.js';
  * `bridge-team-manage`), not the person's role.
  */
 
+/** The languages Bridge's screens and emails are in: a person's own language is one of them. */
+export const USER_LANGUAGES = ['en', 'da', 'de', 'es', 'fi', 'fr', 'it', 'nb', 'nl', 'pl', 'pt', 'sv'] as const;
+export type UserLanguage = (typeof USER_LANGUAGES)[number];
+
+/** One of the app's own fields on the person's profile, as Bridge sends it with `me.get()`. */
+export interface ProfileField {
+  /** The field's key, as the app's custom fields name it. */
+  readonly label: string;
+  /** What the person sees, when the app set a label of its own. */
+  readonly userLabel?: string;
+  readonly type: 'text' | 'email' | 'phone' | 'number' | 'integer' | 'regex' | 'boolean' | (string & {});
+  readonly regex?: string;
+  readonly value: string | null;
+  /** False for a field the person may see but not change. @default true */
+  readonly editable?: boolean;
+}
+
 export interface Me {
   readonly id: string;
   readonly email: string;
   readonly firstName: string | null;
   readonly lastName: string | null;
   readonly phoneNumber: string | null;
+  /** The person's own language (one of `USER_LANGUAGES`), or null when they chose none: screens and emails use it after the screen's own. */
+  readonly language?: UserLanguage | null;
+  /** The app's own fields the profile shows, when the app collects any. */
+  readonly customFields?: readonly ProfileField[];
   readonly onboarded: boolean;
   readonly consentsToPrivacyPolicy: boolean;
   readonly suspended: boolean;
@@ -38,6 +59,10 @@ export interface MeUpdate {
   readonly firstName?: string;
   readonly lastName?: string;
   readonly phoneNumber?: string;
+  /** The person's own language, or null for none. */
+  readonly language?: UserLanguage | null;
+  /** New values for the app's own fields, by label. */
+  readonly customFields?: readonly { readonly label: string; readonly value: string }[];
   readonly onboarded?: boolean;
   readonly consentsToPrivacyPolicy?: boolean;
 }

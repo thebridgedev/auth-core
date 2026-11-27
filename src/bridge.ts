@@ -16,6 +16,7 @@ import { QuotaEvents, type BillingEventHandlers } from './quota-events.js';
 import { Session, type ChannelLike, type LockManagerLike, type SessionEvents, type SessionState } from './session.js';
 import { browserCeremonies, type WebAuthnCeremonies } from './passkeys.js';
 import { createRecheck } from './recheck.js';
+import { createEmailChange } from './email-change.js';
 import { createHosted } from './hosted.js';
 import { createSignIn } from './sign-in.js';
 
@@ -169,6 +170,7 @@ export function createBridge(options: BridgeOptions) {
   const live = new Live({ endpoints, fetch: fetchFn, session, onError }, options.live === false ? { enabled: false } : (options.live ?? {}));
   const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const recheck = createRecheck({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
+  const emailChange = createEmailChange({ endpoints, fetch: fetchFn, session, ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const hosted = createHosted({ issuer, endpoints, fetch: fetchFn, storage: options.signUpStorage ?? storage, session });
   const accounts = createAccounts({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh() });
   const billingReturn = options.billingReturn;
@@ -321,6 +323,8 @@ export function createBridge(options: BridgeOptions) {
         hosted,
         /** Confirming it is you, for an action that wants a recent sign-in, without signing out. */
         recheck,
+        /** Changing the sign-in address: confirmed in the current inbox, then the new one (see `EmailChange`). */
+        emailChange,
         workspaces: accounts.workspaces,
         me: accounts.me,
         team: accounts.team,

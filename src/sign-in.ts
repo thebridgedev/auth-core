@@ -292,7 +292,7 @@ export interface PasswordRules {
 
 /** An email link Bridge sent, as it lands on the app's page: `#bridge=<kind>&token=<token>`. */
 export interface EmailLink {
-  readonly kind: 'verify-email' | 'reset-password' | 'invite' | 'magic-link' | 'passkey-setup';
+  readonly kind: 'verify-email' | 'reset-password' | 'invite' | 'magic-link' | 'passkey-setup' | 'email-change' | 'email-revert';
   readonly token: string;
 }
 
@@ -786,6 +786,9 @@ export function createSignIn(deps: SignInDeps) {
   };
 }
 
+/** Every email link Bridge sends, by its `#bridge=` name. */
+const LINK_KINDS: readonly EmailLink['kind'][] = ['verify-email', 'reset-password', 'invite', 'magic-link', 'passkey-setup', 'email-change', 'email-revert'];
+
 /**
  * Reads an email link from the page's address: Bridge puts the token in the
  * fragment (`#bridge=verify-email&token=…`), which never reaches a server
@@ -797,8 +800,8 @@ export function readEmailLink(hashOrUrl: string): EmailLink | null {
   const kind = params.get('bridge');
   const token = params.get('token');
   if (token === null || token === '') return null;
-  if (kind !== 'verify-email' && kind !== 'reset-password' && kind !== 'invite' && kind !== 'magic-link' && kind !== 'passkey-setup') return null;
-  return { kind, token };
+  if (!LINK_KINDS.includes(kind as EmailLink['kind'])) return null;
+  return { kind: kind as EmailLink['kind'], token };
 }
 
 /**

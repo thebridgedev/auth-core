@@ -16,7 +16,7 @@ registerInstance();
 export { createBridge } from './bridge.js';
 export type { Bridge, BridgeEvents, BridgeOptions } from './bridge.js';
 
-export { BridgeError, checkoutSetupProblem, isBridgeError, waitMinutes } from './core/errors.js';
+export { BridgeError, checkoutSetupProblem, isBridgeError, managedByProvider, waitMinutes } from './core/errors.js';
 export type { BridgeErrorKind, LimitReached, Problem } from './core/errors.js';
 export { API_VERSION } from './core/routes.js';
 export type { IssuerMetadata } from './core/discovery.js';
@@ -28,6 +28,7 @@ export type { SessionState, SessionUser, SessionWorkspace, SignedInState, Signed
 export { readEmailLink, readSocialReturn, takeEmailLink, takeSocialReturn } from './sign-in.js';
 export { browserCeremonies } from './passkeys.js';
 export { needsRecheck } from './recheck.js';
+export type { EmailChange, EmailChangeConfirmed, EmailChangeReverted, EmailChangeStarted, MyLogin, PendingEmailChange } from './email-change.js';
 export type { Recheck, RecheckMethod } from './recheck.js';
 export type { PasskeyInfo, PasskeySignInInput, WebAuthnCeremonies } from './passkeys.js';
 export type { AcceptedInvite, EmailLink, EmailLinkWindow, HandoffInput, HandoffStep, InvitePreview, InviteSignUpInput, SignInInput, SignInNotes, SignInOptions, SignInStep, SignUpAttribution, SignUpInput, SocialProvider, SocialReturn, SocialStartInput, WorkspaceChoice } from './sign-in.js';
@@ -36,7 +37,8 @@ export type { HandoffRequest } from './handoff.js';
 export { initiatedSignIn, isHostedReturn } from './hosted.js';
 export type { HostedStartOptions, InitiatedSignIn } from './hosted.js';
 
-export type { Invite, Me, MeUpdate, Member, MemberUpdate, MyWorkspace, Page, Role, Workspace, WorkspaceUpdate } from './accounts.js';
+export { USER_LANGUAGES } from './accounts.js';
+export type { Invite, Me, MeUpdate, Member, MemberUpdate, MyWorkspace, Page, ProfileField, Role, UserLanguage, Workspace, WorkspaceUpdate } from './accounts.js';
 export { FlagSet, STANDARD_FLAGS } from './flags.js';
 export type { FlagReason, FlagResult, FlagsStatus, Hint } from './flags.js';
 export { DEFAULT_MANAGE_ROUTE, ENTITLEMENT_FLAG_PREFIX, entitlementFlag, isLimitReached, quotaExceededBody, snapshotOf } from './quota.js';
