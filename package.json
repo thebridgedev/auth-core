@@ -26,6 +26,11 @@
       "node": "./dist/server/node.js",
       "default": "./dist/server/node.js"
     },
+    "./cli": {
+      "types": "./dist/cli/index.d.ts",
+      "node": "./dist/cli/index.js",
+      "default": "./dist/cli/index.js"
+    },
     "./verifier": {
       "types": "./dist/verifier/index.d.ts",
       "browser": "./dist/verifier/index.js",
@@ -55,6 +60,9 @@
       ],
       "server/node": [
         "./dist/server/node.d.ts"
+      ],
+      "cli": [
+        "./dist/cli/index.d.ts"
       ],
       "verifier": [
         "./dist/verifier/index.d.ts"
