@@ -26,12 +26,12 @@ export type { BridgeStorage } from './core/storage.js';
 export type { Readable } from './core/util.js';
 
 export type { SessionState, SessionUser, SessionWorkspace, SignedInState, SignedOutReason } from './session.js';
-export { readEmailLink, readSocialReturn, takeEmailLink, takeSocialReturn } from './sign-in.js';
+export { readCompanyReturn, readEmailLink, readSocialReturn, takeCompanyReturn, takeEmailLink, takeSocialReturn } from './sign-in.js';
 export { browserCeremonies } from './passkeys.js';
 export { needsRecheck } from './recheck.js';
 export type { Recheck, RecheckMethod } from './recheck.js';
 export type { PasskeyInfo, PasskeySignInInput, WebAuthnCeremonies } from './passkeys.js';
-export type { AcceptedInvite, EmailLink, EmailLinkWindow, HandoffInput, HandoffStep, InvitePreview, InviteSignUpInput, PasswordRules, SignInInput, SignInOptions, SignInStep, SignUpAttribution, SignUpInput, SocialProvider, SocialReturn, SocialStartInput, WorkspaceChoice } from './sign-in.js';
+export type { AcceptedInvite, CompanyLinkRequired, CompanyLoginStart, CompanyReturn, EmailLink, EmailLinkWindow, HandoffInput, HandoffStep, InvitePreview, InviteSignUpInput, PasswordRules, SignInInput, SignInOptions, SignInStep, SignUpAttribution, SignUpInput, SocialProvider, SocialReturn, SocialStartInput, WorkspaceChoice } from './sign-in.js';
 export { HANDOFF_CALLBACK_PATH, handoffReturnUrl, isLoopbackRedirect, readHandoffRequest } from './handoff.js';
 export type { HandoffRequest } from './handoff.js';
 export { initiatedSignIn, isHostedReturn } from './hosted.js';

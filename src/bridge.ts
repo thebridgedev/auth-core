@@ -312,6 +312,8 @@ export function createBridge(options: BridgeOptions) {
         signUp: flows.signUp,
         magicLink: flows.magicLink,
         social: flows.social,
+        /** Company login: "Sign in with SSO" by work email, and the company's answer finished here. */
+        companyLogin: flows.companyLogin,
         passkeys: flows.passkeys,
         password: flows.password,
         invites: flows.invites,

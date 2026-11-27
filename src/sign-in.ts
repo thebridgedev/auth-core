@@ -31,6 +31,8 @@ export interface WorkspaceChoice {
   readonly logo: string | null;
   /** Set when entering this workspace needs a step this SDK does not offer yet, such as `second_step`. */
   readonly needs?: string;
+  /** The workspace requires its company login: show a lock; `needs` is `required_connection` until this sign-in went through it. */
+  readonly companyLogin?: boolean;
 }
 
 export type SignInStep =
@@ -219,6 +221,8 @@ export interface SignInOptions {
   readonly password?: PasswordRules;
   /** The social providers the app offers a button for, such as `google` and `github`. */
   readonly social?: readonly SocialProvider[];
+  /** Whether the app has a company login on: show "Sign in with SSO". Never which company, never for whom. */
+  readonly companyLogin?: boolean;
   /**
    * Where the app's users sign in: the app's "Users sign in" setting, its main address and sign-in path, and
    * where signed-out users go and land after signing out. Absent for an app from before the setting. Read it with
@@ -246,6 +250,31 @@ export interface SocialStartInput {
 
 /** A social provider's answer, as it lands on the page: `#bridge=social&state=…&code=…`, or `&error=…`. */
 export type SocialReturn = { readonly state: string; readonly code: string } | { readonly error: 'access_denied' | 'provider_error'; readonly reason?: string };
+
+/**
+ * A company sign-in for an address that already has an account here: the person signs in the way they already do,
+ * once, in this browser, and the company's login is linked to the same account then (that sign-in's `linked`).
+ * Nothing is linked until they do. Only `companyLogin.finish` answers it.
+ */
+export interface CompanyLinkRequired {
+  readonly done: false;
+  readonly next: 'link_required';
+  readonly email: string;
+  /** The company's name, as the app's owner named its connection. */
+  readonly name: string;
+}
+
+/** Which company login to start: by work email ("Sign in with SSO"), by a workspace that requires it, or the portal's connection. */
+export type CompanyLoginStart = ({ readonly email: string } | { readonly workspace: string } | { readonly connection: string }) & {
+  /** The page the company's answer comes back to, on one of the app's browser origins. Default: this page. */
+  readonly returnPage?: string;
+};
+
+/**
+ * The company's answer, as it lands on the page: `#bridge=company&state=…` (`&code=…` for OpenID Connect), or `&error=…`;
+ * or the company's portal asking for a sign-in to start, `#bridge=company-start&connection=…`.
+ */
+export type CompanyReturn = { readonly state: string; readonly code?: string } | { readonly error: string } | { readonly start: string };
 
 /** An app's password rules, as Bridge checks every new password against them. */
 export interface PasswordRules {
@@ -319,6 +348,7 @@ function choicesOf(value: unknown): WorkspaceChoice[] {
         name: typeof choice['name'] === 'string' ? choice['name'] : null,
         logo: typeof choice['logo'] === 'string' ? choice['logo'] : null,
         ...(typeof choice['needs'] === 'string' ? { needs: choice['needs'] } : {}),
+        ...(choice['companyLogin'] === true ? { companyLogin: true } : {}),
       },
     ];
   });
@@ -357,6 +387,7 @@ export function createSignIn(deps: SignInDeps) {
   const signUpKey = storageKey(deps.issuer, 'sign-up');
   const magicLinkKey = storageKey(deps.issuer, 'magic-link');
   const socialKey = storageKey(deps.issuer, 'social');
+  const companyKey = storageKey(deps.issuer, 'company');
   /** A provider waiting to be linked: every tab of the origin reads it, as the sign-up link it came with opens in a new tab. */
   const linkKey = storageKey(deps.issuer, 'social-link');
 
@@ -662,6 +693,49 @@ export function createSignIn(deps: SignInDeps) {
       },
     },
 
+    companyLogin: {
+      /**
+       * Starts a company sign-in: by the person's work email ("Sign in with SSO"), by a workspace that requires
+       * its company login (a choice whose `needs` is `required_connection`), or by the connection the company's portal
+       * named (`takeCompanyReturn` gives `{ start }`). Answers the company's login to send the browser to. Its answer
+       * comes back to `returnPage` (this page by default) as `#bridge=company&…`: finish it there with `finish`, in this
+       * browser. An address no company covers fails with `invalid` (`no_company_login`).
+       */
+      async start(input: CompanyLoginStart): Promise<string> {
+        const pkce = await createPkce();
+        const page = input.returnPage ?? (typeof window === 'undefined' ? undefined : `${window.location.origin}${window.location.pathname}${window.location.search}`);
+        if (page === undefined) throw new BridgeError('invalid', "Name the page the company's login comes back to: returnPage.");
+        await deps.signUpStorage.set(companyKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + SOCIAL_KEEP_MS } satisfies StoredSignUp));
+        const which = 'email' in input ? { email: input.email } : 'workspace' in input ? { workspace: input.workspace } : { connection: input.connection };
+        const answer = (await post(ROUTES.companyLoginStart, { ...which, code_challenge: pkce.challenge, code_challenge_method: 'S256', return_page: page, ...(request === null ? {} : { request }) })) as Record<string, unknown> | undefined;
+        const url = answer?.['url'];
+        if (typeof url !== 'string' || !/^https?:\/\//.test(url)) throw new BridgeError('unavailable', "Bridge did not give the company login's address.");
+        return url;
+      },
+
+      /**
+       * Finishes a company sign-in from its answer (`takeCompanyReturn`), in the browser that started it. A first-time
+       * employee gets an account in the company's workspace; an address that already has an account answers the step
+       * `link_required`: sign in the way they already do, and the company's login is linked then.
+       */
+      async finish(answer: CompanyReturn): Promise<SignInStep | CompanyLinkRequired> {
+        if ('start' in answer) throw new BridgeError('invalid', 'Start a company sign-in with companyLogin.start({ connection }) first.');
+        if ('error' in answer) throw new BridgeError('unavailable', "The company's login did not confirm the sign-in. Try again.", { code: answer.error });
+        const verifier = await waitingVerifier(companyKey);
+        const reply = await post(ROUTES.companyLoginFinish, { state: answer.state, ...(answer.code === undefined ? {} : { code: answer.code }), ...(verifier === null ? {} : { code_verifier: verifier }) });
+        if (verifier === null) throw new BridgeError('wrong-device', 'Finish signing in in the browser you started in.', { code: 'wrong_device' });
+        await deps.signUpStorage.remove(companyKey);
+        const said = reply as Record<string, unknown> | undefined;
+        if (said?.['next'] === 'link_required') {
+          const link = said['link'];
+          if (typeof link === 'string' && link !== '') await deps.signUpStorage.set(linkKey, JSON.stringify({ link, verifier, expiresAt: Date.now() + SOCIAL_KEEP_MS } satisfies PendingLink));
+          return { done: false, next: 'link_required', email: typeof said['email'] === 'string' ? said['email'] : '', name: typeof said['name'] === 'string' ? said['name'] : '' };
+        }
+        if (typeof reply?.redirect_uri === 'string') return signInSteps(reply, '');
+        return signInSteps(reply, verifier);
+      },
+    },
+
     passkeys: createPasskeys<SignInStep>({ ...deps, post, waitingVerifier, proofOf, signInSteps: (answer, verifier) => signInSteps(answer, verifier) as never }),
 
     request: {
@@ -833,4 +907,34 @@ export function takeEmailLink(kind?: EmailLink['kind'], win: EmailLinkWindow | u
   if (link === null || (kind !== undefined && link.kind !== kind)) return null;
   win.history.replaceState(win.history.state, '', `${win.location.pathname}${win.location.search}`);
   return link;
+}
+
+/**
+ * Reads a company login's answer from the page's address: `#bridge=company&state=…` (with `&code=…` for OpenID
+ * Connect) or `&error=…`, or the company's portal asking to start, `#bridge=company-start&connection=…`. Null for none.
+ */
+export function readCompanyReturn(hashOrUrl: string): CompanyReturn | null {
+  const hash = hashOrUrl.includes('#') ? hashOrUrl.slice(hashOrUrl.indexOf('#') + 1) : hashOrUrl;
+  const params = new URLSearchParams(hash);
+  const kind = params.get('bridge');
+  if (kind === 'company-start') {
+    const connection = params.get('connection');
+    return connection !== null && /^[A-Za-z0-9_-]{1,64}$/.test(connection) ? { start: connection } : null;
+  }
+  if (kind !== 'company') return null;
+  const error = params.get('error');
+  if (error !== null) return { error: /^[a-z_]{1,40}$/.test(error) ? error : 'company_login_refused' };
+  const state = params.get('state');
+  const code = params.get('code');
+  if (state === null || state === '') return null;
+  return code === null || code === '' ? { state } : { state, code };
+}
+
+/** Takes a company login's answer from the page's address and clears it, as `takeSocialReturn` does. Null when there is none. */
+export function takeCompanyReturn(win: EmailLinkWindow | undefined = typeof window === 'undefined' ? undefined : window): CompanyReturn | null {
+  if (win === undefined) return null;
+  const answer = readCompanyReturn(win.location.hash);
+  if (answer === null) return null;
+  win.history.replaceState(win.history.state, '', `${win.location.pathname}${win.location.search}`);
+  return answer;
 }

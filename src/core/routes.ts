@@ -41,6 +41,8 @@ export type EndpointName =
   | 'social_start'
   | 'social_finish'
   | 'social_link'
+  | 'company_login_start'
+  | 'company_login_finish'
   | 'second_step'
   | 'recheck'
   | 'invites'
@@ -80,6 +82,8 @@ export const CONTRACT_PATHS: Readonly<Record<EndpointName, string>> = {
   social_start: '/v2/identity-access/apps/{appId}/social/start',
   social_finish: '/v2/identity-access/apps/{appId}/social/finish',
   social_link: '/v2/identity-access/social/link',
+  company_login_start: '/v2/identity-access/apps/{appId}/company-login/start',
+  company_login_finish: '/v2/identity-access/apps/{appId}/company-login/finish',
   second_step: '/v2/identity-access/apps/{appId}/second-step',
   recheck: '/v2/identity-access/recheck',
   invites: '/v2/identity-access/invites',
@@ -133,6 +137,9 @@ export const ROUTES = {
   socialFinish: route('POST', 'social_finish'),
   // Link required: signed in the way they already do, the person links the provider they tried first.
   socialLink: route('POST', 'social_link'),
+  // Company login: "Sign in with SSO" by work email, then the company's answer finished on this page.
+  companyLoginStart: route('POST', 'company_login_start'),
+  companyLoginFinish: route('POST', 'company_login_finish'),
   // The text-message second step: the code, a phone number to set up, a new code, or the backup code's reset.
   secondStep: route('POST', 'second_step'),
   secondStepSetup: route('POST', 'second_step', '/setup'),
