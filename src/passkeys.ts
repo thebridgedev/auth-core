@@ -23,7 +23,10 @@ export interface WebAuthnCeremonies {
   supported(): boolean;
   /** Whether this browser offers passkeys in an input's autofill list (`autocomplete="username webauthn"`). */
   autofillSupported(): Promise<boolean>;
-  create(options: Record<string, unknown>): Promise<Record<string, unknown>>;
+  /** `automatic`: the browser makes it on its own, right after a password sign-in, with no dialog (conditional create). */
+  create(options: Record<string, unknown>, automatic?: boolean): Promise<Record<string, unknown>>;
+  /** Whether this browser can make a passkey on its own after a password sign-in (`getClientCapabilities().conditionalCreate`). */
+  automaticSupported?(): Promise<boolean>;
   get(options: Record<string, unknown>, autofill: boolean): Promise<Record<string, unknown>>;
   /** Stops a ceremony that is waiting, such as autofill when the page moves on. */
   cancel(): void;
@@ -113,9 +116,19 @@ export function browserCeremonies(): WebAuthnCeremonies {
       if (typeof window === 'undefined' || typeof window.PublicKeyCredential !== 'function') return false;
       return (await library()).browserSupportsWebAuthnAutofill();
     },
-    async create(options) {
+    async create(options, automatic = false) {
       const { startRegistration } = await library();
-      return (await startRegistration({ optionsJSON: options as never })) as unknown as Record<string, unknown>;
+      return (await startRegistration({ optionsJSON: options as never, ...(automatic ? { useAutoRegister: true } : {}) })) as unknown as Record<string, unknown>;
+    },
+    async automaticSupported() {
+      if (typeof window === 'undefined' || typeof window.PublicKeyCredential !== 'function') return false;
+      const capabilities = (window.PublicKeyCredential as unknown as { getClientCapabilities?: () => Promise<Record<string, boolean>> }).getClientCapabilities;
+      if (typeof capabilities !== 'function') return false;
+      try {
+        return (await capabilities.call(window.PublicKeyCredential))['conditionalCreate'] === true;
+      } catch {
+        return false;
+      }
     },
     async get(options, autofill) {
       const { startAuthentication } = await library();
@@ -172,6 +185,20 @@ export async function signalAccepted(ceremonies: WebAuthnCeremonies, passkeys: r
   }
 }
 
+/** Whether to offer the signed-in person a passkey now, as Bridge decides it from their own sign-in. */
+export interface PasskeyOffer {
+  /** Ask now: "Sign in faster with a passkey". */
+  readonly offer: boolean;
+  /** The browser may make one on its own, right after this password sign-in, where it can. */
+  readonly automatic: boolean;
+}
+
+/** What a password reset hands back to the browser that set the password, for one passkey there. */
+export interface PasskeyAfterReset {
+  readonly pass: string;
+  readonly verifier: string;
+}
+
 export interface PasskeyDeps {
   readonly issuer: string;
   readonly endpoints: () => Endpoints;
@@ -184,7 +211,12 @@ export interface PasskeyDeps {
   readonly signInSteps: <T>(answer: CodeAnswer | undefined, verifier: string) => Promise<T> | T;
   /** What binds a sign-in's code: this device's challenge, or the sign-in request the page signs in for. */
   readonly proofOf: (pkce: { readonly challenge: string }) => Readonly<Record<string, string>>;
+  /** A provider link waiting on this device, sent with the sign-in step on a request (see sign-in.ts). */
+  readonly linkFields?: () => Promise<Readonly<Record<string, string>>>;
 }
+
+/** How long automatic creation may wait for the browser before the page offers a passkey instead. */
+const AUTOMATIC_WAIT_MS = 4000;
 
 export function createPasskeys<Step>(deps: PasskeyDeps) {
   const setupKey = storageKey(deps.issuer, 'passkey-setup');
@@ -230,7 +262,7 @@ export function createPasskeys<Step>(deps: PasskeyDeps) {
       });
       let answer;
       try {
-        answer = await deps.post(ROUTES.passkeySignIn, { response, ...(input.workspace === undefined ? {} : { workspace: input.workspace }) });
+        answer = await deps.post(ROUTES.passkeySignIn, { response, ...(input.workspace === undefined ? {} : { workspace: input.workspace }), ...((await deps.linkFields?.()) ?? {}) });
       } catch (error) {
         // A passkey Bridge has no record of (removed, or the app's data gone): the browser is told to stop offering it.
         const rpId = typeof options['rpId'] === 'string' ? options['rpId'] : null;
@@ -287,6 +319,81 @@ export function createPasskeys<Step>(deps: PasskeyDeps) {
       const options = optionsOf(await signedIn('POST', ROUTES.passkeyOptions, {}));
       const response = await ceremony(() => deps.ceremonies.create(options));
       return signedIn<PasskeyInfo>('POST', ROUTES.passkeyAdd, { response, ...(name === undefined || name === '' ? {} : { name }) });
+    },
+
+    /**
+     * Whether to offer the signed-in person a passkey now: never after a passkey or company sign-in, nor to
+     * someone with one, nor after Don't ask again, nor within 30 days of Not now; nothing where the browser has no
+     * passkeys. Never fails: anything wrong is no offer.
+     */
+    async offer(): Promise<PasskeyOffer> {
+      if (!deps.ceremonies.supported()) return { offer: false, automatic: false };
+      try {
+        const answer = await signedIn<PasskeyOffer>('GET', ROUTES.passkeyOffer);
+        return { offer: answer?.offer === true, automatic: answer?.automatic === true };
+      } catch {
+        return { offer: false, automatic: false };
+      }
+    },
+
+    /** The person's answer to the offer, kept for them on every device: `later` (Not now, 30 days) or `never` (Don't ask again). */
+    async answerOffer(action: 'later' | 'never'): Promise<void> {
+      await signedIn('POST', ROUTES.passkeyOfferAnswer, { action });
+    },
+
+    /**
+     * Right after a password sign-in, where the browser can (Safari 18, Chrome 136), lets it make a passkey on its own
+     * with the password manager that filled the password: no dialog, the system's own notice, and Bridge's "passkey added"
+     * email. Resolves with the passkey, or null when the browser cannot, the person's password manager declined, or
+     * anything went wrong: it never fails, and the page then offers one instead.
+     */
+    async addAutomatically(): Promise<PasskeyInfo | null> {
+      try {
+        if (deps.ceremonies.automaticSupported === undefined || !(await deps.ceremonies.automaticSupported())) return null;
+        const options = optionsOf(await signedIn('POST', ROUTES.passkeyOptions, { automatic: true }));
+        // The browser answers at once when its password manager will not make one; one that waits is given a few seconds.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const waited = new Promise<null>((resolve) => {
+          timer = setTimeout(() => {
+            deps.ceremonies.cancel();
+            resolve(null);
+          }, AUTOMATIC_WAIT_MS);
+        });
+        const response = await Promise.race([deps.ceremonies.create(options, true), waited]).finally(() => clearTimeout(timer));
+        if (response === null) return null;
+        return await signedIn<PasskeyInfo>('POST', ROUTES.passkeyAdd, { response });
+      } catch {
+        return null;
+      }
+    },
+
+    /**
+     * Adds a passkey with what a password reset handed back (`password.set`'s `afterReset`), on the browser that set the
+     * password. Signs nobody in: the person signs in as usual next, now with the passkey. The pass works once, for minutes.
+     */
+    async addAfterReset(handed: PasskeyAfterReset, name?: string): Promise<PasskeyInfo> {
+      const options = optionsOf(await deps.post(ROUTES.passkeySetupOptions, { token: handed.pass, code_verifier: handed.verifier }));
+      const response = await ceremony(() => deps.ceremonies.create(options));
+      const answer = (await deps.post(ROUTES.passkeySetup, { token: handed.pass, code_verifier: handed.verifier, response, ...(name === undefined || name === '' ? {} : { name }) })) as unknown as { passkey?: PasskeyInfo } | undefined;
+      if (answer?.passkey === undefined) throw new BridgeError('unavailable', 'Bridge did not answer with the passkey.');
+      return { ...answer.passkey, usable: true };
+    },
+
+    /**
+     * The signed-in person's password: whether they have one, and whether it may be removed now. It may when they have a
+     * passkey for the app's domain and a proven address (`why` says which is missing: `no_passkey`, `address_not_proven`).
+     */
+    async passwordState(): Promise<{ readonly set: boolean; readonly removable: boolean; readonly why?: string }> {
+      return signedIn('GET', ROUTES.accountPassword);
+    },
+
+    /**
+     * Removes the signed-in person's password: from now on they sign in with a passkey, or by email. Needs a recent
+     * sign-in (otherwise `reauthenticate`) and a passkey (otherwise `conflict`, code `no_passkey`). This session stays;
+     * every other one, and every connected tool, is signed out, and the person is emailed.
+     */
+    async removePassword(): Promise<void> {
+      await signedIn<void>('DELETE', ROUTES.accountPasswordRemove);
     },
 
     /**

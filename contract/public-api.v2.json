@@ -2,7 +2,7 @@
   "about": "A pinned copy of the endpoints Bridge's public API promises, from Bridge's API contract: each one's method, path, callers and the body fields it accepts. The contract test checks every route the SDK calls, and the fields it sends, against it. To update: copy the contract's endpoints at a newer commit and change `source`.",
   "source": {
     "file": "tools/access/public-api.json",
-    "commit": "7af20e8da3aa8a183913d80ea612513cf5902300"
+    "commit": "437f97cb261a55859f5cdcd988ad93d53495c2e9"
   },
   "endpoints": [
     {
@@ -785,6 +785,7 @@
         "mode",
         "name",
         "privacyPolicy",
+        "relatedOrigins",
         "signIn",
         "termsOfService",
         "website"
@@ -826,6 +827,7 @@
         "mode",
         "name",
         "privacyPolicy",
+        "relatedOrigins",
         "signIn",
         "termsOfService",
         "website"
@@ -924,6 +926,16 @@
       "fields": []
     },
     {
+      "method": "POST",
+      "path": "/v2/app-registry/apps/{appId}/related-origins/check",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
       "method": "GET",
       "path": "/v2/app-registry/apps/{appId}/revocations/{lane}",
       "public": true,
@@ -954,6 +966,57 @@
         "font",
         "radius",
         "scheme"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/app-registry/mode",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/app-registry/mode",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "confirm",
+        "mode"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/app-registry/your-app",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/app-registry/your-app",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "addresses",
+        "confirmPasskeys",
+        "defaultReturn",
+        "main",
+        "mode",
+        "relatedOrigins",
+        "signIn"
       ]
     },
     {
@@ -3128,6 +3191,19 @@
     },
     {
       "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/federated/{provider}/return",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "code",
+        "error",
+        "error_description",
+        "state",
+        "user"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/v2/identity-access/apps/{appId}/introspect",
       "public": true,
       "callers": [],
@@ -3273,6 +3349,8 @@
       "public": true,
       "callers": [],
       "fields": [
+        "code_challenge",
+        "code_challenge_method",
         "password",
         "token"
       ]
@@ -3443,6 +3521,7 @@
       "fields": [
         "lifetimes",
         "methods",
+        "passkeyOffer",
         "password",
         "secondStep",
         "signUp",
@@ -3453,6 +3532,16 @@
     {
       "method": "GET",
       "path": "/v2/identity-access/apps/{appId}/sign-in-settings/passkey-impact",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-settings/password-impact",
       "public": false,
       "callers": [
         "person",
@@ -3481,8 +3570,37 @@
       "fields": [
         "clientId",
         "clientSecret",
+        "keyId",
+        "privateKey",
         "secretExpiresAt",
+        "teamId",
         "tenantId"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-settings/providers/{provider}/test",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "code_challenge",
+        "code_challenge_method",
+        "return_page"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-settings/providers/{provider}/test/finish",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "code",
+        "code_verifier",
+        "state"
       ]
     },
     {
@@ -3568,6 +3686,15 @@
         "scope",
         "workspace"
       ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/users-credentials",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
     },
     {
       "method": "GET",
@@ -3671,13 +3798,35 @@
       ]
     },
     {
+      "method": "GET",
+      "path": "/v2/identity-access/passkeys/offer",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/passkeys/offer",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "action"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/v2/identity-access/passkeys/options",
       "public": false,
       "callers": [
         "person"
       ],
-      "fields": []
+      "fields": [
+        "automatic"
+      ]
     },
     {
       "method": "DELETE",
@@ -3698,6 +3847,24 @@
       "fields": [
         "name"
       ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/identity-access/password",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/password",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
     },
     {
       "method": "POST",
@@ -3798,6 +3965,7 @@
       "fields": [
         "lifetimes",
         "methods",
+        "passkeyOffer",
         "password",
         "secondStep",
         "signUp",
@@ -3808,6 +3976,16 @@
     {
       "method": "GET",
       "path": "/v2/identity-access/sign-in-settings/passkey-impact",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/sign-in-settings/password-impact",
       "public": false,
       "callers": [
         "app_key",
@@ -3836,7 +4014,10 @@
       "fields": [
         "clientId",
         "clientSecret",
+        "keyId",
+        "privateKey",
         "secretExpiresAt",
+        "teamId",
         "tenantId"
       ]
     },
