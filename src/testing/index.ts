@@ -1262,7 +1262,7 @@ export type FakeIssuer = ReturnType<typeof createFakeIssuer>;
 export function fakeWebAuthn(options: { supported?: boolean; autofill?: boolean } = {}) {
   const made: string[] = [];
   /** What the page told the browser through the Signal API, in order. */
-  const signals: { kind: 'unknown' | 'accepted'; rpId: string; credentialId?: string; userId?: string; ids?: readonly string[] }[] = [];
+  const signals: { kind: 'unknown' | 'accepted' | 'details'; rpId: string; credentialId?: string; userId?: string; ids?: readonly string[]; name?: string; displayName?: string }[] = [];
   let picked: string | null = null;
   let cancel = false;
   const client = (type: string, challenge: unknown) => base64url(JSON.stringify({ type, challenge, origin: 'http://localhost' }));
@@ -1277,6 +1277,7 @@ export function fakeWebAuthn(options: { supported?: boolean; autofill?: boolean 
     signal: {
       unknownCredential: (rpId: string, credentialId: string) => Promise.resolve(void signals.push({ kind: 'unknown', rpId, credentialId })),
       allAcceptedCredentials: (rpId: string, userId: string, ids: readonly string[]) => Promise.resolve(void signals.push({ kind: 'accepted', rpId, userId, ids: [...ids] })),
+      currentUserDetails: (rpId: string, userId: string, name: string, displayName: string) => Promise.resolve(void signals.push({ kind: 'details', rpId, userId, name, displayName })),
     },
     supported: () => options.supported ?? true,
     autofillSupported: () => Promise.resolve(options.autofill ?? true),

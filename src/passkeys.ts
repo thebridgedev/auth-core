@@ -35,6 +35,8 @@ export interface WebAuthnCeremonies {
   readonly signal?: {
     unknownCredential(rpId: string, credentialId: string): Promise<void>;
     allAcceptedCredentials(rpId: string, userId: string, credentialIds: readonly string[]): Promise<void>;
+    /** The person's name and display name changed: the password manager shows the new ones. */
+    currentUserDetails?(rpId: string, userId: string, name: string, displayName: string): Promise<void>;
   };
 }
 
@@ -131,6 +133,10 @@ export function browserCeremonies(): WebAuthnCeremonies {
         const api = signalApi();
         if (api?.signalAllAcceptedCredentials !== undefined) await api.signalAllAcceptedCredentials({ rpId, userId, allAcceptedCredentialIds: [...credentialIds] }).catch(() => undefined);
       },
+      async currentUserDetails(rpId, userId, name, displayName) {
+        const api = signalApi();
+        if (api?.signalCurrentUserDetails !== undefined) await api.signalCurrentUserDetails({ rpId, userId, name, displayName }).catch(() => undefined);
+      },
     },
   };
 }
@@ -139,6 +145,7 @@ export function browserCeremonies(): WebAuthnCeremonies {
 interface SignalApi {
   signalUnknownCredential?(input: { rpId: string; credentialId: string }): Promise<void>;
   signalAllAcceptedCredentials?(input: { rpId: string; userId: string; allAcceptedCredentialIds: string[] }): Promise<void>;
+  signalCurrentUserDetails?(input: { rpId: string; userId: string; name: string; displayName: string }): Promise<void>;
 }
 function signalApi(): SignalApi | null {
   if (typeof window === 'undefined' || typeof window.PublicKeyCredential !== 'function') return null;
@@ -240,6 +247,26 @@ export function createPasskeys<Step>(deps: PasskeyDeps) {
       // The browser and the person's password manager stop offering passkeys that are no longer theirs.
       await signalAccepted(deps.ceremonies, listed);
       return listed;
+    },
+
+    /**
+     * After the person changed their name: tells the browser and their password manager (the Signal API, where the
+     * browser has it) the name (their email) and display name (their full name) to show with each of their passkeys,
+     * per domain. Never fails: a browser without it, or no passkeys, does nothing.
+     */
+    async signalCurrentUser(name: string, displayName: string): Promise<void> {
+      const signal = deps.ceremonies.signal;
+      if (signal?.currentUserDetails === undefined) return;
+      try {
+        const seen = new Set<string>();
+        for (const each of (await signedIn<PasskeyInfo[]>('GET', ROUTES.passkeys)) ?? []) {
+          if (each.rpId === undefined || each.userHandle === undefined || seen.has(`${each.rpId} ${each.userHandle}`)) continue;
+          seen.add(`${each.rpId} ${each.userHandle}`);
+          await signal.currentUserDetails(each.rpId, each.userHandle, name, displayName);
+        }
+      } catch {
+        // The Signal API is a courtesy to the browser: it never stops the page.
+      }
     },
 
     /**

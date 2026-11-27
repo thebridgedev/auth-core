@@ -1,302 +1,4066 @@
 {
   "about": "A pinned copy of the endpoints Bridge's public API promises, from Bridge's API contract: each one's method, path, callers and the body fields it accepts. The contract test checks every route the SDK calls, and the fields it sends, against it. To update: copy the contract's endpoints at a newer commit and change `source`.",
-  "source": {"file": "tools/access/public-api.json", "commit": "92d61ad80c714080f034cebe825029f5190e35a1"},
-  "alsoFrom": {"commit": "711adf82b922cdb2cf616a3e99314b9e6ddcaa90", "endpoints": ["GET /v2/billing/payer/gate", "POST /v2/billing/usage/holds", "DELETE /v2/billing/usage/holds/{holdId}", "POST /v2/billing/usage/holds/{holdId}/confirm", "GET /v2/billing/usage/quota/{metric}"]},
-  "alsoFromLater": {"commit": "bridge-server branch parity/p1-h (key doors of the app, branding and setup signals)", "endpoints": ["GET /v2/events-and-logs/audit", "GET /v2/app-registry/app", "PATCH /v2/app-registry/app", "GET /v2/app-registry/branding", "PATCH /v2/app-registry/branding", "GET /v2/events-and-logs/setup-signals"]}, "alsoFromSignIn": {"commit": "bridge-server (social sign-in and the text-message second step)", "endpoints": ["GET /v2/identity-access/apps/{appId}/federated/{provider}/return", "POST /v2/identity-access/apps/{appId}/second-step", "POST /v2/identity-access/apps/{appId}/second-step/resend", "POST /v2/identity-access/apps/{appId}/second-step/reset", "POST /v2/identity-access/apps/{appId}/second-step/setup", "PUT /v2/identity-access/apps/{appId}/sign-in-settings/providers/{provider}", "POST /v2/identity-access/apps/{appId}/social/finish", "POST /v2/identity-access/apps/{appId}/social/start", "PUT /v2/identity-access/sign-in-settings/providers/{provider}"]},
+  "source": {
+    "file": "tools/access/public-api.json",
+    "commit": "7af20e8da3aa8a183913d80ea612513cf5902300"
+  },
   "endpoints": [
-    {"method": "GET", "path": "/v2/events-and-logs/audit", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "GET", "path": "/v2/app-registry/app", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PATCH", "path": "/v2/app-registry/app", "public": false, "callers": ["app_key"], "fields": ["allowedOrigins", "apiUrl", "defaultCallbackUri", "logo", "name", "onboardingFlow", "privacyPolicyUrl", "redirectUris", "termsOfServiceUrl", "uiUrl", "websiteUrl"]},
-    {"method": "GET", "path": "/v2/app-registry/branding", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PATCH", "path": "/v2/app-registry/branding", "public": false, "callers": ["app_key"], "fields": ["colors", "css", "font", "radius", "scheme"]},
-    {"method": "GET", "path": "/v2/events-and-logs/setup-signals", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/accounts/apps/{appId}/custom-fields", "public": true, "callers": [], "fields": []},
-    {"method": "GET", "path": "/v2/accounts/apps/{appId}/key-privileges", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/accounts/apps/{appId}/privileges", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/accounts/apps/{appId}/privileges", "public": false, "callers": ["person"], "fields": ["description", "key"]},
-    {"method": "DELETE", "path": "/v2/accounts/apps/{appId}/privileges/{privilegeId}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/accounts/apps/{appId}/privileges/{privilegeId}", "public": false, "callers": ["person"], "fields": ["description", "key"]},
-    {"method": "GET", "path": "/v2/accounts/apps/{appId}/revocations/{lane}", "public": true, "callers": [], "fields": []},
-    {"method": "GET", "path": "/v2/accounts/apps/{appId}/roles", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/accounts/apps/{appId}/roles", "public": false, "callers": ["person"], "fields": ["description", "isDefault", "key", "name", "privileges"]},
-    {"method": "DELETE", "path": "/v2/accounts/apps/{appId}/roles/{roleId}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/accounts/apps/{appId}/roles/{roleId}", "public": false, "callers": ["person"], "fields": ["description", "isDefault", "key", "name", "privileges"]},
-    {"method": "GET", "path": "/v2/accounts/apps/{appId}/workspaces", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/accounts/apps/{appId}/workspaces", "public": false, "callers": ["person"], "fields": ["locale", "logo", "name", "onboarded", "owner"]},
-    {"method": "DELETE", "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}", "public": false, "callers": ["person"], "fields": ["companyLogin", "locale", "logo", "mfa", "name", "onboarded"]},
-    {"method": "GET", "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/members", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/members", "public": false, "callers": ["person"], "fields": ["email", "firstName", "lastName", "phoneNumber", "role"]},
-    {"method": "DELETE", "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/members/{memberId}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/members/{memberId}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/members/{memberId}", "public": false, "callers": ["person"], "fields": ["enabled", "role", "teams"]},
-    {"method": "GET", "path": "/v2/accounts/custom-fields", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PUT", "path": "/v2/accounts/custom-fields", "public": false, "callers": ["app_key"], "fields": ["params"]},
-    {"method": "GET", "path": "/v2/accounts/invites", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "POST", "path": "/v2/accounts/invites", "public": false, "callers": ["app_key", "person"], "fields": ["email", "role"]},
-    {"method": "DELETE", "path": "/v2/accounts/invites/{inviteId}", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "GET", "path": "/v2/accounts/me", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/accounts/me", "public": false, "callers": ["person"], "fields": ["consentsToPrivacyPolicy", "firstName", "lastName", "onboarded", "phoneNumber"]},
-    {"method": "POST", "path": "/v2/accounts/me/accept-ownership", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/accounts/members", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "POST", "path": "/v2/accounts/members", "public": false, "callers": ["app_key"], "fields": ["consentsToPrivacyPolicy", "customParams", "email", "firstName", "lastName", "onboarded", "phoneNumber", "role"]},
-    {"method": "DELETE", "path": "/v2/accounts/members/{memberId}", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "GET", "path": "/v2/accounts/members/{memberId}", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/accounts/members/{memberId}", "public": false, "callers": ["app_key", "person"], "fields": ["consentsToPrivacyPolicy", "customParams", "enabled", "firstName", "lastName", "onboarded", "phoneNumber", "role", "teams"]},
-    {"method": "GET", "path": "/v2/accounts/members/{memberId}/deletion-preview", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "GET", "path": "/v2/accounts/privileges", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/accounts/privileges", "public": false, "callers": ["app_key"], "fields": ["description", "key"]},
-    {"method": "DELETE", "path": "/v2/accounts/privileges/{privilegeId}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PATCH", "path": "/v2/accounts/privileges/{privilegeId}", "public": false, "callers": ["app_key"], "fields": ["description", "key"]},
-    {"method": "GET", "path": "/v2/accounts/roles", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "POST", "path": "/v2/accounts/roles", "public": false, "callers": ["app_key"], "fields": ["description", "isDefault", "key", "name", "privileges"]},
-    {"method": "DELETE", "path": "/v2/accounts/roles/{roleId}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PATCH", "path": "/v2/accounts/roles/{roleId}", "public": false, "callers": ["app_key"], "fields": ["description", "isDefault", "key", "name", "privileges"]},
-    {"method": "GET", "path": "/v2/accounts/users/{userId}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/accounts/users/{userId}/resume", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/accounts/users/{userId}/suspend", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "DELETE", "path": "/v2/accounts/workspace", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "GET", "path": "/v2/accounts/workspace", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/accounts/workspace", "public": false, "callers": ["app_key", "person"], "fields": ["companyLogin", "joinRole", "locale", "logo", "metadata", "mfa", "name", "onboarded"]},
-    {"method": "POST", "path": "/v2/accounts/workspace/restore", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "POST", "path": "/v2/accounts/workspace/resume", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/accounts/workspace/suspend", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/accounts/workspaces", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "POST", "path": "/v2/accounts/workspaces", "public": false, "callers": ["app_key", "person"], "fields": ["locale", "logo", "metadata", "name", "onboarded", "owner"]},
-    {"method": "GET", "path": "/v2/app-registry/apps", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/app-registry/apps", "public": false, "callers": ["person"], "fields": ["addresses", "defaultReturn", "logo", "name", "privacyPolicy", "termsOfService", "website"]},
-    {"method": "DELETE", "path": "/v2/app-registry/apps/{appId}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/app-registry/apps/{appId}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/app-registry/apps/{appId}", "public": false, "callers": ["person"], "fields": ["addresses", "defaultReturn", "logo", "name", "privacyPolicy", "termsOfService", "website"]},
-    {"method": "GET", "path": "/v2/app-registry/apps/{appId}/ownership", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/app-registry/apps/{appId}/revocations/{lane}", "public": true, "callers": [], "fields": []},
-    {"method": "DELETE", "path": "/v2/billing/apps/{appId}/connection", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/billing/apps/{appId}/connection", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/billing/apps/{appId}/connection", "public": false, "callers": ["person"], "fields": ["code", "connector", "publishableKey", "secretKey", "state"]},
-    {"method": "GET", "path": "/v2/billing/apps/{appId}/metrics", "public": false, "callers": ["person"], "fields": []},
-    {"method": "DELETE", "path": "/v2/billing/apps/{appId}/metrics/{key}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PUT", "path": "/v2/billing/apps/{appId}/metrics/{key}", "public": false, "callers": ["person"], "fields": ["kind", "name"]},
-    {"method": "GET", "path": "/v2/billing/apps/{appId}/plans", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/billing/apps/{appId}/plans", "public": false, "callers": ["person"], "fields": ["description", "features", "key", "limits", "name", "prices", "trial"]},
-    {"method": "DELETE", "path": "/v2/billing/apps/{appId}/plans/{key}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/billing/apps/{appId}/plans/{key}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/billing/apps/{appId}/plans/{key}", "public": false, "callers": ["person"], "fields": ["description", "features", "key", "limits", "name", "prices", "trial"]},
-    {"method": "PUT", "path": "/v2/billing/apps/{appId}/plans/{key}", "public": false, "callers": ["person"], "fields": ["description", "features", "key", "limits", "name", "prices", "trial"]},
-    {"method": "POST", "path": "/v2/billing/apps/{appId}/plans/{key}/archive", "public": false, "callers": ["person"], "fields": ["archived"]},
-    {"method": "GET", "path": "/v2/billing/apps/{appId}/plans/{key}/deletion-preview", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/billing/apps/{appId}/products", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/billing/apps/{appId}/products", "public": false, "callers": ["person"], "fields": ["description", "features", "key", "kind", "limits", "name", "prices"]},
-    {"method": "DELETE", "path": "/v2/billing/apps/{appId}/products/{key}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/billing/apps/{appId}/products/{key}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/billing/apps/{appId}/products/{key}", "public": false, "callers": ["person"], "fields": ["description", "features", "key", "kind", "limits", "name", "prices"]},
-    {"method": "PUT", "path": "/v2/billing/apps/{appId}/products/{key}", "public": false, "callers": ["person"], "fields": ["description", "features", "key", "kind", "limits", "name", "prices"]},
-    {"method": "POST", "path": "/v2/billing/apps/{appId}/products/{key}/archive", "public": false, "callers": ["person"], "fields": ["archived"]},
-    {"method": "GET", "path": "/v2/billing/apps/{appId}/revocations/{lane}", "public": true, "callers": [], "fields": []},
-    {"method": "GET", "path": "/v2/billing/apps/{appId}/settings", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/billing/apps/{appId}/settings", "public": false, "callers": ["person"], "fields": ["currency", "paymentsAutoRedirect", "returnUrl"]},
-    {"method": "GET", "path": "/v2/billing/apps/{appId}/taxes", "public": false, "callers": ["person"], "fields": []},
-    {"method": "DELETE", "path": "/v2/billing/apps/{appId}/taxes/{country}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PUT", "path": "/v2/billing/apps/{appId}/taxes/{country}", "public": false, "callers": ["person"], "fields": ["basisPoints", "name"]},
-    {"method": "GET", "path": "/v2/billing/apps/{appId}/workspaces/{workspaceId}/payer", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/billing/apps/{appId}/workspaces/{workspaceId}/payer", "public": false, "callers": ["person"], "fields": ["country", "email", "name"]},
-    {"method": "GET", "path": "/v2/billing/apps/{appId}/workspaces/{workspaceId}/payer/details", "public": false, "callers": ["person"], "fields": []},
-    {"method": "DELETE", "path": "/v2/billing/apps/{appId}/workspaces/{workspaceId}/payer/lock", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PUT", "path": "/v2/billing/apps/{appId}/workspaces/{workspaceId}/payer/subscription", "public": false, "callers": ["person"], "fields": ["currency", "interval", "plan", "trialEnd"]},
-    {"method": "GET", "path": "/v2/billing/apps/{appId}/workspaces/{workspaceId}/payer/usage", "public": false, "callers": ["person"], "fields": []},
-    {"method": "DELETE", "path": "/v2/billing/connection", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/billing/connection", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/billing/connection", "public": false, "callers": ["app_key"], "fields": ["code", "connector", "publishableKey", "secretKey", "state"]},
-    {"method": "GET", "path": "/v2/billing/metrics", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "DELETE", "path": "/v2/billing/metrics/{key}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PUT", "path": "/v2/billing/metrics/{key}", "public": false, "callers": ["app_key"], "fields": ["kind", "name"]},
-    {"method": "GET", "path": "/v2/billing/payer", "public": false, "callers": ["app_key", "person", "service_account_key"], "fields": []},
-    {"method": "PATCH", "path": "/v2/billing/payer", "public": false, "callers": ["app_key", "person"], "fields": ["country", "email", "name"]},
-    {"method": "PUT", "path": "/v2/billing/payer/addons/{product}", "public": false, "callers": ["app_key", "person"], "fields": ["currency", "interval", "quantity"]},
-    {"method": "POST", "path": "/v2/billing/payer/cancel", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "POST", "path": "/v2/billing/payer/checkouts/{session}/confirm", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "DELETE", "path": "/v2/billing/payer/lock", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/billing/payer/lock", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/billing/payer/plan", "public": false, "callers": ["app_key", "person"], "fields": ["currency", "interval", "plan"]},
-    {"method": "GET", "path": "/v2/billing/payer/portal", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "POST", "path": "/v2/billing/payer/purchases", "public": false, "callers": ["app_key", "person"], "fields": ["currency", "product", "quantity"]},
-    {"method": "POST", "path": "/v2/billing/payer/reactivate", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "POST", "path": "/v2/billing/payer/refresh", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "PUT", "path": "/v2/billing/payer/subscription", "public": false, "callers": ["app_key"], "fields": ["currency", "interval", "plan", "trialEnd"]},
-    {"method": "POST", "path": "/v2/billing/payer/trial", "public": false, "callers": ["app_key", "person"], "fields": ["plan"]},
-    {"method": "GET", "path": "/v2/billing/payer/gate", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "GET", "path": "/v2/billing/payer/usage", "public": false, "callers": ["app_key", "person", "service_account_key"], "fields": []},
-    {"method": "GET", "path": "/v2/billing/plans", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "POST", "path": "/v2/billing/plans", "public": false, "callers": ["app_key"], "fields": ["description", "features", "key", "limits", "name", "prices", "trial"]},
-    {"method": "DELETE", "path": "/v2/billing/plans/{key}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/billing/plans/{key}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PATCH", "path": "/v2/billing/plans/{key}", "public": false, "callers": ["app_key"], "fields": ["description", "features", "key", "limits", "name", "prices", "trial"]},
-    {"method": "PUT", "path": "/v2/billing/plans/{key}", "public": false, "callers": ["app_key"], "fields": ["description", "features", "key", "limits", "name", "prices", "trial"]},
-    {"method": "POST", "path": "/v2/billing/plans/{key}/archive", "public": false, "callers": ["app_key"], "fields": ["archived"]},
-    {"method": "GET", "path": "/v2/billing/plans/{key}/deletion-preview", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/billing/products", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/billing/products", "public": false, "callers": ["app_key"], "fields": ["description", "features", "key", "kind", "limits", "name", "prices"]},
-    {"method": "DELETE", "path": "/v2/billing/products/{key}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/billing/products/{key}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PATCH", "path": "/v2/billing/products/{key}", "public": false, "callers": ["app_key"], "fields": ["description", "features", "key", "kind", "limits", "name", "prices"]},
-    {"method": "PUT", "path": "/v2/billing/products/{key}", "public": false, "callers": ["app_key"], "fields": ["description", "features", "key", "kind", "limits", "name", "prices"]},
-    {"method": "POST", "path": "/v2/billing/products/{key}/archive", "public": false, "callers": ["app_key"], "fields": ["archived"]},
-    {"method": "GET", "path": "/v2/billing/settings", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PATCH", "path": "/v2/billing/settings", "public": false, "callers": ["app_key"], "fields": ["currency", "paymentsAutoRedirect", "returnUrl"]},
-    {"method": "GET", "path": "/v2/billing/taxes", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "DELETE", "path": "/v2/billing/taxes/{country}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PUT", "path": "/v2/billing/taxes/{country}", "public": false, "callers": ["app_key"], "fields": ["basisPoints", "name"]},
-    {"method": "POST", "path": "/v2/billing/usage", "public": false, "callers": ["app_key", "service_account_key"], "fields": ["reports"]},
-    {"method": "POST", "path": "/v2/billing/usage/holds", "public": false, "callers": ["app_key"], "fields": ["decision", "metric", "quantity"]},
-    {"method": "DELETE", "path": "/v2/billing/usage/holds/{holdId}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/billing/usage/holds/{holdId}/confirm", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/billing/usage/quota/{metric}", "public": false, "callers": ["app_key", "person"], "fields": []},
-    {"method": "GET", "path": "/v2/communication/apps/{appId}/deliveries", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/communication/apps/{appId}/deliveries/{id}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/communication/apps/{appId}/domains", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/communication/apps/{appId}/domains", "public": false, "callers": ["person"], "fields": ["domain"]},
-    {"method": "DELETE", "path": "/v2/communication/apps/{appId}/domains/{domain}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/communication/apps/{appId}/domains/{domain}/check", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/communication/apps/{appId}/emails", "public": false, "callers": ["person"], "fields": ["language", "link", "template", "to", "user", "values"]},
-    {"method": "POST", "path": "/v2/communication/apps/{appId}/messages", "public": false, "callers": ["person"], "fields": ["button", "language", "subject", "text", "to", "user"]},
-    {"method": "DELETE", "path": "/v2/communication/apps/{appId}/sender", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/communication/apps/{appId}/sender", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PUT", "path": "/v2/communication/apps/{appId}/sender", "public": false, "callers": ["person"], "fields": ["address", "name"]},
-    {"method": "POST", "path": "/v2/communication/apps/{appId}/sender/check", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/communication/apps/{appId}/sender/verification", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/communication/apps/{appId}/suppressions", "public": false, "callers": ["person"], "fields": []},
-    {"method": "DELETE", "path": "/v2/communication/apps/{appId}/suppressions/{address}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/communication/apps/{appId}/templates", "public": false, "callers": ["person"], "fields": []},
-    {"method": "DELETE", "path": "/v2/communication/apps/{appId}/templates/{name}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/communication/apps/{appId}/templates/{name}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PUT", "path": "/v2/communication/apps/{appId}/templates/{name}", "public": false, "callers": ["person"], "fields": ["html", "texts"]},
-    {"method": "POST", "path": "/v2/communication/apps/{appId}/templates/{name}/test", "public": false, "callers": ["person"], "fields": ["language", "link", "to", "user", "values"]},
-    {"method": "GET", "path": "/v2/communication/deliveries", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/communication/deliveries/{id}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/communication/domains", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/communication/domains", "public": false, "callers": ["app_key"], "fields": ["domain"]},
-    {"method": "DELETE", "path": "/v2/communication/domains/{domain}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/communication/domains/{domain}/check", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/communication/emails", "public": false, "callers": ["app_key"], "fields": ["language", "link", "template", "to", "user", "values"]},
-    {"method": "POST", "path": "/v2/communication/messages", "public": false, "callers": ["app_key"], "fields": ["button", "language", "subject", "text", "to", "user"]},
-    {"method": "DELETE", "path": "/v2/communication/sender", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/communication/sender", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PUT", "path": "/v2/communication/sender", "public": false, "callers": ["app_key"], "fields": ["address", "name"]},
-    {"method": "POST", "path": "/v2/communication/sender/check", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/communication/sender/verification", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/communication/suppressions", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "DELETE", "path": "/v2/communication/suppressions/{address}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/communication/templates", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "DELETE", "path": "/v2/communication/templates/{name}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/communication/templates/{name}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PUT", "path": "/v2/communication/templates/{name}", "public": false, "callers": ["app_key"], "fields": ["html", "texts"]},
-    {"method": "POST", "path": "/v2/communication/templates/{name}/test", "public": false, "callers": ["app_key"], "fields": ["language", "link", "to", "user", "values"]},
-    {"method": "POST", "path": "/v2/events-and-logs/app-events", "public": false, "callers": ["app_key", "person"], "fields": ["data", "id", "producer", "subject", "type"]},
-    {"method": "POST", "path": "/v2/events-and-logs/event-log/erasures", "public": false, "callers": ["app_key"], "fields": ["person"]},
-    {"method": "GET", "path": "/v2/events-and-logs/event-log/seals", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/flags/apps/{appId}/catalog", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/flags/apps/{appId}/export", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/flags/apps/{appId}/flags", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/flags/apps/{appId}/flags", "public": false, "callers": ["person"], "fields": ["description", "key", "offValue", "onValue", "public", "rule", "state", "valueType"]},
-    {"method": "DELETE", "path": "/v2/flags/apps/{appId}/flags/{key}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/flags/apps/{appId}/flags/{key}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/flags/apps/{appId}/flags/{key}", "public": false, "callers": ["person"], "fields": ["description", "key", "offValue", "onValue", "public", "rule", "state", "valueType"]},
-    {"method": "POST", "path": "/v2/flags/apps/{appId}/flags/{key}/acknowledge", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/flags/apps/{appId}/flags/{key}/deletion-preview", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/flags/apps/{appId}/flags/{key}/kill", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/flags/apps/{appId}/flags/{key}/restore", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/flags/apps/{appId}/flags/{key}/schedules", "public": false, "callers": ["person"], "fields": ["at", "patch"]},
-    {"method": "POST", "path": "/v2/flags/apps/{appId}/import", "public": false, "callers": ["person"], "fields": ["dryRun", "flags", "revision", "segments", "version"]},
-    {"method": "POST", "path": "/v2/flags/apps/{appId}/ofrep/v1/evaluate/flags", "public": true, "callers": [], "fields": ["context"]},
-    {"method": "GET", "path": "/v2/flags/apps/{appId}/schedules", "public": false, "callers": ["person"], "fields": []},
-    {"method": "DELETE", "path": "/v2/flags/apps/{appId}/schedules/{scheduleId}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/flags/apps/{appId}/segments", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/flags/apps/{appId}/segments", "public": false, "callers": ["person"], "fields": ["conditions", "description", "key"]},
-    {"method": "DELETE", "path": "/v2/flags/apps/{appId}/segments/{key}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/flags/apps/{appId}/segments/{key}", "public": false, "callers": ["person"], "fields": ["conditions", "description", "key"]},
-    {"method": "GET", "path": "/v2/flags/catalog", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/flags/export", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/flags/flags", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/flags/flags", "public": false, "callers": ["app_key"], "fields": ["description", "key", "offValue", "onValue", "public", "rule", "state", "valueType"]},
-    {"method": "DELETE", "path": "/v2/flags/flags/{key}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/flags/flags/{key}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PATCH", "path": "/v2/flags/flags/{key}", "public": false, "callers": ["app_key"], "fields": ["description", "key", "offValue", "onValue", "public", "rule", "state", "valueType"]},
-    {"method": "POST", "path": "/v2/flags/flags/{key}/acknowledge", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/flags/flags/{key}/deletion-preview", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/flags/flags/{key}/kill", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/flags/flags/{key}/restore", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/flags/flags/{key}/schedules", "public": false, "callers": ["app_key"], "fields": ["at", "patch"]},
-    {"method": "POST", "path": "/v2/flags/import", "public": false, "callers": ["app_key"], "fields": ["dryRun", "flags", "revision", "segments", "version"]},
-    {"method": "POST", "path": "/v2/flags/ofrep/v1/evaluate/flags", "public": false, "callers": ["person"], "fields": ["context"]},
-    {"method": "POST", "path": "/v2/flags/ofrep/v1/evaluate/flags/{key}", "public": false, "callers": ["person"], "fields": ["context"]},
-    {"method": "GET", "path": "/v2/flags/rules", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/flags/schedules", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "DELETE", "path": "/v2/flags/schedules/{scheduleId}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "GET", "path": "/v2/flags/segments", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "POST", "path": "/v2/flags/segments", "public": false, "callers": ["app_key"], "fields": ["conditions", "description", "key"]},
-    {"method": "DELETE", "path": "/v2/flags/segments/{key}", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PATCH", "path": "/v2/flags/segments/{key}", "public": false, "callers": ["app_key"], "fields": ["conditions", "description", "key"]},
-    {"method": "GET", "path": "/v2/identity-access/apps/{appId}/.well-known/openid-configuration", "public": true, "callers": [], "fields": []},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/introspect", "public": true, "callers": [], "fields": ["token", "token_type_hint"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/invites/preview", "public": true, "callers": [], "fields": ["token"]},
-    {"method": "GET", "path": "/v2/identity-access/apps/{appId}/jwks.json", "public": true, "callers": [], "fields": []},
-    {"method": "GET", "path": "/v2/identity-access/apps/{appId}/keys", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/keys", "public": false, "callers": ["person"], "fields": ["expiresInDays", "name", "privileges"]},
-    {"method": "DELETE", "path": "/v2/identity-access/apps/{appId}/keys/{keyId}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/magic-link", "public": true, "callers": [], "fields": ["client_id", "code_challenge", "code_challenge_method", "email", "link_address", "redirect_uri", "request"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/magic-link/verify", "public": true, "callers": [], "fields": ["code_verifier", "token"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/passkeys/setup", "public": true, "callers": [], "fields": ["code_verifier", "name", "response", "token"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/passkeys/setup-link", "public": true, "callers": [], "fields": ["code_challenge", "code_challenge_method", "email"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/passkeys/setup/options", "public": true, "callers": [], "fields": ["code_verifier", "token"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/passkeys/sign-in", "public": true, "callers": [], "fields": ["response", "workspace"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/passkeys/sign-in/options", "public": true, "callers": [], "fields": ["client_id", "code_challenge", "code_challenge_method", "email", "redirect_uri", "request"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/password", "public": true, "callers": [], "fields": ["password", "token"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/password-links", "public": false, "callers": ["person"], "fields": ["email", "send"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/password/forgot", "public": true, "callers": [], "fields": ["email", "link_address"]},
-    {"method": "GET", "path": "/v2/identity-access/apps/{appId}/revocations/{lane}", "public": true, "callers": [], "fields": []},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/revoke", "public": true, "callers": [], "fields": ["client_id", "token", "token_type_hint"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/sign-in", "public": true, "callers": [], "fields": ["client_id", "code_challenge", "code_challenge_method", "email", "flow", "password", "redirect_uri", "request", "workspace"]},
-    {"method": "GET", "path": "/v2/identity-access/apps/{appId}/sign-in-options", "public": true, "callers": [], "fields": []},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/sign-in-requests", "public": true, "callers": [], "fields": ["client_id", "code_challenge", "code_challenge_method", "link_address", "redirect_uri", "state"]},
-    {"method": "GET", "path": "/v2/identity-access/apps/{appId}/sign-in-settings", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PATCH", "path": "/v2/identity-access/apps/{appId}/sign-in-settings", "public": false, "callers": ["person"], "fields": ["lifetimes", "methods", "password", "signUp"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/sign-up", "public": true, "callers": [], "fields": ["code_challenge", "code_challenge_method", "email", "firstName", "invite", "lastName", "link_address", "password", "request", "workspace"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/sign-up/verify", "public": true, "callers": [], "fields": ["code_verifier", "token"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/token", "public": true, "callers": [], "fields": ["client_id", "client_secret", "code", "code_verifier", "grant_type", "key", "redirect_uri", "refresh_token", "scope", "workspace"]},
-    {"method": "POST", "path": "/v2/identity-access/invites/accept", "public": false, "callers": ["person"], "fields": ["token"]},
-    {"method": "GET", "path": "/v2/identity-access/keys", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/identity-access/keys", "public": false, "callers": ["person"], "fields": ["expiresInDays", "name", "privileges"]},
-    {"method": "DELETE", "path": "/v2/identity-access/keys/{keyId}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/identity-access/passkeys", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/identity-access/passkeys", "public": false, "callers": ["person"], "fields": ["name", "response"]},
-    {"method": "POST", "path": "/v2/identity-access/passkeys/options", "public": false, "callers": ["person"], "fields": []},
-    {"method": "DELETE", "path": "/v2/identity-access/passkeys/{passkeyId}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/identity-access/password-links", "public": false, "callers": ["app_key"], "fields": ["email", "send"]},
-    {"method": "GET", "path": "/v2/identity-access/sessions", "public": false, "callers": ["person"], "fields": []},
-    {"method": "DELETE", "path": "/v2/identity-access/sessions/{sessionId}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/identity-access/sign-in-settings", "public": false, "callers": ["app_key"], "fields": []},
-    {"method": "PATCH", "path": "/v2/identity-access/sign-in-settings", "public": false, "callers": ["app_key"], "fields": ["lifetimes", "methods", "password", "signUp"]},
-    {"method": "POST", "path": "/v2/identity-access/sign-out", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/live/apps/{appId}/channels", "public": true, "callers": [], "fields": []},
-    {"method": "GET", "path": "/v2/live/apps/{appId}/connection", "public": true, "callers": [], "fields": []},
-    {"method": "GET", "path": "/v2/live/apps/{appId}/history", "public": true, "callers": [], "fields": []},
-    {"method": "GET", "path": "/v2/live/channels", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/live/history", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/webhooks/apps/{appId}/deliveries", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/webhooks/apps/{appId}/deliveries/{id}", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/webhooks/apps/{appId}/deliveries/{id}/replay", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/webhooks/apps/{appId}/event-types", "public": false, "callers": ["person"], "fields": []},
-    {"method": "POST", "path": "/v2/webhooks/apps/{appId}/secret/rotate", "public": false, "callers": ["person"], "fields": []},
-    {"method": "GET", "path": "/v2/webhooks/apps/{appId}/settings", "public": false, "callers": ["person"], "fields": []},
-    {"method": "PUT", "path": "/v2/webhooks/apps/{appId}/settings", "public": false, "callers": ["person"], "fields": ["enabled", "events", "url"]},
-    {"method": "GET", "path": "/v2/identity-access/apps/{appId}/federated/{provider}/return", "public": true, "callers": [], "fields": []},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/second-step", "public": true, "callers": [], "fields": ["code", "flow"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/second-step/resend", "public": true, "callers": [], "fields": ["flow"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/second-step/reset", "public": true, "callers": [], "fields": ["backup_code", "flow"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/second-step/setup", "public": true, "callers": [], "fields": ["flow", "phone"]},
-    {"method": "PUT", "path": "/v2/identity-access/apps/{appId}/sign-in-settings/providers/{provider}", "public": false, "callers": ["person"], "fields": ["clientId", "clientSecret", "tenantId"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/social/finish", "public": true, "callers": [], "fields": ["code", "code_verifier", "state"]},
-    {"method": "POST", "path": "/v2/identity-access/apps/{appId}/social/start", "public": true, "callers": [], "fields": ["attribution", "client_id", "code_challenge", "code_challenge_method", "currency", "intent", "interval", "plan", "provider", "redirect_uri", "request", "return_page", "workspace"]},
-    {"method": "PUT", "path": "/v2/identity-access/sign-in-settings/providers/{provider}", "public": false, "callers": ["app_key"], "fields": ["clientId", "clientSecret", "tenantId"]}
+    {
+      "method": "GET",
+      "path": "/v2/accounts/apps/{appId}/custom-fields",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/apps/{appId}/key-privileges",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/apps/{appId}/privileges",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/apps/{appId}/privileges",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "key"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/apps/{appId}/privileges/{privilegeId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/accounts/apps/{appId}/privileges/{privilegeId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "key"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/apps/{appId}/revocations/{lane}",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/apps/{appId}/roles",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/apps/{appId}/roles",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "isDefault",
+        "key",
+        "name",
+        "privileges"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/apps/{appId}/roles/{roleId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/accounts/apps/{appId}/roles/{roleId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "isDefault",
+        "key",
+        "name",
+        "privileges"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/apps/{appId}/users",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/apps/{appId}/users/{userId}/resume",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/apps/{appId}/users/{userId}/suspend",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/apps/{appId}/workspaces",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/apps/{appId}/workspaces",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "locale",
+        "logo",
+        "name",
+        "onboarded",
+        "owner"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "companyLogin",
+        "locale",
+        "logo",
+        "mfa",
+        "name",
+        "onboarded"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/invites",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/invites",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "email",
+        "firstName",
+        "lastName",
+        "role"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/invites/{inviteId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/logo-upload",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "contentType",
+        "size"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/members",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/members",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "email",
+        "firstName",
+        "lastName",
+        "phoneNumber",
+        "role"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/members/{memberId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/members/{memberId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/members/{memberId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "enabled",
+        "firstName",
+        "lastName",
+        "role",
+        "teams"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/custom-fields",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/accounts/custom-fields",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "params"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/invites",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/invites",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": [
+        "email",
+        "firstName",
+        "lastName",
+        "role"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/invites/{inviteId}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/me",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/accounts/me",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "consentsToPrivacyPolicy",
+        "firstName",
+        "lastName",
+        "onboarded",
+        "phoneNumber"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/me/accept-ownership",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/members",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/members",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "consentsToPrivacyPolicy",
+        "customParams",
+        "email",
+        "firstName",
+        "lastName",
+        "muteNotifications",
+        "onboarded",
+        "phoneNumber",
+        "role"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/members/{memberId}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/members/{memberId}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/accounts/members/{memberId}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": [
+        "consentsToPrivacyPolicy",
+        "customParams",
+        "enabled",
+        "firstName",
+        "lastName",
+        "onboarded",
+        "phoneNumber",
+        "role",
+        "teams"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/members/{memberId}/deletion-preview",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/privileges",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/privileges",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "key"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/privileges/{privilegeId}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/accounts/privileges/{privilegeId}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "key"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/roles",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/roles",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "isDefault",
+        "key",
+        "name",
+        "privileges"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/roles/{roleId}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/accounts/roles/{roleId}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "isDefault",
+        "key",
+        "name",
+        "privileges"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/users/{userId}",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/users/{userId}/resume",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/users/{userId}/suspend",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/workspace",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/workspace",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/accounts/workspace",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": [
+        "companyLogin",
+        "joinRole",
+        "locale",
+        "logo",
+        "metadata",
+        "mfa",
+        "name",
+        "onboarded"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/workspace-key-privileges",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/workspace/restore",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/workspace/resume",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/workspace/suspend",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/workspaces",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/workspaces",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "locale",
+        "logo",
+        "metadata",
+        "name",
+        "onboarded",
+        "owner"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/app-registry/app",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/app-registry/app",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "allowedOrigins",
+        "apiUrl",
+        "defaultCallbackUri",
+        "logo",
+        "name",
+        "onboardingFlow",
+        "privacyPolicyUrl",
+        "redirectUris",
+        "termsOfServiceUrl",
+        "uiUrl",
+        "websiteUrl"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/app-registry/apps",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/app-registry/apps",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "addresses",
+        "confirmPasskeys",
+        "defaultReturn",
+        "logo",
+        "main",
+        "mode",
+        "name",
+        "privacyPolicy",
+        "signIn",
+        "termsOfService",
+        "website"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/app-registry/apps/{appId}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/app-registry/apps/{appId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/app-registry/apps/{appId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "addresses",
+        "confirmPasskeys",
+        "defaultReturn",
+        "logo",
+        "main",
+        "mode",
+        "name",
+        "privacyPolicy",
+        "signIn",
+        "termsOfService",
+        "website"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/app-registry/apps/{appId}/branding",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/app-registry/apps/{appId}/branding",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "colors",
+        "css",
+        "font",
+        "radius",
+        "scheme"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/app-registry/apps/{appId}/languages",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/app-registry/apps/{appId}/languages",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "default",
+        "enabled",
+        "messages"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/app-registry/apps/{appId}/logo-upload",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "contentType",
+        "size"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/app-registry/apps/{appId}/mode",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/app-registry/apps/{appId}/mode",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "confirm",
+        "mode"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/app-registry/apps/{appId}/ownership",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/app-registry/apps/{appId}/revocations/{lane}",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/app-registry/branding",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/app-registry/branding",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "colors",
+        "css",
+        "font",
+        "radius",
+        "scheme"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/billing/apps/{appId}/connection",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/connection",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/billing/apps/{appId}/connection",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "enabled"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/apps/{appId}/connection",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "code",
+        "connector",
+        "publishableKey",
+        "secretKey",
+        "state"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/connection/disconnect-preview",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/connection/health",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/apps/{appId}/connection/repair",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/metrics",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/billing/apps/{appId}/metrics/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/billing/apps/{appId}/metrics/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "kind",
+        "name"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/plans",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/apps/{appId}/plans",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "features",
+        "key",
+        "limits",
+        "name",
+        "prices",
+        "trial"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/billing/apps/{appId}/plans/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/plans/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/billing/apps/{appId}/plans/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "features",
+        "key",
+        "limits",
+        "name",
+        "prices",
+        "trial"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/billing/apps/{appId}/plans/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "features",
+        "key",
+        "limits",
+        "name",
+        "prices",
+        "trial"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/apps/{appId}/plans/{key}/archive",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "archived"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/plans/{key}/deletion-preview",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/products",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/apps/{appId}/products",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "features",
+        "key",
+        "kind",
+        "limits",
+        "name",
+        "prices"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/billing/apps/{appId}/products/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/products/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/billing/apps/{appId}/products/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "features",
+        "key",
+        "kind",
+        "limits",
+        "name",
+        "prices"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/billing/apps/{appId}/products/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "features",
+        "key",
+        "kind",
+        "limits",
+        "name",
+        "prices"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/apps/{appId}/products/{key}/archive",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "archived"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/revocations/{lane}",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/settings",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/billing/apps/{appId}/settings",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "currency",
+        "paymentsAutoRedirect",
+        "returnUrl"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/taxes",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/billing/apps/{appId}/taxes/{country}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/billing/apps/{appId}/taxes/{country}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "basisPoints",
+        "name"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/workspaces/{workspaceId}/payer",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/billing/apps/{appId}/workspaces/{workspaceId}/payer",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "country",
+        "email",
+        "name"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/workspaces/{workspaceId}/payer/details",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/billing/apps/{appId}/workspaces/{workspaceId}/payer/lock",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/billing/apps/{appId}/workspaces/{workspaceId}/payer/subscription",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "currency",
+        "interval",
+        "plan",
+        "trialEnd"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/apps/{appId}/workspaces/{workspaceId}/payer/usage",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/apps/{appId}/workspaces/{workspaceId}/usage/sync",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/billing/connection",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/connection",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/connection",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "code",
+        "connector",
+        "publishableKey",
+        "secretKey",
+        "state"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/metrics",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/billing/metrics/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/billing/metrics/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "kind",
+        "name"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/payer",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person",
+        "service_account_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/billing/payer",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": [
+        "country",
+        "email",
+        "name"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/billing/payer/addons/{product}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": [
+        "currency",
+        "interval",
+        "quantity",
+        "returnUrl"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/payer/cancel",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/payer/checkouts/{session}/confirm",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/payer/gate",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/billing/payer/lock",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/payer/lock",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/payer/plan",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": [
+        "currency",
+        "interval",
+        "plan",
+        "returnUrl"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/payer/portal",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/payer/purchases",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": [
+        "currency",
+        "product",
+        "quantity",
+        "returnUrl"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/payer/reactivate",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/payer/refresh",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/billing/payer/subscription",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "currency",
+        "interval",
+        "plan",
+        "trialEnd"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/payer/trial",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": [
+        "plan"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/payer/usage",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person",
+        "service_account_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/plans",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/plans",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "features",
+        "key",
+        "limits",
+        "name",
+        "prices",
+        "trial"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/billing/plans/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/plans/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/billing/plans/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "features",
+        "key",
+        "limits",
+        "name",
+        "prices",
+        "trial"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/billing/plans/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "features",
+        "key",
+        "limits",
+        "name",
+        "prices",
+        "trial"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/plans/{key}/archive",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "archived"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/plans/{key}/deletion-preview",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/products",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/products",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "features",
+        "key",
+        "kind",
+        "limits",
+        "name",
+        "prices"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/billing/products/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/products/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/billing/products/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "features",
+        "key",
+        "kind",
+        "limits",
+        "name",
+        "prices"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/billing/products/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "features",
+        "key",
+        "kind",
+        "limits",
+        "name",
+        "prices"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/products/{key}/archive",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "archived"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/settings",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/billing/settings",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "currency",
+        "paymentsAutoRedirect",
+        "returnUrl"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/taxes",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/billing/taxes/{country}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/billing/taxes/{country}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "basisPoints",
+        "name"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/usage",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "reports"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/usage/holds",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "decision",
+        "metric",
+        "quantity"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/billing/usage/holds/{holdId}",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/billing/usage/holds/{holdId}/confirm",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/billing/usage/quota/{metric}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/apps/{appId}/deliveries",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/apps/{appId}/deliveries/{id}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/apps/{appId}/domains",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/apps/{appId}/domains",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "domain"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/communication/apps/{appId}/domains/{domain}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/apps/{appId}/domains/{domain}/check",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/apps/{appId}/emails",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "language",
+        "link",
+        "template",
+        "to",
+        "user",
+        "values"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/apps/{appId}/messages",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "button",
+        "language",
+        "subject",
+        "text",
+        "to",
+        "user"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/communication/apps/{appId}/sender",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/apps/{appId}/sender",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/communication/apps/{appId}/sender",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "address",
+        "name"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/apps/{appId}/sender/check",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/apps/{appId}/sender/verification",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/apps/{appId}/suppressions",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/communication/apps/{appId}/suppressions/{address}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/apps/{appId}/templates",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/communication/apps/{appId}/templates/{name}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/apps/{appId}/templates/{name}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/communication/apps/{appId}/templates/{name}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "html",
+        "texts"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/apps/{appId}/templates/{name}/test",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "language",
+        "link",
+        "to",
+        "user",
+        "values"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/deliveries",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/deliveries/{id}",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/domains",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/domains",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "domain"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/communication/domains/{domain}",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/domains/{domain}/check",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/emails",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "language",
+        "link",
+        "template",
+        "to",
+        "user",
+        "values"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/messages",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "button",
+        "language",
+        "subject",
+        "text",
+        "to",
+        "user"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/communication/sender",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/sender",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/communication/sender",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "address",
+        "name"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/sender/check",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/sender/verification",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/suppressions",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/communication/suppressions/{address}",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/templates",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/communication/templates/{name}",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/communication/templates/{name}",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/communication/templates/{name}",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "html",
+        "texts"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/communication/templates/{name}/test",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "language",
+        "link",
+        "to",
+        "user",
+        "values"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/events-and-logs/app-events",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": [
+        "data",
+        "id",
+        "producer",
+        "subject",
+        "type"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/events-and-logs/apps/{appId}/events",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/events-and-logs/apps/{appId}/setup-signals",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/events-and-logs/audit",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/events-and-logs/event-log/erasures",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "person"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/events-and-logs/event-log/seals",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/events-and-logs/setup-signals",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/apps/{appId}/catalog",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/apps/{appId}/evaluation-activity",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/apps/{appId}/export",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/apps/{appId}/flags",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/apps/{appId}/flags",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "key",
+        "offValue",
+        "onValue",
+        "public",
+        "rule",
+        "state",
+        "valueType"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/flags/apps/{appId}/flags/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/apps/{appId}/flags/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/flags/apps/{appId}/flags/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "key",
+        "offValue",
+        "onValue",
+        "public",
+        "rule",
+        "state",
+        "valueType"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/apps/{appId}/flags/{key}/acknowledge",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/apps/{appId}/flags/{key}/deletion-preview",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/apps/{appId}/flags/{key}/kill",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/apps/{appId}/flags/{key}/restore",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/apps/{appId}/flags/{key}/schedules",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "at",
+        "patch"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/apps/{appId}/import",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "dryRun",
+        "flags",
+        "revision",
+        "segments",
+        "version"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/apps/{appId}/ofrep/v1/evaluate/flags",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "context"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/apps/{appId}/schedules",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/flags/apps/{appId}/schedules/{scheduleId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/apps/{appId}/segments",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/apps/{appId}/segments",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "conditions",
+        "description",
+        "key"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/flags/apps/{appId}/segments/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/flags/apps/{appId}/segments/{key}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "conditions",
+        "description",
+        "key"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/catalog",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/discoveries",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "flags"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/evaluation-activity",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/export",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/flags",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/flags",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "key",
+        "offValue",
+        "onValue",
+        "public",
+        "rule",
+        "state",
+        "valueType"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/flags/flags/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/flags/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/flags/flags/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "description",
+        "key",
+        "offValue",
+        "onValue",
+        "public",
+        "rule",
+        "state",
+        "valueType"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/flags/{key}/acknowledge",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/flags/{key}/deletion-preview",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/flags/{key}/kill",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/flags/{key}/restore",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/flags/{key}/schedules",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "at",
+        "patch"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/import",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "dryRun",
+        "flags",
+        "revision",
+        "segments",
+        "version"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/ofrep/v1/evaluate/flags",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person",
+        "personal_key",
+        "service_account_key"
+      ],
+      "fields": [
+        "context"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/ofrep/v1/evaluate/flags/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person",
+        "personal_key",
+        "service:growth",
+        "service_account_key"
+      ],
+      "fields": [
+        "context"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/rules",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/schedules",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/flags/schedules/{scheduleId}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/flags/segments",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/flags/segments",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "conditions",
+        "description",
+        "key"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/flags/segments/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/flags/segments/{key}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "conditions",
+        "description",
+        "key"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/growth/apps/{appId}/links/{first}",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/growth/apps/{appId}/links/{first}/{second}",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/growth/apps/{appId}/links/{first}/{second}/{third}",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/growth/pixel-events",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/growth/pixel-events/{type}/fired",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/growth/self-report",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/growth/self-report",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "chips",
+        "choice",
+        "skipped",
+        "text"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/growth/short-links",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/growth/short-links",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "destination",
+        "label",
+        "source"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/.well-known/oauth-authorization-server",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/.well-known/openid-configuration",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/authorize",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/consent",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "app",
+        "approve",
+        "consent",
+        "delete"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/consent/preview",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "consent"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/federated/{provider}/return",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/introspect",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "token",
+        "token_type_hint"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/invites/preview",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "token"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/jwks.json",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/keys",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/keys",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "expiresInDays",
+        "name",
+        "privileges"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/identity-access/apps/{appId}/keys/{keyId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/magic-link",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "client_id",
+        "code_challenge",
+        "code_challenge_method",
+        "email",
+        "link_address",
+        "redirect_uri",
+        "request"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/magic-link/verify",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "code_verifier",
+        "token"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/passkeys/setup",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "code_verifier",
+        "name",
+        "response",
+        "token"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/passkeys/setup-link",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "code_challenge",
+        "code_challenge_method",
+        "email"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/passkeys/setup/options",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "code_verifier",
+        "token"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/passkeys/sign-in",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "response",
+        "workspace"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/passkeys/sign-in/options",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "client_id",
+        "code_challenge",
+        "code_challenge_method",
+        "email",
+        "redirect_uri",
+        "request"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/password",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "password",
+        "token"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/password-links",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "email",
+        "send"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/password/forgot",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "email",
+        "link_address"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/register",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "application_type",
+        "client_name",
+        "client_uri",
+        "contacts",
+        "grant_types",
+        "jwks",
+        "jwks_uri",
+        "logo_uri",
+        "policy_uri",
+        "redirect_uris",
+        "response_types",
+        "scope",
+        "software_id",
+        "software_statement",
+        "software_version",
+        "token_endpoint_auth_method",
+        "tos_uri"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/revocations/{lane}",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/revoke",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "client_id",
+        "token",
+        "token_type_hint"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/second-step",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "code",
+        "flow"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/second-step/resend",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "flow"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/second-step/reset",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "backup_code",
+        "flow"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/second-step/setup",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "flow",
+        "phone"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/sign-in",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "client_id",
+        "code_challenge",
+        "code_challenge_method",
+        "delete",
+        "email",
+        "flow",
+        "password",
+        "redirect_uri",
+        "request",
+        "workspace"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-options",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-requests",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "client_id",
+        "code_challenge",
+        "code_challenge_method",
+        "link_address",
+        "redirect_uri",
+        "resource",
+        "scope",
+        "state"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-settings",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-settings",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "lifetimes",
+        "methods",
+        "password",
+        "secondStep",
+        "signUp",
+        "signUpPlan",
+        "social"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-settings/passkey-impact",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-settings/production",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-settings/providers/{provider}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "clientId",
+        "clientSecret",
+        "secretExpiresAt",
+        "tenantId"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/sign-up",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "attribution",
+        "code_challenge",
+        "code_challenge_method",
+        "currency",
+        "email",
+        "firstName",
+        "interval",
+        "invite",
+        "lastName",
+        "link_address",
+        "password",
+        "plan",
+        "request",
+        "workspace"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/sign-up/verify",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "code_verifier",
+        "password",
+        "token"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/social/finish",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "code",
+        "code_verifier",
+        "state"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/social/start",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "attribution",
+        "client_id",
+        "code_challenge",
+        "code_challenge_method",
+        "currency",
+        "intent",
+        "interval",
+        "plan",
+        "provider",
+        "redirect_uri",
+        "request",
+        "return_page",
+        "workspace"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/token",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "client_id",
+        "client_secret",
+        "code",
+        "code_verifier",
+        "grant_type",
+        "key",
+        "redirect_uri",
+        "refresh_token",
+        "resource",
+        "scope",
+        "workspace"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/users/{userId}/passkeys",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/identity-access/apps/{appId}/users/{userId}/passkeys/{passkeyId}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/connections",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/identity-access/connections/{sessionId}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/invites/accept",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "token"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/keys",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/keys",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "expiresInDays",
+        "name",
+        "privileges"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/identity-access/keys/{keyId}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/passkeys",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/passkeys",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "name",
+        "response"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/passkeys/options",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/identity-access/passkeys/{passkeyId}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/identity-access/passkeys/{passkeyId}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "name"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/password-links",
+      "public": false,
+      "callers": [
+        "app_key"
+      ],
+      "fields": [
+        "email",
+        "send"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/recheck",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "passkey",
+        "password"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/recheck/email",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "code_challenge",
+        "code_challenge_method",
+        "link_address"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/recheck/passkey-options",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/sessions",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/identity-access/sessions/{sessionId}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/sign-in-requests/approve",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "approve",
+        "delete",
+        "request",
+        "workspace"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/sign-in-settings",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/identity-access/sign-in-settings",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "lifetimes",
+        "methods",
+        "password",
+        "secondStep",
+        "signUp",
+        "signUpPlan",
+        "social"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/sign-in-settings/passkey-impact",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/sign-in-settings/production",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/identity-access/sign-in-settings/providers/{provider}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "clientId",
+        "clientSecret",
+        "secretExpiresAt",
+        "tenantId"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/sign-out",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/social/link",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "code_verifier",
+        "link"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/workspace-keys",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/workspace-keys",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "expiresInDays",
+        "name",
+        "privileges"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/identity-access/workspace-keys/{keyId}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/live/apps/{appId}/channels",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/live/apps/{appId}/connection",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/live/apps/{appId}/history",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/live/channels",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/live/history",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/mcp/",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person",
+        "personal_key",
+        "service_account_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/mcp/",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person",
+        "personal_key",
+        "service_account_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/mcp/",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person",
+        "personal_key",
+        "service_account_key"
+      ],
+      "fields": [
+        "id",
+        "jsonrpc",
+        "method",
+        "params"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/mcp/apps/{appId}/.well-known/mcp/server-card.json",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/mcp/apps/{appId}/.well-known/oauth-protected-resource",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/webhooks/apps/{appId}/deliveries",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/webhooks/apps/{appId}/deliveries/{id}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/webhooks/apps/{appId}/deliveries/{id}/replay",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/webhooks/apps/{appId}/event-types",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/webhooks/apps/{appId}/secret/previous",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/webhooks/apps/{appId}/secret/rotate",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/webhooks/apps/{appId}/settings",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/webhooks/apps/{appId}/settings",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "enabled",
+        "events",
+        "url"
+      ]
+    }
   ]
 }

@@ -64,6 +64,8 @@
         "passkeys": "https://bridge.test/v2/identity-access/passkeys",
         "social_start": "https://bridge.test/v2/identity-access/apps/app-1/social/start",
         "social_finish": "https://bridge.test/v2/identity-access/apps/app-1/social/finish",
+        "social_link": "https://bridge.test/v2/identity-access/social/link",
+        "recheck": "https://bridge.test/v2/identity-access/recheck",
         "second_step": "https://bridge.test/v2/identity-access/apps/app-1/second-step",
         "sign_out": "https://bridge.test/v2/identity-access/sign-out",
         "sessions": "https://bridge.test/v2/identity-access/sessions",

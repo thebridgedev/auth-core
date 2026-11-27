@@ -132,7 +132,7 @@ export const ROUTES = {
   socialStart: route('POST', 'social_start'),
   socialFinish: route('POST', 'social_finish'),
   // Link required: signed in the way they already do, the person links the provider they tried first.
-  socialLink: route('POST', 'social_link', '', 'linking a provider to an account'),
+  socialLink: route('POST', 'social_link'),
   // The text-message second step: the code, a phone number to set up, a new code, or the backup code's reset.
   secondStep: route('POST', 'second_step'),
   secondStepSetup: route('POST', 'second_step', '/setup'),
@@ -145,16 +145,16 @@ export const ROUTES = {
   // Identity and Access: the signed-in person.
   signOut: route('POST', 'sign_out'),
   // Confirming it is you: a password or a passkey's answer, a passkey's options, or a link to the person's address.
-  recheck: route('POST', 'recheck', '', 'confirming it is you'),
-  recheckPasskeyOptions: route('POST', 'recheck', '/passkey-options', 'confirming it is you'),
-  recheckEmail: route('POST', 'recheck', '/email', 'confirming it is you'),
+  recheck: route('POST', 'recheck'),
+  recheckPasskeyOptions: route('POST', 'recheck', '/passkey-options'),
+  recheckEmail: route('POST', 'recheck', '/email'),
   sessions: route('GET', 'sessions'),
   sessionEnd: route('DELETE', 'sessions', '/{sessionId}'),
   passkeys: route('GET', 'passkeys'),
   passkeyOptions: route('POST', 'passkeys', '/options'),
   passkeyAdd: route('POST', 'passkeys'),
   passkeyRemove: route('DELETE', 'passkeys', '/{passkeyId}'),
-  passkeyRename: route('PATCH', 'passkeys', '/{passkeyId}', 'renaming a passkey'),
+  passkeyRename: route('PATCH', 'passkeys', '/{passkeyId}'),
 
   // Accounts.
   me: route('GET', 'accounts', '/me'),
@@ -200,7 +200,7 @@ export const ROUTES = {
   flagsVisitorEvaluate: route('POST', 'flags_visitor', '/ofrep/v1/evaluate/flags'),
   // From the app's server, with its key: keys the app asked for that Bridge gave no result for, so they show in the
   // dashboard as found in code.
-  flagsReport: route('POST', 'flags', '/discoveries', 'reporting flags found in code'),
+  flagsReport: route('POST', 'flags', '/discoveries'),
 
   // Live.
   liveChannels: route('GET', 'live', '/channels'),

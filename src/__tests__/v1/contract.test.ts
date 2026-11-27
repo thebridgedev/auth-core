@@ -60,7 +60,7 @@ describe('contract: the SDK calls only what Bridge promises at version 2', () =>
       const endpoint = promised.get(key);
       if (endpoint === undefined) continue;
       if (beforeSignIn.includes(name)) expect(endpoint.public, name).toBe(true);
-      else if (['usageReport', 'usageHold', 'usageHoldConfirm', 'usageHoldGiveBack'].includes(name)) expect(endpoint.callers).toContain('app_key');
+      else if (['usageReport', 'usageHold', 'usageHoldConfirm', 'usageHoldGiveBack', 'flagsReport'].includes(name)) expect(endpoint.callers).toContain('app_key');
       else expect(endpoint.callers, name).toContain('person');
     }
   });

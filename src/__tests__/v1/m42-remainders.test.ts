@@ -115,6 +115,19 @@ describe('passkeys (TBP-861)', () => {
     expect(webauthn.signals.at(-1)).toMatchObject({ kind: 'accepted', rpId: 'localhost', ids: [second.id] });
   });
 
+  it('tells the browser the person\'s new name for their passkeys, once per domain', async () => {
+    const { fake } = issuerWithPeople({ methods: ['password', 'passkeys'] });
+    const webauthn = fakeWebAuthn();
+    const client = clientOn(fake, { webauthn });
+    await client.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    await client.passkeys.add('Laptop');
+    await client.passkeys.add('Phone');
+    const before = webauthn.signals.length;
+    await client.passkeys.signalCurrentUser('alice@acme.test', 'Alice Liddell');
+    const details = webauthn.signals.slice(before);
+    expect(details).toEqual([{ kind: 'details', rpId: 'localhost', userId: expect.any(String) as unknown, name: 'alice@acme.test', displayName: 'Alice Liddell' }]);
+  });
+
   it('tells the browser to stop offering a passkey Bridge does not know', async () => {
     const { fake } = issuerWithPeople({ methods: ['password', 'passkeys'] });
     const webauthn = fakeWebAuthn();
