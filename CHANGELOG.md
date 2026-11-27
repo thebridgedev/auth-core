@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **Clearer sign-in wording, in all 12 languages (proposed, for the owner's review).** One word for signing in ("Sign in", never "Log in"); errors say what happened and what to do next ("The link could not be sent. Try again in a moment."); a wrong password names the way out (reset); the reset screen says a link is on its way *if* the address has an account; the sign-up button says "Create account". Keys are unchanged.
+
 ### Added
 
 - **Signing out keeps people in the app, or where you choose: `logout()`.** `bridge.logout()` signs out here, in every tab and at Bridge (a copied token stops working), then goes where the app's settings on Bridge say, read from the sign-in options' `signOut` with nothing configured in the app: the sign-out address the app lists, or Bridge's sign-in page for an app whose users sign in there, else the app's own sign-in page (`signedOutPage`, `/auth/login` by default). `logout({ redirectTo })` goes to another page, only a path on this page's origin or an address on one of the app's browser origins as Bridge lists them (`signOut.origins`, wildcards matched as Bridge matches them): any other address is refused and the default is used. When the options cannot be read within 3 seconds, the sign-out still happens and goes to `signedOutPage`. `appOrigins` is no longer needed and is read for one more release. `logout({ silent: true })` signs out without leaving the page, so the app shows its own signed-out view. `signed-out` is heard in every case. `navigate` lets a framework plugin use its router, and `ownDestination()` is the check the plugins share.
