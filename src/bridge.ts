@@ -56,13 +56,14 @@ export interface BridgeOptions {
    */
   readonly language?: string | (() => string | undefined);
   /**
-   * The app's own origins, besides this page's, that `logout({ redirectTo })` may send a person to (for an app on
-   * several addresses). Any other address is refused. @default none: only this page's origin
+   * @deprecated Not needed: `logout({ redirectTo })` takes the app's browser origins from Bridge (the sign-in options'
+   * `signOut.origins`). Still read for one release: the origins listed here are allowed too.
    */
   readonly appOrigins?: readonly string[];
   /**
-   * Where `logout()` goes when it is given no destination, or one it refuses: the app's own sign-in page, as a path on
-   * this page's origin or an address on one of `appOrigins`. @default '/auth/login'
+   * The app's own sign-in page, where `logout()` goes when Bridge names no sign-out page (the app's settings list no
+   * sign-out address and its users sign in in the app) and it is given no destination, or one it refuses: a path on
+   * this page's origin. @default '/auth/login'
    */
   readonly signedOutPage?: string;
   /**
@@ -202,6 +203,8 @@ export function createBridge(options: BridgeOptions) {
     pageOrigin: () => (typeof location !== 'undefined' && typeof location.origin === 'string' && location.origin !== 'null' ? location.origin : null),
     appOrigins: options.appOrigins ?? [],
     signedOutPage: options.signedOutPage ?? '/auth/login',
+    // Where to go, from Bridge: the sign-in options' `signOut`, read when signing out.
+    settings: async () => (await flows.signIn.options()).signOut,
     navigate: options.navigate === undefined ? defaultNavigate : options.navigate,
   });
   const accounts = createAccounts({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh() });

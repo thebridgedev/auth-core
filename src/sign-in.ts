@@ -227,7 +227,13 @@ export interface SignInOptions {
   /** The password's rules, to show before anyone types. Absent when the app does not offer passwords. */
   readonly password?: PasswordRules;
   /** The social providers the app offers a button for, such as `google` and `github`. */
-  readonly social?: readonly SocialProvider[];
+  readonly social?: readonly SocialProvider[];  /**
+   * Where the app's own pages send a person after signing out: `page`, the sign-out address the app lists,
+   * or Bridge's sign-in page for an app whose users sign in there, or null for the app's own sign-in page; `origins`,
+   * the app's browser origins as saved, the only sites besides the page's own a chosen `redirectTo` may be on.
+   * `logout()` reads it; nothing in the app needs to.
+   */
+  readonly signOut?: { readonly page: string | null; readonly origins: readonly string[] };
 }
 
 /** The social sign-in providers Bridge offers. */

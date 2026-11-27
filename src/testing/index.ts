@@ -46,6 +46,11 @@ export interface FakeIssuerOptions {
   /** The two pages the sign-in options list as `signUpNotice` (the terms line). @default none: no line */
   readonly signUpNotice?: { readonly terms: string; readonly privacy: string };
   /**
+   * What the sign-in options say about signing out: a value, or a function asked on each read, so a test can
+   * change it, fail it (throw: the options answer 503) or hold it (a promise that never settles). @default none listed
+   */
+  readonly signOut?: { readonly page: string | null; readonly origins: readonly string[] } | (() => { readonly page: string | null; readonly origins: readonly string[] } | Promise<{ readonly page: string | null; readonly origins: readonly string[] }>);
+  /**
    * Routes that want a recent sign-in, as `"METHOD /v2/path"`: called with a
    * token whose sign-in is older than `maxAgeSeconds` they answer 401
    * `identity-recheck`, as Bridge's do. See `signedInLongAgo`. @default none
@@ -514,7 +519,15 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         signInRequests.set(id, { challenge: body['code_challenge'], redirectUri: body['redirect_uri'], state: body['state'], linkAddress: typeof body['link_address'] === 'string' ? body['link_address'] : `${origin}/sign-in/${appId}/`, expiresAt: now() + 10 * 60 * 1000, used: false });
         return json(201, { request: id, expires_in: 600 });
       }
-      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, social, ...(options.signUpNotice === undefined ? {} : { signUpNotice: options.signUpNotice }), ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}) });
+      if (route === '/sign-in-options' && method === 'GET') {
+        let signOut: { readonly page: string | null; readonly origins: readonly string[] } | undefined;
+        try {
+          signOut = typeof options.signOut === 'function' ? await options.signOut() : options.signOut;
+        } catch {
+          return json(503, { error: 'temporarily_unavailable', error_description: "The app's settings could not be read right now." });
+        }
+        return json(200, { app: { id: appId }, signUp: true, methods, social, ...(options.signUpNotice === undefined ? {} : { signUpNotice: options.signUpNotice }), ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}), ...(signOut === undefined ? {} : { signOut }) });
+      }
       if (route === '/social/start') {
         const provider = String(body['provider']);
         if (!social.includes(provider)) return oauth(403, 'method_disabled');
