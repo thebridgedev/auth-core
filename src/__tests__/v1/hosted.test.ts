@@ -19,12 +19,11 @@ const requestOf = (address: string) => new URL(address).searchParams.get('reques
 
 describe('link required on the hosted page (D24)', () => {
   it('a sign-in on a request carries the provider link this device holds, with its verifier; a sign-in elsewhere does not', async () => {
-    const { fake, app } = setUp();
-    fake.social?.(['facebook']);
+    const { fake } = issuerWithPeople({ returns: [RETURN], social: ['facebook'] });
+    const app = clientOn(fake, { storage: memoryStorage(), signUpStorage: memoryStorage() });
     const storage = memoryStorage();
     const hosted = clientOn(fake, { storage: memoryStorage(), signUpStorage: storage });
-    const url = await hosted.social.start('facebook', { returnPage: 'https://app.acme.test/auth' }).catch(() => null);
-    if (url === null) return;
+    const url = await hosted.social.start('facebook', { returnPage: 'https://app.acme.test/auth' });
     const answer = readSocialReturn(fake.socialReturn(url, { email: 'alice@acme.test', unconfirmed: true }));
     await hosted.social.finish(answer!);
     const address = await app.hosted.start({ redirectUri: RETURN });
