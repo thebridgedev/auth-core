@@ -81,6 +81,7 @@ export interface BridgeErrorInit {
   readonly signInUrl?: string | null;
   readonly failed?: readonly string[] | null;
   readonly reason?: string | null;
+  readonly triesLeft?: number | null;
   readonly cause?: unknown;
 }
 
@@ -116,9 +117,12 @@ export class BridgeError extends Error {
   /**
    * For `microsoft_account_not_allowed`: `personal`, `work` or `directory` (who can sign in turned the account away). For
    * `provider_error`: what Microsoft's error means, when Bridge knows it (`secret_expired`, `wrong_return_address`,
-   * `wrong_account_types`, `app_not_in_directory`, `admin_approval_needed`).
+   * `wrong_account_types`, `app_not_in_directory`, `admin_approval_needed`). For `password_change_required`: `expired`
+   * when the password is older than the app allows, absent when the app's rules changed.
    */
   readonly reason: string | null;
+  /** For `wrong_code` (an email code or a second step's code): how many tries the code has left; 0 means ask for a new one. */
+  readonly triesLeft: number | null;
 
   constructor(kind: BridgeErrorKind, message: string, init: BridgeErrorInit = {}) {
     super(message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -133,6 +137,7 @@ export class BridgeError extends Error {
     this.signInUrl = init.signInUrl ?? null;
     this.failed = init.failed ?? null;
     this.reason = init.reason ?? null;
+    this.triesLeft = init.triesLeft ?? null;
   }
 }
 
@@ -208,6 +213,28 @@ export function isPasswordChangeRequired(error: unknown): boolean {
   return isBridgeError(error) && error.code === 'password_change_required';
 }
 
+/**
+ * Whether Bridge refused a sign-in with the right password because it has expired: the app makes passwords
+ * expire, and this one is older than it allows. Bridge has already emailed a link to choose a new one. Also
+ * `isPasswordChangeRequired`.
+ */
+export function isPasswordExpired(error: unknown): boolean {
+  return isPasswordChangeRequired(error) && (error as BridgeError).reason === 'expired';
+}
+
+/**
+ * The refusals of a typed code (an email code, or a second step's code), by name: `wrong` with the tries left, `expired`
+ * (too old, or tried too many times: ask for a new one), `too-soon` (a new code was asked for within its wait, with the
+ * seconds left), or null for any other error.
+ */
+export function codeRefusal(error: unknown): { readonly reason: 'wrong'; readonly triesLeft: number | null } | { readonly reason: 'expired' } | { readonly reason: 'too-soon'; readonly retryAfterSeconds: number | null } | null {
+  if (!isBridgeError(error)) return null;
+  if (error.code === 'wrong_code') return error.triesLeft === 0 ? { reason: 'expired' } : { reason: 'wrong', triesLeft: error.triesLeft };
+  if (error.code === 'code_expired') return { reason: 'expired' };
+  if (error.code === 'too_soon') return { reason: 'too-soon', retryAfterSeconds: error.retryAfterSeconds };
+  return null;
+}
+
 /** Why a checkout could not start because of how the app is set up (no return address, or one that is not registered), or null. */
 export function checkoutSetupProblem(error: unknown): 'no-return-url' | 'return-url-not-registered' | null {
   if (!isBridgeError(error)) return null;
@@ -239,6 +266,11 @@ const CODE_KINDS: Readonly<Record<string, BridgeErrorKind>> = {
   unknown_passkey: 'wrong-credentials',
   // A passkey or security key that did no fingerprint, face or PIN check: the person can fix it, so it is told apart.
   passkey_needs_verification: 'invalid',
+  // Typed codes: a wrong one, one too old or tried too often, a new one asked for too soon.
+  wrong_code: 'invalid',
+  code_expired: 'invalid',
+  wrong_recovery_code: 'invalid',
+  too_soon: 'rate-limited',
   // Social sign-in: who can sign in with Microsoft turned the account away; the provider refused, with a known cause or not.
   microsoft_account_not_allowed: 'forbidden',
   provider_error: 'unavailable',
@@ -310,7 +342,8 @@ function text(value: unknown): string | undefined {
  */
 export function errorFromAnswer(status: number, body: unknown, headers?: { get(name: string): string | null }): BridgeError {
   const record = body !== null && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
-  const retryAfterSeconds = parseRetryAfter(headers?.get('retry-after'));
+  // A browser reads `Retry-After` only when Bridge exposes it to the page: the body's `retry_after` says the same.
+  const retryAfterSeconds = parseRetryAfter(headers?.get('retry-after')) ?? (typeof record['retry_after'] === 'number' && record['retry_after'] >= 0 ? Math.ceil(record['retry_after']) : null);
   const challenge = headers?.get('www-authenticate') ?? '';
 
   // OAuth's shape: sign-in and the token endpoint.
@@ -328,7 +361,8 @@ export function errorFromAnswer(status: number, body: unknown, headers?: { get(n
     const handOverTo = oauth === 'passkey_on_app_page' ? webAddress(record['sign_in_url']) : null;
     const failed = Array.isArray(record['failed']) ? record['failed'].filter((each): each is string => typeof each === 'string') : null;
     // These keep their own code, and carry the reason beside it.
-    const ownCode = oauth === 'microsoft_account_not_allowed' || oauth === 'provider_error';
+    // A password that must change keeps its code too: its reason (`expired`) only says why.
+    const ownCode = oauth === 'microsoft_account_not_allowed' || oauth === 'provider_error' || oauth === 'password_change_required';
     return new BridgeError(kind, message, {
       status,
       code: ownCode ? oauth : (reason ?? oauth),
@@ -336,6 +370,7 @@ export function errorFromAnswer(status: number, body: unknown, headers?: { get(n
       retryAfterSeconds,
       ...(handOverTo === null ? {} : { signInUrl: handOverTo }),
       ...((oauth === 'password_change_required' || oauth === 'password_rules') && failed !== null ? { failed } : {}),
+      ...(typeof record['tries_left'] === 'number' ? { triesLeft: Math.max(0, Math.floor(record['tries_left'])) } : {}),
     });
   }
 

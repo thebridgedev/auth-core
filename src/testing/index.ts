@@ -22,6 +22,10 @@ export interface FakePerson {
   readonly workspaces: { id: string; name: string; role: string; mfa?: boolean }[];
   /** The phone number the text-message second step goes to; none until set up. */
   phone?: string | null;
+  /** With `mfa`: whether an authenticator app is set up (its current code: `authenticatorCode`). */
+  totp?: boolean;
+  /** With `mfa`: whether the person turned two-step verification on for themselves. */
+  mfaSelf?: boolean;
 }
 
 export interface FakeIssuerOptions {
@@ -71,6 +75,14 @@ export interface FakeIssuerOptions {
    * url, signedOutUrl }`. @default none (an app from before the setting)
    */
   readonly signIn?: Readonly<Record<string, unknown>>;
+  /** How the app's emails prove the address: `code` (six-digit codes, `lastCode`) or `link`. @default 'link' */
+  readonly emailConfirmation?: 'code' | 'link';
+  /**
+   * Two-step verification with its ways (an authenticator app, an email code, a text): set, a workspace with `mfa: true`,
+   * a person who turned it on, or every sign-in (`requiredIn: 'all'`) asks for the first way the person may use, and the
+   * Security settings routes answer. Unset, the second step is the text message only, as before.
+   */
+  readonly mfa?: { readonly methods?: readonly ('totp' | 'email' | 'sms')[]; readonly rememberDeviceDays?: number; readonly requiredIn?: 'workspaces' | 'all' };
 }
 
 /** A Child App's sign-in request, held by the issuer: its challenge, return and state. */
@@ -203,8 +215,25 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   /** The providers linked to each person by a waiting link. */
   const linked = new Map<string, string[]>();
   const socialCodes = new Map<string, { email: string; verified: boolean; unconfirmed: boolean; state: string }>();
-  const secondSteps = new Map<string, { user: string; challenge: string; workspace: string; request?: SignInRequest; code: string | null; tries: number; settingUp: string | null }>();
+  const secondSteps = new Map<string, { user: string; challenge: string; workspace: string | null; request?: SignInRequest; code: string | null; tries: number; settingUp: string | null; method?: string; settingUpTotp?: boolean; amr?: string; sentAt?: number }>();
   const sentTexts: { to: string; code: string }[] = [];
+  // Email codes: each flow's code, what it is for, and every code "emailed".
+  const emailFlows = new Map<string, { purpose: 'sign-in' | 'sign-up' | 'reset'; email: string; challenge: string | null; code: string | null; tries: number; sentAt: number; expiresAt: number; request?: SignInRequest; signUp?: { password: string | null; firstName: string | null; lastName: string | null; workspace: string | boolean | null }; verified: boolean }>();
+  const sentCodes: { to: string; purpose: string; code: string }[] = [];
+  // Two-step verification with its ways: each person's authenticator code, recovery codes, remembered devices, order.
+  const mfa = options.mfa;
+  const mfaMethods = mfa?.methods ?? ['totp', 'email'];
+  const rememberDays = mfa?.rememberDeviceDays ?? 30;
+  const authenticator = new Map<string, string>();
+  const recoveryCodes = new Map<string, string[]>();
+  const devices = new Map<string, Set<string>>();
+  const firstWay = new Map<string, string>();
+  const pendingSecurity = new Map<string, { totp?: boolean; phone?: string; code?: string }>();
+  const expiredPasswords = new Set<string>();
+  const previousPasswords = new Map<string, string[]>();
+  const newCode = () => String(100000 + Math.floor(Math.random() * 900000));
+  const maskEmail = (email: string) => `${email.slice(0, 1)}…${email.slice(email.indexOf('@'))}`;
+  const emailConfirmation = options.emailConfirmation ?? 'link';
   const social = options.social ?? [];
   const returns = options.returns ?? [];
   const signInRequests = new Map<string, SignInRequest>();
@@ -271,6 +300,12 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           ...(returns.length === 0 ? {} : { sign_in_page: `${origin}/sign-in/${appId}/`, sign_in_requests: `${at}/sign-in-requests` }),
           magic_link: `${at}/magic-link`,
           magic_link_verify: `${at}/magic-link/verify`,
+          email_code: `${at}/email-code`,
+          email_code_verify: `${at}/email-code/verify`,
+          sign_up_code: `${at}/sign-up/code`,
+          password_forgot_verify: `${at}/password/forgot/verify`,
+          security: `${v2}/identity-access/second-step`,
+          password_change: `${v2}/identity-access/password/change`,
           passkey_sign_in_options: `${at}/passkeys/sign-in/options`,
           passkey_sign_in: `${at}/passkeys/sign-in`,
           passkey_setup_link: `${at}/passkeys/setup-link`,
@@ -355,7 +390,58 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     return json(200, { next: 'second_step', flow: handle, phone: `${phone.slice(0, 3)} •••• ${phone.slice(-2)}`, sent: true });
   }
 
-  function toWorkspace(person: FakePerson, challenge: string, requested: string | null, request?: SignInRequest, sms = false): Response {
+  /** The ways of the second step a person may use now, the first one first (an email code only after another first factor). */
+  function usableWays(person: FakePerson, amr: string): string[] {
+    const has: Record<string, boolean> = { totp: person.totp === true, sms: typeof person.phone === 'string', email: amr !== 'email' };
+    const order = [firstWay.get(person.id), 'totp', 'sms', 'email'].filter((each): each is string => each !== undefined);
+    return [...new Set(order)].filter((method) => mfaMethods.includes(method as 'totp') && has[method]);
+  }
+
+  /** Asks for the second step by `method`, as Bridge does: the app's code, or a code sent by email or text. */
+  function askWay(handle: string, person: FakePerson, method: string): Response {
+    const step = secondSteps.get(handle);
+    if (step === undefined) return oauth(400, 'flow_expired');
+    const others = { methods: usableWays(person, step.amr ?? 'pwd'), remember_days: rememberDays, recovery: (recoveryCodes.get(person.id)?.length ?? 0) > 0 };
+    step.method = method;
+    step.code = null;
+    step.tries = 0;
+    if (method === 'totp') return json(200, { next: 'second_step', flow: handle, method, ...others });
+    if (method === 'sms') {
+      const texted = textCode(handle, person.phone ?? '');
+      step.method = 'sms';
+      return json(200, { next: 'second_step', flow: handle, method, phone: `${(person.phone ?? '').slice(0, 3)} •••• ${(person.phone ?? '').slice(-2)}`, sent: texted.ok, expires_in: 600, ...others });
+    }
+    step.code = newCode();
+    step.sentAt = now();
+    sentCodes.push({ to: person.email, purpose: 'second-step', code: step.code });
+    return json(200, { next: 'second_step', flow: handle, method: 'email', email: maskEmail(person.email), sent: true, expires_in: 600, resend_in: 60, ...others });
+  }
+
+  /** Ten recovery codes, made the first time a way is set up. */
+  function giveRecovery(person: FakePerson): string[] | null {
+    if ((recoveryCodes.get(person.id)?.length ?? 0) > 0) return null;
+    const made = Array.from({ length: 10 }, (_, index) => `RC${String(index).padStart(2, '0')}-${secret().slice(0, 4).toUpperCase()}`);
+    recoveryCodes.set(person.id, [...made]);
+    return made;
+  }
+
+  function securityView(person: FakePerson) {
+    return {
+      available: true,
+      requiredIn: mfa?.requiredIn ?? 'workspaces',
+      allowed: mfaMethods,
+      on: person.mfaSelf === true || mfa?.requiredIn === 'all',
+      self: person.mfaSelf === true,
+      methods: usableWays(person, 'pwd').map((method, index) => ({ method, first: index === 0, ...(method === 'sms' ? { phone: `${(person.phone ?? '').slice(0, 3)} •••• ${(person.phone ?? '').slice(-2)}`, setUpAt: null } : {}), ...(method === 'totp' ? { setUpAt: null } : {}), ...(method === 'email' ? { email: maskEmail(person.email) } : {}) })),
+      setUp: person.totp === true || typeof person.phone === 'string',
+      recoveryCodesLeft: recoveryCodes.get(person.id)?.length ?? 0,
+      rememberedDevices: devices.get(person.id)?.size ?? 0,
+      rememberDeviceDays: rememberDays,
+      strongest: 'totp',
+    };
+  }
+
+  function toWorkspace(person: FakePerson, challenge: string, requested: string | null, request?: SignInRequest, sms = false, proof: { amr?: string; device?: unknown } = {}): Response {
     let workspace = requested;
     if (workspace === null) {
       if (person.workspaces.length > 1) {
@@ -366,8 +452,21 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       workspace = person.workspaces[0]?.id ?? null;
     }
     if (workspace !== null && !person.workspaces.some((each) => each.id === workspace)) return oauth(403, 'access_denied', { reason: 'not_a_member' });
+    // Two-step verification with its ways: a remembered device skips it; otherwise the first way the person may use, or a setup.
+    const wanted = mfa !== undefined && !sms && (mfa.requiredIn === 'all' || person.mfaSelf === true || person.workspaces.some((each) => each.id === workspace && each.mfa === true));
+    if (wanted && !(typeof proof.device === 'string' && devices.get(person.id)?.has(proof.device) === true)) {
+      const handle = secret();
+      secondSteps.set(handle, { user: person.id, challenge, workspace, ...(request === undefined ? {} : { request }), code: null, tries: 0, settingUp: null, amr: proof.amr ?? 'pwd' });
+      const usable = usableWays(person, proof.amr ?? 'pwd');
+      if (usable.length === 0) {
+        const setup = mfaMethods.filter((each) => each !== 'email');
+        if (setup.length === 0) return oauth(403, 'second_step_unavailable', { error_description: "This account has no way to finish the second step that the app allows. Ask the app's admin to reset your two-step verification." });
+        return json(200, { next: 'second_step_setup', flow: handle, methods: setup });
+      }
+      return askWay(handle, person, usable[0] as string);
+    }
     // A workspace that requires a second step: a code by text message first, on an app that offers it.
-    if (workspace !== null && !sms && person.workspaces.some((each) => each.id === workspace && each.mfa === true)) {
+    if (mfa === undefined && workspace !== null && !sms && person.workspaces.some((each) => each.id === workspace && each.mfa === true)) {
       if (options.secondStep === false) return oauth(403, 'insufficient_user_authentication', { needs: 'second_step' });
       const handle = secret();
       secondSteps.set(handle, { user: person.id, challenge, workspace, ...(request === undefined ? {} : { request }), code: null, tries: 0, settingUp: null });
@@ -495,6 +594,167 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     return { fetchAgain: false, notices: frames, cursor: frames.at(-1)?.cursor ?? cursor };
   }
 
+  /** Starts an email code: the code screen, the same whether or not a code was sent. */
+  function codeScreen(purpose: 'sign-in' | 'sign-up' | 'reset', email: string, challenge: string | null, send: boolean, request?: SignInRequest, signUp?: { password: string | null; firstName: string | null; lastName: string | null; workspace: string | boolean | null }): Response {
+    const handle = secret();
+    const code = send ? newCode() : null;
+    emailFlows.set(handle, { purpose, email, challenge, code, tries: 0, sentAt: now(), expiresAt: now() + 600_000, ...(request === undefined ? {} : { request }), ...(signUp === undefined ? {} : { signUp }), verified: false });
+    if (code !== null) sentCodes.push({ to: email, purpose, code });
+    return json(202, { next: 'verify_code', flow: handle, email: maskEmail(email), expires_in: 600, resend_in: 60 }, { 'cache-control': 'no-store' });
+  }
+
+  /** A typed email code, checked as Bridge does: five tries, 10 minutes, on the device that asked. The flow, or why not. */
+  async function checkCode(body: Record<string, unknown>, purpose: string, needsDevice: boolean): Promise<Response | { handle: string; flow: NonNullable<ReturnType<typeof emailFlows.get>> }> {
+    const handle = String(body['flow']);
+    const flow = emailFlows.get(handle);
+    if (flow === undefined || flow.purpose !== purpose) return oauth(400, 'flow_expired', { error_description: 'This has expired. Start again.' });
+    if (needsDevice) {
+      const presented = typeof body['code_verifier'] === 'string' ? await s256(body['code_verifier']) : null;
+      if (presented !== flow.challenge) return oauth(400, 'wrong_device', { error_description: 'Type the code on the device you asked for it on.' });
+    }
+    if (flow.verified && body['code'] === undefined) return { handle, flow };
+    if (flow.tries >= 5 || flow.expiresAt <= now()) return oauth(400, 'code_expired', { error_description: 'The code has expired or was tried too many times. Ask for a new one.' });
+    flow.tries += 1;
+    if (flow.code === null || String(body['code']) !== flow.code) {
+      const left = 5 - flow.tries;
+      return oauth(400, 'wrong_code', { error_description: left > 0 ? `Wrong code, ${String(left)} ${left === 1 ? 'try' : 'tries'} left.` : 'Wrong code. It was tried too many times: ask for a new one.', tries_left: left });
+    }
+    flow.verified = true;
+    return { handle, flow };
+  }
+
+  /** The email-code routes: a sign-in's, a sign-up's and forgot password's, with their new codes. Null for any other route. */
+  async function emailCodeRoute(route: string, body: Record<string, unknown>): Promise<Response | null> {
+    const resend = (purpose: string) => {
+      const flow = emailFlows.get(String(body['flow']));
+      if (flow === undefined || flow.purpose !== purpose) return oauth(400, 'flow_expired');
+      const wait = Math.ceil((flow.sentAt + 60_000 - now()) / 1000);
+      if (wait > 0) return oauth(429, 'too_soon', { error_description: `You can ask for a new code in ${String(wait)} seconds.`, retry_after: wait });
+      flow.sentAt = now();
+      flow.tries = 0;
+      flow.expiresAt = now() + 600_000;
+      if (flow.code !== null) {
+        flow.code = newCode();
+        sentCodes.push({ to: flow.email, purpose, code: flow.code });
+      }
+      return json(202, { next: 'verify_code', flow: String(body['flow']), email: maskEmail(flow.email), expires_in: 600, resend_in: 60 });
+    };
+    if (route === '/email-code') {
+      if (!methods.includes('magicLink')) return oauth(403, 'method_disabled');
+      if (emailConfirmation !== 'code') return oauth(403, 'method_disabled', { error_description: 'The app sends sign-in links, not codes.' });
+      if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string') return oauth(400, 'invalid_request');
+      const request = openRequest(body);
+      if (request instanceof Response) return request;
+      const email = String(body['email']).toLowerCase();
+      return codeScreen('sign-in', email, body['code_challenge'], [...people.values()].some((each) => each.email === email), request);
+    }
+    if (route === '/email-code/resend') return resend('sign-in');
+    if (route === '/sign-up/resend') return resend('sign-up');
+    if (route === '/password/forgot/resend') return resend('reset');
+    if (route === '/email-code/verify') {
+      const checked = await checkCode(body, 'sign-in', true);
+      if (checked instanceof Response) return checked;
+      emailFlows.delete(checked.handle);
+      const person = [...people.values()].find((each) => each.email === checked.flow.email) as FakePerson;
+      if (checked.flow.request !== undefined) {
+        if (checked.flow.request.used) return oauth(400, 'invalid_request_uri');
+        checked.flow.request.used = true;
+      }
+      return toWorkspace(person, checked.flow.request?.challenge ?? (checked.flow.challenge as string), null, checked.flow.request, false, { amr: 'email', device: body['device'] });
+    }
+    if (route === '/sign-up/code') {
+      const checked = await checkCode(body, 'sign-up', true);
+      if (checked instanceof Response) return checked;
+      const pending = checked.flow.signUp;
+      if (pending === undefined) return oauth(400, 'invalid_link');
+      let password = pending.password;
+      if (password === null && methods.includes('password')) {
+        if (typeof body['password'] !== 'string') return oauth(400, 'password_required', { error_description: 'Choose a password to finish signing up.', verified: true, password: { minLength: 8, maxLength: 128 } });
+        if ([...body['password']].length < 8) return oauth(400, 'password_rules', { error_description: 'Use at least 8 characters.', failed: ['minLength'] });
+        password = body['password'];
+      }
+      emailFlows.delete(checked.handle);
+      const workspaces = pending.workspace === null ? [] : [{ id: id('ws'), name: typeof pending.workspace === 'string' ? pending.workspace : '', role: 'OWNER' }];
+      const person = addPerson({ email: checked.flow.email, password: password ?? secret(), firstName: pending.firstName, lastName: pending.lastName, workspaces });
+      if (checked.flow.request !== undefined) checked.flow.request.used = true;
+      return toWorkspace(person, checked.flow.request?.challenge ?? (checked.flow.challenge as string), workspaces[0]?.id ?? null, checked.flow.request, false, { amr: 'email' });
+    }
+    if (route === '/password/forgot/verify') {
+      const checked = await checkCode(body, 'reset', false);
+      if (checked instanceof Response) return checked;
+      emailFlows.delete(checked.handle);
+      const token = secret();
+      links.set(token, { purpose: 'reset', email: checked.flow.email });
+      return json(200, { next: 'reset_password', token, expires_in: 600 }, { 'cache-control': 'no-store' });
+    }
+    return null;
+  }
+
+  /** The second step with its ways: a code, a recovery code, another way, an authenticator app set up on the way, a new code. */
+  async function secondStepWays(route: string, handle: string, step: NonNullable<ReturnType<typeof secondSteps.get>>, person: FakePerson, body: Record<string, unknown>): Promise<Response> {
+    if (route === '/second-step/method') {
+      const chosen = String(body['method']);
+      if (!usableWays(person, step.amr ?? 'pwd').includes(chosen)) return oauth(400, 'method_not_allowed');
+      return askWay(handle, person, chosen);
+    }
+    if (route === '/second-step/setup') {
+      if (body['method'] === 'totp') {
+        if (!mfaMethods.includes('totp')) return oauth(400, 'method_not_allowed');
+        step.settingUpTotp = true;
+        step.method = 'totp';
+        authenticator.set(person.id, newCode());
+        return json(200, { next: 'second_step', flow: handle, method: 'totp', setup: { secret: 'JBSW Y3DP EHPK 3PXP', uri: `otpauth://totp/Fake:${encodeURIComponent(person.email)}?secret=JBSWY3DPEHPK3PXP&issuer=Fake` } });
+      }
+      const phone = String(body['phone']).replace(/[\s\-().]/g, '');
+      if (!/^\+[1-9]\d{6,14}$/.test(phone)) return oauth(400, 'invalid_phone', { error_description: 'Enter your phone number with its country code, such as +46 70 123 45 67.' });
+      step.settingUp = phone;
+      step.method = 'sms';
+      return textCode(handle, phone);
+    }
+    if (route === '/second-step/resend') {
+      if (step.method === 'totp') return oauth(400, 'invalid_request', { error_description: 'An authenticator app makes its own codes: open it for the current one.' });
+      if (step.method === 'email') {
+        const wait = Math.ceil(((step.sentAt ?? 0) + 60_000 - now()) / 1000);
+        if (wait > 0) return oauth(429, 'too_soon', { error_description: `You can ask for a new code in ${String(wait)} seconds.`, retry_after: wait });
+        return askWay(handle, person, 'email');
+      }
+      return textCode(handle, step.settingUp ?? person.phone ?? '');
+    }
+    if (route === '/second-step/reset') return oauth(400, 'invalid_request');
+    const extras: Record<string, unknown> = {};
+    if (typeof body['recovery_code'] === 'string') {
+      const left = recoveryCodes.get(person.id) ?? [];
+      if (!left.includes(body['recovery_code'])) return oauth(400, 'wrong_recovery_code', { error_description: 'That recovery code is not right, or it was used already.' });
+      recoveryCodes.set(person.id, left.filter((each) => each !== body['recovery_code']));
+      extras['recovery_codes_left'] = left.length - 1;
+    } else {
+      if (step.tries >= 5) return oauth(400, 'code_expired', { error_description: 'The code has expired or was tried too many times. Ask for a new one.' });
+      step.tries += 1;
+      const expected = step.method === 'totp' ? (authenticator.get(person.id) ?? null) : step.code;
+      if (expected === null || body['code'] !== expected) return oauth(400, 'wrong_code', { error_description: 'The code is not right.', tries_left: 5 - step.tries });
+      if (step.settingUpTotp === true) {
+        person.totp = true;
+        firstWay.set(person.id, 'totp');
+      }
+      if (step.settingUp !== null) {
+        person.phone = step.settingUp;
+        firstWay.set(person.id, 'sms');
+      }
+      if (step.settingUpTotp === true || step.settingUp !== null) {
+        const recovery = giveRecovery(person);
+        if (recovery !== null) extras['recovery_codes'] = recovery;
+      }
+    }
+    if (body['remember'] === true && rememberDays > 0) {
+      const device = secret() + secret();
+      devices.set(person.id, new Set([...(devices.get(person.id) ?? []), device]));
+      Object.assign(extras, { remember_device: device, remember_days: rememberDays });
+    }
+    secondSteps.delete(handle);
+    const answer = toWorkspace(person, step.challenge, step.workspace, step.request, true);
+    return json(answer.status, { ...((await answer.json()) as object), ...extras });
+  }
+
   async function handle(method: string, url: URL, headers: Headers, body: Record<string, unknown>): Promise<Response> {
     const path = url.pathname;
     if (method === 'GET' && path === `/identity-access/apps/${appId}/.well-known/openid-configuration`) return json(200, metadata());
@@ -506,7 +766,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           const flow = flows.get(body['flow']);
           flows.delete(body['flow']);
           if (flow === undefined) return oauth(400, 'flow_expired');
-          return toWorkspace(people.get(flow.user) as FakePerson, flow.challenge, String(body['workspace']), flow.request);
+          return toWorkspace(people.get(flow.user) as FakePerson, flow.challenge, String(body['workspace']), flow.request, false, { device: body['device'] });
         }
         const request = openRequest(body);
         if (request instanceof Response) return request;
@@ -522,8 +782,14 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           sentLinks.push({ to: person.email, purpose: 'reset-password', token });
           return oauth(403, 'password_change_required', { error_description: "This app's password rules changed and your password no longer meets them. A link to choose a new one was sent to your address.", failed: broken, next: 'reset_password' });
         }
+        if (expiredPasswords.has(person.email)) {
+          const token = secret();
+          links.set(token, { purpose: 'reset', email: person.email });
+          sentLinks.push({ to: person.email, purpose: 'reset-password', token });
+          return oauth(403, 'password_change_required', { reason: 'expired', error_description: "Your password has expired. We've sent you a link to choose a new one.", failed: [], next: 'reset_password' });
+        }
         if (request !== undefined) request.used = true;
-        return toWorkspace(person, request?.challenge ?? String(body['code_challenge']), typeof body['workspace'] === 'string' ? body['workspace'] : null, request);
+        return toWorkspace(person, request?.challenge ?? String(body['code_challenge']), typeof body['workspace'] === 'string' ? body['workspace'] : null, request, false, { amr: 'pwd', device: body['device'] });
       }
       if (route === '/sign-in-requests' && returns.length > 0) {
         if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body['code_challenge'])) return oauth(400, 'invalid_request');
@@ -533,7 +799,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         signInRequests.set(id, { challenge: body['code_challenge'], redirectUri: body['redirect_uri'], state: body['state'], linkAddress: typeof body['link_address'] === 'string' ? body['link_address'] : `${origin}/sign-in/${appId}/`, expiresAt: now() + 10 * 60 * 1000, used: false });
         return json(201, { request: id, expires_in: 600 });
       }
-      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, social, ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}), ...(options.signIn === undefined ? {} : { signIn: options.signIn }) });
+      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, social, ...(options.emailConfirmation === undefined ? {} : { emailConfirmation }), ...(mfa === undefined ? {} : { secondStep: { on: true, methods: mfaMethods, rememberDeviceDays: rememberDays } }), ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}), ...(options.signIn === undefined ? {} : { signIn: options.signIn }) });
       if (route === '/social/start') {
         const provider = String(body['provider']);
         if (!social.includes(provider)) return oauth(403, 'method_disabled');
@@ -584,6 +850,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         const step = secondSteps.get(handle);
         if (step === undefined) return oauth(400, 'flow_expired');
         const person = people.get(step.user) as FakePerson;
+        if (mfa !== undefined) return secondStepWays(route, handle, step, person, body);
         if (route === '/second-step/setup') {
           const phone = String(body['phone']).replace(/[\s\-().]/g, '');
           if (!/^\+[1-9]\d{6,14}$/.test(phone)) return oauth(400, 'invalid_phone', { error_description: 'Enter your phone number with its country code, such as +46 70 123 45 67.' });
@@ -642,8 +909,10 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         links.delete(String(body['token']));
         if (link.request !== undefined) link.request.used = true;
         const person = [...people.values()].find((each) => each.email === link.email) as FakePerson;
-        return toWorkspace(person, link.request?.challenge ?? (link.challenge as string), null, link.request);
+        return toWorkspace(person, link.request?.challenge ?? (link.challenge as string), null, link.request, false, { amr: 'email', device: body['device'] });
       }
+      const coded = await emailCodeRoute(route, body);
+      if (coded !== null) return coded;
       if (route.startsWith('/passkeys/') && !methods.includes('passkeys')) return oauth(403, 'method_disabled', { error_description: 'The app does not offer passkey sign-in.' });
       if (route === '/passkeys/sign-in/options') {
         if (options.passkeysBelongTo !== undefined && headers.get('origin') === origin) {
@@ -740,6 +1009,17 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         join(person, found);
         return toWorkspace(person, body['code_challenge'], found.workspace.id);
       }
+      if (route === '/sign-up' && emailConfirmation === 'code') {
+        const email = String(body['email']).toLowerCase();
+        const request = openRequest(body);
+        if (request instanceof Response) return request;
+        const exists = [...people.values()].some((each) => each.email === email);
+        return codeScreen('sign-up', email, String(body['code_challenge']), !exists, request, exists ? undefined : { password: typeof body['password'] === 'string' ? body['password'] : null, firstName: (body['firstName'] as string) ?? null, lastName: (body['lastName'] as string) ?? null, workspace: (body['workspace'] as string | boolean) ?? null });
+      }
+      if (route === '/password/forgot' && emailConfirmation === 'code') {
+        const email = String(body['email']).toLowerCase();
+        return codeScreen('reset', email, null, [...people.values()].some((each) => each.email === email));
+      }
       if (route === '/sign-up') {
         const email = String(body['email']).toLowerCase();
         const token = secret();
@@ -778,8 +1058,10 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (link?.purpose !== 'reset') return oauth(400, 'invalid_link');
         links.delete(String(body['token']));
         const person = [...people.values()].find((each) => each.email === link.email) as FakePerson;
+        previousPasswords.set(person.id, [person.password, ...(previousPasswords.get(person.id) ?? [])]);
         person.password = String(body['password']);
         mustChange.delete(person.email);
+        expiredPasswords.delete(person.email);
         for (const session of sessions.values()) if (session.user === person.id) endSession(session.id);
         return json(200, { done: true });
       }
@@ -839,6 +1121,86 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       links.set(token, { purpose: 'recheck', email: person.email, challenge: body['code_challenge'], session: session.id, expiresAt: now() + 15 * 60 * 1000 });
       sentLinks.push({ to: person.email, purpose: 'magic-link', token });
       return json(202, { next: 'verify_email' });
+    }
+    if (path === '/v2/identity-access/password/change' && method === 'POST') {
+      if (body['current'] !== undefined) {
+        if (body['current'] !== person.password) return oauth(400, 'wrong_password', { error_description: 'Your current password is not right.' });
+      } else if (now() - who.authTime > 600_000) {
+        return oauth(403, 'insufficient_user_authentication', { error_description: 'Sign in again to change your password.', max_age: 600 });
+      }
+      const chosen = String(body['password'] ?? '');
+      if ([...chosen].length < 8) return oauth(400, 'password_rules', { error_description: 'Use at least 8 characters.', failed: ['minLength'] });
+      if (chosen === person.password || (previousPasswords.get(person.id) ?? []).includes(chosen)) return oauth(400, 'password_rules', { error_description: "You've used this password recently. Choose a different one.", failed: ['history'] });
+      previousPasswords.set(person.id, [person.password, ...(previousPasswords.get(person.id) ?? [])]);
+      person.password = chosen;
+      expiredPasswords.delete(person.email);
+      for (const other of sessions.values()) if (other.user === person.id && other.id !== session.id) endSession(other.id);
+      return json(200, { done: true });
+    }
+    if (path.startsWith('/v2/identity-access/second-step') && mfa !== undefined) {
+      const rest = path.slice('/v2/identity-access/second-step'.length);
+      const pending = pendingSecurity.get(person.id) ?? {};
+      if (rest === '' && method === 'GET') return json(200, securityView(person));
+      if (rest === '' && method === 'PATCH') {
+        if (body['first'] !== undefined) {
+          if (!usableWays(person, 'pwd').includes(String(body['first']))) return oauth(400, 'method_not_allowed');
+          firstWay.set(person.id, String(body['first']));
+        }
+        if (body['on'] !== undefined) {
+          if (body['on'] === true && usableWays(person, 'pwd').length === 0) return oauth(400, 'set_up_first', { error_description: 'Set up an authenticator app or a phone first.', methods: mfaMethods.filter((each) => each !== 'email') });
+          person.mfaSelf = body['on'] === true;
+        }
+        return json(200, securityView(person));
+      }
+      if (rest === '/totp' && method === 'POST') {
+        if (!mfaMethods.includes('totp')) return oauth(400, 'method_not_allowed');
+        pendingSecurity.set(person.id, { ...pending, totp: true });
+        authenticator.set(person.id, newCode());
+        return json(200, { secret: 'JBSW Y3DP EHPK 3PXP', uri: `otpauth://totp/Fake:${encodeURIComponent(person.email)}?secret=JBSWY3DPEHPK3PXP&issuer=Fake`, expires_in: 600 });
+      }
+      if (rest === '/totp/confirm' && method === 'POST') {
+        if (pending.totp !== true) return oauth(400, 'code_expired');
+        if (body['code'] !== authenticator.get(person.id)) return oauth(400, 'wrong_code', { error_description: 'The code is not right.' });
+        person.totp = true;
+        firstWay.set(person.id, 'totp');
+        pendingSecurity.delete(person.id);
+        const recovery = giveRecovery(person);
+        return json(200, { ...securityView(person), ...(recovery === null ? {} : { recovery_codes: recovery }) });
+      }
+      if (rest === '/sms' && method === 'POST') {
+        if (!mfaMethods.includes('sms')) return oauth(400, 'method_not_allowed');
+        const phone = String(body['phone'] ?? '').replace(/[\s\-().]/g, '');
+        if (!/^\+[1-9]\d{6,14}$/.test(phone)) return oauth(400, 'invalid_phone', { error_description: 'Enter your phone number with its country code, such as +46 70 123 45 67.' });
+        const code = newCode();
+        sentTexts.push({ to: phone, code });
+        pendingSecurity.set(person.id, { ...pending, phone, code });
+        return json(200, { phone: `${phone.slice(0, 3)} •••• ${phone.slice(-2)}`, sent: true, expires_in: 600 });
+      }
+      if (rest === '/sms/confirm' && method === 'POST') {
+        if (pending.phone === undefined) return oauth(400, 'code_expired');
+        if (body['code'] !== pending.code) return oauth(400, 'wrong_code', { error_description: 'The code is not right.', tries_left: 4 });
+        person.phone = pending.phone;
+        firstWay.set(person.id, 'sms');
+        pendingSecurity.delete(person.id);
+        const recovery = giveRecovery(person);
+        return json(200, { ...securityView(person), ...(recovery === null ? {} : { recovery_codes: recovery }) });
+      }
+      if (rest === '/recovery-codes' && method === 'POST') {
+        if (person.totp !== true && typeof person.phone !== 'string') return oauth(400, 'set_up_first');
+        recoveryCodes.delete(person.id);
+        return json(200, { recovery_codes: giveRecovery(person) });
+      }
+      if (rest === '/devices' && method === 'DELETE') {
+        devices.delete(person.id);
+        return new Response(null, { status: 204 });
+      }
+      if ((rest === '/totp' || rest === '/sms') && method === 'DELETE') {
+        if (rest === '/totp' && person.totp === true) person.totp = false;
+        else if (rest === '/sms' && typeof person.phone === 'string') person.phone = null;
+        else return problem(404, 'not-found', '');
+        if (firstWay.get(person.id) === rest.slice(1)) firstWay.delete(person.id);
+        return json(200, securityView(person));
+      }
     }
     const forced = forcedAnswers.get(path);
     if (forced !== undefined) return json(forced.status, forced.body);
@@ -1022,7 +1384,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     return handle(request.method, url, request.headers, body);
   }) as typeof fetch;
 
-  function addPerson(person: { email: string; password: string; firstName?: string | null; lastName?: string | null; phone?: string | null; workspaces?: { id: string; name: string; role?: string; mfa?: boolean }[] }): FakePerson {
+  function addPerson(person: { email: string; password: string; firstName?: string | null; lastName?: string | null; phone?: string | null; totp?: boolean; mfaSelf?: boolean; workspaces?: { id: string; name: string; role?: string; mfa?: boolean }[] }): FakePerson {
     const made: FakePerson = {
       id: id('usr'),
       email: person.email.toLowerCase(),
@@ -1031,6 +1393,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       lastName: person.lastName ?? null,
       workspaces: (person.workspaces ?? []).map((each) => ({ id: each.id, name: each.name, role: each.role ?? 'MEMBER', ...(each.mfa === true ? { mfa: true } : {}) })),
       phone: person.phone ?? null,
+      ...(person.totp === true ? { totp: true } : {}),
+      ...(person.mfaSelf === true ? { mfaSelf: true } : {}),
     };
     people.set(made.id, made);
     return made;
@@ -1101,6 +1465,21 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     },
     /** The last second-step code texted to a number, or null. The backup code every setup gives is `BACK-UPCO-DE12`. */
     lastText: (to: string): string | null => [...sentTexts].reverse().find((each) => each.to === to)?.code ?? null,
+    /** The last code emailed to an address (`sign-in`, `sign-up`, `reset`, `second-step`; any when left out), or null. */
+    lastCode: (to: string, purpose?: string): string | null => [...sentCodes].reverse().find((each) => each.to === to.toLowerCase() && (purpose === undefined || each.purpose === purpose))?.code ?? null,
+    /** The code a person's authenticator app shows now (with `mfa`), once one is set up or being set up; null before. */
+    authenticatorCode(email: string): string | null {
+      const person = [...people.values()].find((each) => each.email === email.toLowerCase());
+      if (person === undefined) return null;
+      if (person.totp === true && !authenticator.has(person.id)) authenticator.set(person.id, newCode());
+      return authenticator.get(person.id) ?? null;
+    },
+    /** A person's recovery codes that still work (with `mfa`). */
+    recoveryCodes: (email: string): readonly string[] => recoveryCodes.get([...people.values()].find((each) => each.email === email.toLowerCase())?.id ?? '') ?? [],
+    /** From now on a person's password is refused as expired: 403 `password_change_required` (`expired`), with a link sent. */
+    expirePassword(email: string): void {
+      expiredPasswords.add(email.toLowerCase());
+    },
     /** The person, by email. */
     person: (email: string) => [...people.values()].find((each) => each.email === email.toLowerCase()),
     /**

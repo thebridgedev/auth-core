@@ -17,9 +17,10 @@ import type { SignInPlace } from './sign-in-place.js';
  * device with PKCE and traded for tokens at once.
  *
  * Today's steps are email and password, an email link that signs in (a magic
- * link), a passkey, a social provider (Google, LinkedIn, Facebook, GitHub,
- * Microsoft), the workspace choice and a text-message code (the second step,
- * for a workspace that requires it). Other steps (email codes, company login)
+ * link) or a code sent by email (on an app set to codes), a passkey, a social
+ * provider (Google, LinkedIn, Facebook, GitHub, Microsoft), the workspace
+ * choice and the second step (an authenticator app, an email code or a
+ * text-message code, or a recovery code). Other steps (company login)
  * arrive as new
  * `next` values; this version refuses one it does not know with
  * `unsupported-step` rather than guessing.
@@ -73,6 +74,16 @@ export type SignInStep =
        * and ask them to keep it; Bridge keeps only its hash.
        */
       readonly backupCode?: string;
+      /**
+       * Set once, when the person has just set up an authenticator app or a phone on the way: their recovery codes, each
+       * of which finishes the second step once. Show them once (copy, download, print, "I've saved these"); Bridge keeps
+       * only their hashes.
+       */
+      readonly recoveryCodes?: readonly string[];
+      /** Set when a recovery code finished the second step: how many are left. */
+      readonly recoveryCodesLeft?: number;
+      /** Set when the person asked to remember this device: the days the second step is skipped here. The SDK keeps the device's secret. */
+      readonly rememberedForDays?: number;
     }
   | {
       readonly done: false;
@@ -82,27 +93,106 @@ export type SignInStep =
       choose(workspaceId: string): Promise<SignInStep>;
     }
   | {
-      /** The workspace requires a second step: a code was sent by text message to `phone`. */
+      /**
+       * The sign-in needs a second step (the app or the workspace requires it, or the person turned it on): a code from
+       * the person's authenticator app (`totp`), or one Bridge sent by email (`email`) or by text message (`sms`).
+       */
       readonly done: false;
       readonly next: 'second_step';
-      /** The number the code went to, partly hidden, such as `+46 •••• 67`. */
+      /** The way the code is asked for now. An older Bridge, which only texts, gives none: `sms`. */
+      readonly method: SecondStepMethod;
+      /** Every way this person may use here, the one asked for first: offer the others as "Use another way" (`chooseMethod`). */
+      readonly methods: readonly SecondStepMethod[];
+      /** For `sms`: the number the code went to, partly hidden, such as `+46 •••• 67`. Empty for the other ways. */
       readonly phone: string;
-      /** False when the message could not be sent: offer `resend`. */
+      /** For `email`: the address the code went to, partly hidden, such as `a…@acme.com`. */
+      readonly email?: string;
+      /** False when the message could not be sent: offer `resend`. Always true for an authenticator app. */
       readonly sent: boolean;
-      /** Goes on with the code from the message. A wrong code fails with `invalid` (`wrong_code`); five tries spend it. */
-      verify(code: string): Promise<SignInStep>;
-      /** Sends a new code to the same number; the one before stops working. */
+      /** For a sent code: how long it works, and how long until a new one may be asked for, in seconds. */
+      readonly expiresIn?: number;
+      readonly resendIn?: number;
+      /** How many days "Remember this device" skips the second step on this device; 0 when the app does not offer it. */
+      readonly rememberDays: number;
+      /** Whether the person has recovery codes (or a backup code): offer `useRecoveryCode`. */
+      readonly recovery: boolean;
+      /** `texts_unavailable`: the code came by email because texts are not available now. Say so plainly. */
+      readonly note?: 'texts_unavailable';
+      /**
+       * Set while an authenticator app is being set up on the way (`setUpTotp`): the key to type, in groups, and the
+       * `otpauth://` address to draw as a QR code. The app's first code then finishes it (`verify`).
+       */
+      readonly setup?: { readonly secret: string; readonly uri: string };
+      /**
+       * Goes on with the code. A wrong code fails with `invalid` (`wrong_code`, `triesLeft`); five tries spend it
+       * (`code_expired`). With `remember`, this device skips the second step for `rememberDays`.
+       */
+      verify(code: string, options?: { readonly remember?: boolean }): Promise<SignInStep>;
+      /** Goes on with one of the person's recovery codes, which is spent. A wrong one fails with `invalid` (`wrong_recovery_code`). */
+      useRecoveryCode(code: string, options?: { readonly remember?: boolean }): Promise<SignInStep>;
+      /** "Use another way": asks by another of `methods` (an email code or a text is sent then). */
+      chooseMethod(method: SecondStepMethod): Promise<SignInStep>;
+      /** Sends a new code the same way; the one before stops working. Within its wait it fails with `rate-limited` (`too_soon`). */
       resend(): Promise<SignInStep>;
-      /** Lost the phone: the backup code given at setup removes the number, and the next step sets up a new one. */
+      /** Lost the phone: the backup code given at a text-message setup removes the number, and the next step sets up a new one. */
       reset(backupCode: string): Promise<SignInStep>;
     }
   | {
-      /** The workspace requires a second step, and the person has no phone number set up yet. */
+      /** The sign-in needs a second step, and the person has no way set up yet: an authenticator app or a phone, set up now. */
       readonly done: false;
       readonly next: 'second_step_setup';
+      /** The ways that may be set up here. An older Bridge, which only texts, gives none: `['sms']`. */
+      readonly methods: readonly SecondStepMethod[];
       /** Sends a code to this number (with its country code, such as `+46 70 123 45 67`); the next step verifies it. */
       setUp(phone: string): Promise<SignInStep>;
+      /** Starts setting up an authenticator app: the next step carries `setup` (the QR code and the key) and takes its first code. */
+      setUpTotp(): Promise<SignInStep>;
     };
+
+/** The ways of the second step: an authenticator app, a code by email, a code by text message. */
+export type SecondStepMethod = 'totp' | 'email' | 'sms';
+
+/**
+ * A code Bridge emailed, waiting to be typed on this device: the address it went to, partly hidden, how long
+ * it works and how long until a new one may be asked for. Bridge answers the same whether or not the address has an
+ * account, so the page always shows this.
+ */
+export interface EmailCodeStep<Done> {
+  readonly done: false;
+  readonly next: 'verify_code';
+  /** The address, partly hidden, such as `a…@acme.com`. */
+  readonly email: string;
+  /** Seconds the code works (10 minutes). */
+  readonly expiresIn: number;
+  /** Seconds until `resend` may be used (60). */
+  readonly resendIn: number;
+  /**
+   * Goes on with the six-digit code. Refusals: `invalid` with code `wrong_code` (and `triesLeft`), `code_expired` (too
+   * old, or five tries used: ask for a new one), `wrong-device`, or `flow-expired` (start again).
+   */
+  verify(code: string): Promise<Done>;
+  /** Sends a new code; the one before stops working. Within its wait it fails with `rate-limited` (`too_soon`, `retryAfterSeconds`). */
+  resend(): Promise<EmailCodeStep<Done>>;
+}
+
+/**
+ * A sign-up's code. `verify(code)` finishes the sign-up; a sign-up started without a password, on an app that
+ * takes passwords, fails with `invalid` (`password_required`) once the code is right: the address is proved, so ask
+ * for the password (the app's rules: `options().password`) and finish with `choosePassword`.
+ */
+export interface SignUpCodeStep extends EmailCodeStep<SignInStep> {
+  verify(code: string, password?: string): Promise<SignInStep>;
+  /** After `password_required`: finishes the sign-up with the password, without the code. */
+  choosePassword(password: string): Promise<SignInStep>;
+  resend(): Promise<SignUpCodeStep>;
+}
+
+/** Forgot password's code was right: the token to set a new password with (`password.set`), for 10 minutes. It signs nobody in. */
+export interface PasswordResetToken {
+  readonly next: 'reset_password';
+  readonly token: string;
+  readonly expiresIn: number;
+}
 
 /** A hand-off step: like sign-in, but it ends with the code instead of trading it. */
 export type HandoffStep =
@@ -225,6 +315,19 @@ export interface SignInOptions {
    * `signInPlaceOf`, `signsInOnHostedPage`, `signedOutTarget` and `hostedPageRedirect`.
    */
   readonly signIn?: Omit<SignInPlace, 'returnPath'> & { readonly returnPath?: string };
+  /**
+   * How an email proves the address: `code` (a six-digit code, typed here: `emailCode.request`, and sign-up
+   * and forgot password answer a code step) or `link` (an email link, as before). Absent from an older Bridge: `link`.
+   * Read it with `emailConfirmationOf`.
+   */
+  readonly emailConfirmation?: 'code' | 'link';
+  /** The second step, as the app sets it: whether it is on, the ways it allows, and how many days a device may be remembered. */
+  readonly secondStep?: { readonly on: boolean; readonly methods: readonly SecondStepMethod[]; readonly rememberDeviceDays: number };
+}
+
+/** How the app's emails prove the address: `code` or `link` (an older Bridge, which says nothing, sends links). */
+export function emailConfirmationOf(options: Pick<SignInOptions, 'emailConfirmation'> | null | undefined): 'code' | 'link' {
+  return options?.emailConfirmation === 'code' ? 'code' : 'link';
 }
 
 /** The social sign-in providers Bridge offers. */
@@ -287,6 +390,19 @@ interface CodeAnswer {
   readonly phone?: unknown;
   readonly sent?: unknown;
   readonly backup_code?: unknown;
+  /** The second step's ways: the one asked for, the others, remembering this device, recovery, and what to show once. */
+  readonly method?: unknown;
+  readonly methods?: unknown;
+  readonly remember_days?: unknown;
+  readonly recovery?: unknown;
+  readonly note?: unknown;
+  readonly setup?: unknown;
+  readonly expires_in?: unknown;
+  readonly resend_in?: unknown;
+  readonly remember_device?: unknown;
+  readonly recovery_codes?: unknown;
+  readonly recovery_codes_left?: unknown;
+  readonly token?: unknown;
 }
 
 interface StoredSignUp {
@@ -338,6 +454,19 @@ function unknownStep(next: unknown): BridgeError {
   return new BridgeError('unsupported-step', `Bridge asked for a sign-in step this SDK version does not offer: "${step}".`, { step });
 }
 
+const METHODS: readonly SecondStepMethod[] = ['totp', 'email', 'sms'];
+function methodsOf(value: unknown, fallback: readonly SecondStepMethod[]): SecondStepMethod[] {
+  if (!Array.isArray(value)) return [...fallback];
+  return value.filter((each): each is SecondStepMethod => METHODS.includes(each as SecondStepMethod));
+}
+const seconds = (value: unknown): number | undefined => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined);
+
+/** A device remembered for the second step: Bridge's secret for it, until it expires. */
+interface RememberedDevice {
+  readonly device: string;
+  readonly expiresAt: number;
+}
+
 export interface SignInDeps {
   readonly issuer: string;
   readonly endpoints: () => Endpoints;
@@ -359,6 +488,42 @@ export function createSignIn(deps: SignInDeps) {
   const socialKey = storageKey(deps.issuer, 'social');
   /** A provider waiting to be linked: every tab of the origin reads it, as the sign-up link it came with opens in a new tab. */
   const linkKey = storageKey(deps.issuer, 'social-link');
+  /** This device, remembered for the second step: one per app, in storage every tab of the origin shares. */
+  const deviceKey = storageKey(deps.issuer, 'device');
+
+  /** The remembered device's secret, to send as `device` with a sign-in: none when there is none, or it expired. */
+  async function deviceOf(): Promise<Record<string, string>> {
+    const kept = await readJson<RememberedDevice>(deps.signUpStorage, deviceKey);
+    if (kept === null) return {};
+    if (typeof kept.device !== 'string' || !(kept.expiresAt > Date.now())) {
+      await deps.signUpStorage.remove(deviceKey);
+      return {};
+    }
+    return { device: kept.device };
+  }
+
+  /** Keeps the device's secret when the person asked to be remembered here, for the days Bridge said. */
+  async function keepDevice(answer: CodeAnswer | undefined): Promise<number | null> {
+    const days = seconds(answer?.remember_days);
+    if (typeof answer?.remember_device !== 'string' || days === undefined || days <= 0) return null;
+    await deps.signUpStorage.set(deviceKey, JSON.stringify({ device: answer.remember_device, expiresAt: Date.now() + days * 86_400_000 } satisfies RememberedDevice));
+    return days;
+  }
+
+  /** A code screen's answer (`next: 'verify_code'`) as a step: its flow, what it shows, and how it goes on. */
+  function codeStepOf<Done>(answer: CodeAnswer | undefined, verify: (flow: string, code: string) => Promise<Done>, resendRoute: (typeof ROUTES)[keyof typeof ROUTES]): EmailCodeStep<Done> {
+    if (answer?.next !== 'verify_code' || typeof answer.flow !== 'string') throw unknownStep(answer?.next);
+    const flow = answer.flow;
+    return {
+      done: false,
+      next: 'verify_code',
+      email: typeof answer.email === 'string' ? answer.email : '',
+      expiresIn: seconds(answer.expires_in) ?? 600,
+      resendIn: seconds(answer.resend_in) ?? 60,
+      verify: (code) => verify(flow, code.replace(/\s/g, '')),
+      resend: async () => codeStepOf(await post(resendRoute, { flow }), verify, resendRoute),
+    };
+  }
 
   /**
    * After a sign-in: links the provider the person tried first on this device, when one waits. Never fails the
@@ -407,19 +572,56 @@ export function createSignIn(deps: SignInDeps) {
     throw unknownStep(answer?.next);
   }
 
-  /** The text-message second step, as Bridge asks for it: the code, or a number to set up first. Its answers go on as `onward`. */
+  /**
+   * The second step, as Bridge asks for it: a code by the way it names (an authenticator app, an email, a text), or a
+   * way to set up first. An older Bridge names no way: it texts. Its answers go on as `onward`.
+   */
   function secondStepOf(answer: CodeAnswer, onward: (next: CodeAnswer | undefined) => Promise<SignInStep> | SignInStep): SignInStep {
     const flow = String(answer.flow);
-    if (answer.next === 'second_step_setup') return { done: false, next: 'second_step_setup', setUp: async (phone) => onward(await post(ROUTES.secondStepSetup, { flow, phone })) };
+    if (answer.next === 'second_step_setup') {
+      return {
+        done: false,
+        next: 'second_step_setup',
+        methods: methodsOf(answer.methods, ['sms']),
+        setUp: async (phone) => onward(await post(ROUTES.secondStepSetup, { flow, phone })),
+        setUpTotp: async () => onward(await post(ROUTES.secondStepSetup, { flow, method: 'totp' })),
+      };
+    }
+    const method: SecondStepMethod = METHODS.includes(answer.method as SecondStepMethod) ? (answer.method as SecondStepMethod) : 'sms';
+    const given = answer.setup as { secret?: unknown; uri?: unknown } | null | undefined;
+    const setup = typeof given?.secret === 'string' && typeof given.uri === 'string' && given.uri.startsWith('otpauth://') ? { setup: { secret: given.secret, uri: given.uri } } : {};
+    const remember = (options?: { readonly remember?: boolean }) => (options?.remember === true ? { remember: true } : {});
+    const expiresIn = seconds(answer.expires_in);
+    const resendIn = seconds(answer.resend_in);
     return {
       done: false,
       next: 'second_step',
+      method,
+      methods: methodsOf(answer.methods, [method]),
       phone: typeof answer.phone === 'string' ? answer.phone : '',
+      ...(typeof answer.email === 'string' ? { email: answer.email } : {}),
       sent: answer.sent !== false,
-      verify: async (code) => onward(await post(ROUTES.secondStep, { flow, code })),
+      ...(expiresIn === undefined ? {} : { expiresIn }),
+      ...(resendIn === undefined ? {} : { resendIn }),
+      rememberDays: seconds(answer.remember_days) ?? 0,
+      // An older Bridge says nothing: a texted second step has its backup code.
+      recovery: answer.recovery === undefined ? answer.method === undefined : answer.recovery === true,
+      ...(answer.note === 'texts_unavailable' ? { note: 'texts_unavailable' as const } : {}),
+      ...setup,
+      verify: async (code, options) => onward(await post(ROUTES.secondStep, { flow, code: code.replace(/[\s-]/g, ''), ...remember(options) })),
+      useRecoveryCode: async (code, options) => onward(await post(ROUTES.secondStep, { flow, recovery_code: code.trim(), ...remember(options) })),
+      chooseMethod: async (chosen) => onward(await post(ROUTES.secondStepMethod, { flow, method: chosen })),
       resend: async () => onward(await post(ROUTES.secondStepResend, { flow })),
       reset: async (backupCode) => onward(await post(ROUTES.secondStepReset, { flow, backup_code: backupCode })),
     };
+  }
+
+  /** What a finished second step shows once: recovery codes, how many are left, and the days this device is remembered (kept here). */
+  async function shownOnce(answer: CodeAnswer | undefined): Promise<{ recoveryCodes?: readonly string[]; recoveryCodesLeft?: number; rememberedForDays?: number }> {
+    const codes = Array.isArray(answer?.recovery_codes) ? answer.recovery_codes.filter((each): each is string => typeof each === 'string') : [];
+    const left = seconds(answer?.recovery_codes_left);
+    const remembered = await keepDevice(answer);
+    return { ...(codes.length > 0 ? { recoveryCodes: codes } : {}), ...(left === undefined ? {} : { recoveryCodesLeft: left }), ...(remembered === null ? {} : { rememberedForDays: remembered }) };
   }
 
   function signInSteps(answer: CodeAnswer | undefined, verifier: string): Promise<SignInStep> | SignInStep {
@@ -428,17 +630,19 @@ export function createSignIn(deps: SignInDeps) {
     return stepOf<SignInStep>(
       answer,
       async (code) => {
+        const once = await shownOnce(answer);
         // A code made for a sign-in request is the other app's: it goes to the app's return, and is never traded here.
-        if (typeof answer?.redirect_uri === 'string' && typeof answer.state === 'string') return { done: true, handoff: requestReturnUrl(answer.redirect_uri, code, answer.state, deps.issuer), ...(answer.confirm_return === true ? { confirmReturn: true as const } : {}), ...backupCode };
+        if (typeof answer?.redirect_uri === 'string' && typeof answer.state === 'string') return { done: true, handoff: requestReturnUrl(answer.redirect_uri, code, answer.state, deps.issuer), ...(answer.confirm_return === true ? { confirmReturn: true as const } : {}), ...backupCode, ...once };
         await deps.session.exchangeCode(code, verifier);
         const linked = await linkWaiting();
-        return { done: true, ...backupCode, ...(linked === null ? {} : { linked }) };
+        return { done: true, ...backupCode, ...once, ...(linked === null ? {} : { linked }) };
       },
       (flow, workspaces) => ({
         done: false,
         next: 'workspace',
         workspaces,
-        choose: async (workspace) => signInSteps(await post(ROUTES.signIn, { flow, workspace }), verifier),
+        // The second step may come after the workspace: a remembered device skips it there too.
+        choose: async (workspace) => signInSteps(await post(ROUTES.signIn, { flow, workspace, ...(await deviceOf()) }), verifier),
       }),
     );
   }
@@ -456,6 +660,40 @@ export function createSignIn(deps: SignInDeps) {
     );
   }
 
+  /** A sign-up's code step: the code finishes the sign-up; a password asked for afterwards finishes it without the code. */
+  function signUpCodeStep(answer: CodeAnswer | undefined, verifier: string): SignUpCodeStep {
+    const finish = async (flow: string, body: Readonly<Record<string, unknown>>) => {
+      const done = await post(ROUTES.signUpCode, { flow, code_verifier: verifier, ...body });
+      return typeof done?.redirect_uri === 'string' ? signInSteps(done, '') : signInSteps(done, verifier);
+    };
+    let flow = '';
+    const wrap = (step: EmailCodeStep<SignInStep>): SignUpCodeStep => ({
+      ...step,
+      verify: (code: string, password?: string) => finish(flow, { code: code.replace(/\s/g, ''), ...(password === undefined ? {} : { password }) }),
+      choosePassword: (password: string) => finish(flow, { password }),
+      resend: async () => {
+        const again = await post(ROUTES.signUpResend, { flow });
+        flow = typeof again?.flow === 'string' ? again.flow : flow;
+        return wrap(codeStepOf(again, (_, code) => finish(flow, { code }), ROUTES.signUpResend));
+      },
+    });
+    flow = typeof answer?.flow === 'string' ? answer.flow : '';
+    return wrap(codeStepOf(answer, (_, code) => finish(flow, { code }), ROUTES.signUpResend));
+  }
+
+  /** Forgot password's code step: a right code gives the token to choose a new password with. */
+  function resetCodeStep(answer: CodeAnswer | undefined): EmailCodeStep<PasswordResetToken> {
+    return codeStepOf<PasswordResetToken>(
+      answer,
+      async (flow, code) => {
+        const proved = await post(ROUTES.passwordForgotVerify, { flow, code });
+        if (proved?.next !== 'reset_password' || typeof proved.token !== 'string') throw unknownStep(proved?.next);
+        return { next: 'reset_password', token: proved.token, expiresIn: seconds(proved.expires_in) ?? 600 };
+      },
+      ROUTES.passwordForgotResend,
+    );
+  }
+
   return {
     signIn: {
       /** Signs in with email and password. Resolves when signed in, or with the next step. */
@@ -466,6 +704,7 @@ export function createSignIn(deps: SignInDeps) {
           password: input.password,
           ...proofOf(pkce),
           ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
+          ...(await deviceOf()),
         });
         return signInSteps(answer, pkce.verifier);
       },
@@ -500,12 +739,12 @@ export function createSignIn(deps: SignInDeps) {
        * sends an email link, and the answer is the same whether or not the
        * address already has an account.
        */
-      async start(input: SignUpInput): Promise<{ readonly next: 'verify_email' }> {
+      async start(input: SignUpInput): Promise<{ readonly next: 'verify_email' } | SignUpCodeStep> {
         const pkce = await createPkce();
         // The link opens in a new tab: keep the verifier where that tab can read it. The latest sign-up wins.
         await deps.signUpStorage.set(signUpKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + SIGN_UP_KEEP_MS } satisfies StoredSignUp));
         // On a sign-in request, this device's challenge still binds the link to it: only the code is the other app's.
-        await post(ROUTES.signUp, {
+        const answer = await post(ROUTES.signUp, {
           email: input.email,
           ...(input.password === undefined ? {} : { password: input.password }),
           code_challenge: pkce.challenge,
@@ -519,6 +758,11 @@ export function createSignIn(deps: SignInDeps) {
           ...(input.plan === undefined || input.plan === '' ? {} : { plan: input.plan }),
           ...(input.plan === undefined || input.plan === '' || !input.currency || !input.interval ? {} : { currency: input.currency, interval: input.interval }),
         });
+        // An app set to codes: the code is typed here, so the verifier stays in memory and no link waits for it.
+        if (answer?.next === 'verify_code') {
+          await deps.signUpStorage.remove(signUpKey);
+          return signUpCodeStep(answer, pkce.verifier);
+        }
         return { next: 'verify_email' };
       },
 
@@ -574,7 +818,7 @@ export function createSignIn(deps: SignInDeps) {
         const own = await waitingVerifier(magicLinkKey);
         // A link sent for this app's hosted sign-in, landed on the app's own page: the app's verifier for its request opens it.
         const verifier = own ?? (await waitingVerifier(hostedKey));
-        const answer = await post(ROUTES.magicLinkVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }) });
+        const answer = await post(ROUTES.magicLinkVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }), ...(verifier === null ? {} : await deviceOf()) });
         if (verifier === null) throw new BridgeError('wrong-device', 'Open the link on the device you asked for it on.', { code: 'wrong_device' });
         // Bridge took the verifier: it is spent. The app's own verifier stays, for its return to trade the code with.
         if (own !== null) await deps.signUpStorage.remove(magicLinkKey);
@@ -586,6 +830,28 @@ export function createSignIn(deps: SignInDeps) {
         // A link sent for a sign-in request answers with the other app's code, which goes to its return.
         if (typeof answer?.redirect_uri === 'string') return signInSteps(answer, '');
         return signInSteps(answer, verifier);
+      },
+    },
+
+    emailCode: {
+      /**
+       * Emails a six-digit code that signs in to the address, on an app set to codes (`emailConfirmationOf(options) ===
+       * 'code'`; an app on links refuses it with `forbidden`, `method_disabled`). The answer is the same whether or not
+       * the address has an account. The code works on this device only, for 10 minutes and five tries; a new one may be
+       * asked for after 60 seconds. On a sign-in request the sign-in ends with the other app's code, as every step.
+       */
+      async request(email: string): Promise<EmailCodeStep<SignInStep>> {
+        const pkce = await createPkce();
+        // This device's challenge binds the code to it, on a sign-in request too: only the code it ends with is the other app's.
+        const answer = await post(ROUTES.emailCode, { email, code_challenge: pkce.challenge, code_challenge_method: 'S256', ...(request === null ? {} : { request }) });
+        return codeStepOf<SignInStep>(
+          answer,
+          async (flow, code) => {
+            const done = await post(ROUTES.emailCodeVerify, { flow, code, code_verifier: pkce.verifier, ...(await deviceOf()) });
+            return typeof done?.redirect_uri === 'string' ? signInSteps(done, '') : signInSteps(done, pkce.verifier);
+          },
+          ROUTES.emailCodeResend,
+        );
       },
     },
 
@@ -687,9 +953,22 @@ export function createSignIn(deps: SignInDeps) {
     },
 
     password: {
-      /** Sends a reset link when the address has an account. The answer is the same either way. */
-      async forgot(email: string): Promise<void> {
-        await post(ROUTES.passwordForgot, { email, ...linkOf() });
+      /**
+       * Sends a reset link when the address has an account. The answer is the same either way. On an app set to codes
+       * it answers the code step instead: the right code gives the token for `set`, and a code reset never
+       * signs anyone in.
+       */
+      async forgot(email: string): Promise<EmailCodeStep<PasswordResetToken> | undefined> {
+        const answer = await post(ROUTES.passwordForgot, { email, ...linkOf() });
+        return answer?.next === 'verify_code' ? resetCodeStep(answer) : undefined;
+      },
+      /**
+       * Changes the signed-in person's password: with their current password, or within 10 minutes of a sign-in
+       * without it. Refusals: `invalid` with code `wrong_password`, or `password_rules` with `failed` (`history`: used
+       * recently); `reauthenticate` when neither was given. The person's other sessions end; this one stays.
+       */
+      async change(input: { readonly current?: string; readonly password: string }): Promise<void> {
+        await call(deps.fetch, deps.endpoints().url(ROUTES.passwordChange), { method: 'POST', token: await deps.session.accessToken(), body: { ...(input.current === undefined || input.current === '' ? {} : { current: input.current }), password: input.password } });
       },
       /** Sets a new password from a reset link. Signs nobody in, and ends every session of the account. */
       async set(token: string, password: string): Promise<void> {

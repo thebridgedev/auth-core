@@ -32,6 +32,12 @@ export type EndpointName =
   | 'sign_in_requests'
   | 'magic_link'
   | 'magic_link_verify'
+  | 'email_code'
+  | 'email_code_verify'
+  | 'sign_up_code'
+  | 'password_forgot_verify'
+  | 'security'
+  | 'password_change'
   | 'passkey_sign_in_options'
   | 'passkey_sign_in'
   | 'passkey_setup_link'
@@ -71,6 +77,12 @@ export const CONTRACT_PATHS: Readonly<Record<EndpointName, string>> = {
   sign_in_requests: '/v2/identity-access/apps/{appId}/sign-in-requests',
   magic_link: '/v2/identity-access/apps/{appId}/magic-link',
   magic_link_verify: '/v2/identity-access/apps/{appId}/magic-link/verify',
+  email_code: '/v2/identity-access/apps/{appId}/email-code',
+  email_code_verify: '/v2/identity-access/apps/{appId}/email-code/verify',
+  sign_up_code: '/v2/identity-access/apps/{appId}/sign-up/code',
+  password_forgot_verify: '/v2/identity-access/apps/{appId}/password/forgot/verify',
+  security: '/v2/identity-access/second-step',
+  password_change: '/v2/identity-access/password/change',
   passkey_sign_in_options: '/v2/identity-access/apps/{appId}/passkeys/sign-in/options',
   passkey_sign_in: '/v2/identity-access/apps/{appId}/passkeys/sign-in',
   passkey_setup_link: '/v2/identity-access/apps/{appId}/passkeys/setup-link',
@@ -107,6 +119,12 @@ function route(method: Route['method'], at: EndpointName, path = '', pending?: s
   return pending === undefined ? { method, at, path } : { method, at, path, pending };
 }
 
+/**
+ * Served by Bridge before its API contract lists them: pending until
+ * the pinned contract lists them, then the contract test says to unmark them.
+ */
+const CODES_PENDING = 'email codes and two-step verification';
+
 export const ROUTES = {
   // Identity and Access: before a token.
   signIn: route('POST', 'sign_in'),
@@ -138,6 +156,16 @@ export const ROUTES = {
   secondStepSetup: route('POST', 'second_step', '/setup'),
   secondStepResend: route('POST', 'second_step', '/resend'),
   secondStepReset: route('POST', 'second_step', '/reset'),
+  // Email codes: a sign-in's code, a sign-up's code and forgot password's code, each with a new one after 60 s.
+  emailCode: route('POST', 'email_code', '', CODES_PENDING),
+  emailCodeVerify: route('POST', 'email_code_verify', '', CODES_PENDING),
+  emailCodeResend: route('POST', 'email_code', '/resend', CODES_PENDING),
+  signUpCode: route('POST', 'sign_up_code', '', CODES_PENDING),
+  signUpResend: route('POST', 'sign_up', '/resend', CODES_PENDING),
+  passwordForgotVerify: route('POST', 'password_forgot_verify', '', CODES_PENDING),
+  passwordForgotResend: route('POST', 'password_forgot', '/resend', CODES_PENDING),
+  // The second step's other ways: "Use another way".
+  secondStepMethod: route('POST', 'second_step', '/method', CODES_PENDING),
 
   // Identity and Access: the signed-in person accepts an invite.
   inviteAccept: route('POST', 'invites', '/accept'),
@@ -155,6 +183,19 @@ export const ROUTES = {
   passkeyAdd: route('POST', 'passkeys'),
   passkeyRemove: route('DELETE', 'passkeys', '/{passkeyId}'),
   passkeyRename: route('PATCH', 'passkeys', '/{passkeyId}'),
+  // Two-step verification, for the Security settings: what is set up, an authenticator app, a phone,
+  // which is used first, on for oneself, removing one, new recovery codes, forgetting remembered devices.
+  security: route('GET', 'security', '', CODES_PENDING),
+  securityChange: route('PATCH', 'security', '', CODES_PENDING),
+  securityTotp: route('POST', 'security', '/totp', CODES_PENDING),
+  securityTotpConfirm: route('POST', 'security', '/totp/confirm', CODES_PENDING),
+  securitySms: route('POST', 'security', '/sms', CODES_PENDING),
+  securitySmsConfirm: route('POST', 'security', '/sms/confirm', CODES_PENDING),
+  securityRemove: route('DELETE', 'security', '/{method}', CODES_PENDING),
+  securityRecoveryCodes: route('POST', 'security', '/recovery-codes', CODES_PENDING),
+  securityForgetDevices: route('DELETE', 'security', '/devices', CODES_PENDING),
+  // Changing the password while signed in.
+  passwordChange: route('POST', 'password_change', '', CODES_PENDING),
 
   // Accounts.
   me: route('GET', 'accounts', '/me'),

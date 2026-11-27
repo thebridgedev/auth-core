@@ -17,6 +17,7 @@ import { Session, type ChannelLike, type LockManagerLike, type SessionEvents, ty
 import { browserCeremonies, type WebAuthnCeremonies } from './passkeys.js';
 import { createRecheck } from './recheck.js';
 import { createHosted } from './hosted.js';
+import { createSecurity } from './security.js';
 import { createSignIn } from './sign-in.js';
 
 export interface BridgeOptions {
@@ -169,6 +170,7 @@ export function createBridge(options: BridgeOptions) {
   const live = new Live({ endpoints, fetch: fetchFn, session, onError }, options.live === false ? { enabled: false } : (options.live ?? {}));
   const flows = createSignIn({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
   const recheck = createRecheck({ issuer, endpoints, fetch: fetchFn, signUpStorage: options.signUpStorage ?? storage, session, ceremonies: options.webauthn ?? browserCeremonies(), ...(options.linkAddress === undefined ? {} : { linkAddress: options.linkAddress }) });
+  const security = createSecurity({ issuer, endpoints, fetch: fetchFn, session, signUpStorage: options.signUpStorage ?? storage });
   const hosted = createHosted({ issuer, endpoints, fetch: fetchFn, storage: options.signUpStorage ?? storage, session });
   const accounts = createAccounts({ endpoints, fetch: watchedFetch, session, renewed: () => void gate.refresh() });
   const billingReturn = options.billingReturn;
@@ -311,6 +313,10 @@ export function createBridge(options: BridgeOptions) {
         signIn: flows.signIn,
         signUp: flows.signUp,
         magicLink: flows.magicLink,
+        /** Codes by email, on an app set to codes: `emailCode.request(email)`, then the step's `verify(code)`. */
+        emailCode: flows.emailCode,
+        /** Two-step verification, for the signed-in person's Security settings. */
+        security,
         social: flows.social,
         passkeys: flows.passkeys,
         password: flows.password,
