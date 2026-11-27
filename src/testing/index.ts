@@ -16,7 +16,7 @@
 export interface FakePerson {
   readonly id: string;
   readonly email: string;
-  password: string;
+  password: string | null;
   firstName: string | null;
   lastName: string | null;
   readonly workspaces: { id: string; name: string; role: string; mfa?: boolean }[];
@@ -53,6 +53,8 @@ export interface FakeIssuerOptions {
    * metadata's `sign_in_page`) are refused with 409 `passkey_on_app_page` and this address. @default none
    */
   readonly passkeysBelongTo?: string;
+  /** When a passkey is offered, as the app's settings say it: after a sign-in another way, and made automatically. @default both on */
+  readonly passkeyOffer?: { readonly afterSignIn: boolean; readonly automatic: boolean };
   /**
    * Routes that want a recent sign-in, as `"METHOD /v2/path"`: called with a
    * token whose sign-in is older than `maxAgeSeconds` they answer 401
@@ -214,7 +216,15 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   // Passkeys: each ceremony's challenge, used once; each registered passkey, by its credential id.
   const passkeyChallenges = new Map<string, { purpose: 'sign-in' | 'register' | 'recheck'; pkce?: string; email?: string | null; user?: string; link?: string; request?: SignInRequest }>();
   const passkeys = new Map<string, { id: string; user: string; name: string; createdAt: string; lastUsedAt: string | null; usable?: boolean }>();
-  const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link' | 'passkey-setup' | 'recheck'; email: string; session?: string; challenge?: string; request?: SignInRequest; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
+  // The passkey offer's answers, per person: Not now until a time, or Don't ask again.
+  const passkeyOffer = options.passkeyOffer ?? { afterSignIn: true, automatic: true };
+  const offerAnswers = new Map<string, { until: number; never: boolean }>();
+  const offerFor = (user: string) => {
+    const answered = offerAnswers.get(user);
+    if (!methods.includes('passkeys') || [...passkeys.values()].some((each) => each.user === user) || answered?.never === true) return { offer: false, automatic: false };
+    return { offer: passkeyOffer.afterSignIn && (answered === undefined || answered.until <= now()), automatic: passkeyOffer.automatic };
+  };
+  const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link' | 'passkey-setup' | 'recheck'; email: string; afterReset?: boolean; session?: string; challenge?: string; request?: SignInRequest; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
   /** People whose password breaks the app's rules since it went to production, and which rules. */
   const mustChange = new Map<string, readonly string[]>();
   const sentLinks: { to: string; purpose: string; token: string }[] = [];
@@ -277,6 +287,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           passkey_setup_options: `${at}/passkeys/setup/options`,
           passkey_setup: `${at}/passkeys/setup`,
           passkeys: `${v2}/identity-access/passkeys`,
+          account_password: `${v2}/identity-access/password`,
           social_start: `${at}/social/start`,
           social_finish: `${at}/social/finish`,
           social_link: `${v2}/identity-access/social/link`,
@@ -533,7 +544,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         signInRequests.set(id, { challenge: body['code_challenge'], redirectUri: body['redirect_uri'], state: body['state'], linkAddress: typeof body['link_address'] === 'string' ? body['link_address'] : `${origin}/sign-in/${appId}/`, expiresAt: now() + 10 * 60 * 1000, used: false });
         return json(201, { request: id, expires_in: 600 });
       }
-      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, social, ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}), ...(options.signIn === undefined ? {} : { signIn: options.signIn }) });
+      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, social, ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}), ...(methods.includes('passkeys') ? { passkeyOffer } : {}), ...(options.signIn === undefined ? {} : { signIn: options.signIn }) });
       if (route === '/social/start') {
         const provider = String(body['provider']);
         if (!social.includes(provider)) return oauth(403, 'method_disabled');
@@ -686,6 +697,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         const kept = keepPasskey(body['response'], person.id, body['name']);
         if (kept instanceof Response) return kept;
         links.delete(String(body['token']));
+        // After a reset: one passkey, and nobody signed in.
+        if (link.afterReset === true) return json(201, { done: true, passkey: passkeyView({ ...(passkeys.get(kept.id) as { id: string; name: string; createdAt: string; lastUsedAt: string | null }), user: person.id }) });
         return toWorkspace(person, link.challenge as string, null);
       }
       if (route === '/token') {
@@ -781,6 +794,12 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         person.password = String(body['password']);
         mustChange.delete(person.email);
         for (const session of sessions.values()) if (session.user === person.id) endSession(session.id);
+        // A reset that named this browser's challenge hands back a pass for one passkey here, when one would be offered.
+        if (typeof body['code_challenge'] === 'string' && offerFor(person.id).offer) {
+          const pass = secret();
+          links.set(pass, { purpose: 'passkey-setup', email: person.email, challenge: body['code_challenge'], expiresAt: now() + 10 * 60 * 1000, afterReset: true });
+          return json(200, { done: true, passkeyPass: pass });
+        }
         return json(200, { done: true });
       }
       return problem(404, 'not-found', 'No such route.');
@@ -847,7 +866,25 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     if (path === '/v2/identity-access/passkeys' && method === 'GET') return json(200, [...passkeys.values()].filter((each) => each.user === person.id).reverse().map(passkeyView));
     if (path === '/v2/identity-access/passkeys/options' && method === 'POST') {
       if (!methods.includes('passkeys')) return oauth(403, 'method_disabled');
+      if (body['automatic'] === true && !offerFor(person.id).automatic) return oauth(409, 'no_automatic_passkey');
       return passkeyOptions('register', { user: person.id });
+    }
+    if (path === '/v2/identity-access/passkeys/offer' && method === 'GET') return json(200, offerFor(person.id));
+    if (path === '/v2/identity-access/password' && method === 'GET') {
+      const has = [...passkeys.values()].some((each) => each.user === person.id);
+      return json(200, person.password === null ? { set: false, removable: false } : has ? { set: true, removable: true } : { set: true, removable: false, why: 'no_passkey' });
+    }
+    if (path === '/v2/identity-access/password' && method === 'DELETE') {
+      if (person.password === null) return oauth(409, 'no_password');
+      if (![...passkeys.values()].some((each) => each.user === person.id)) return oauth(409, 'no_passkey', { error_description: 'Add a passkey first.' });
+      person.password = null;
+      for (const other of sessions.values()) if (other.user === person.id && other.id !== session.id) endSession(other.id);
+      return json(200, { done: true });
+    }
+    if (path === '/v2/identity-access/passkeys/offer' && method === 'POST') {
+      if (body['action'] !== 'later' && body['action'] !== 'never') return oauth(400, 'invalid_request');
+      offerAnswers.set(person.id, body['action'] === 'never' ? { until: 0, never: true } : { until: now() + 30 * 24 * 3600 * 1000, never: offerAnswers.get(person.id)?.never === true });
+      return json(200, { done: true });
     }
     if (path === '/v2/identity-access/passkeys' && method === 'POST') {
       const record = spentChallenge(body['response'], 'register');
@@ -1259,7 +1296,9 @@ export type FakeIssuer = ReturnType<typeof createFakeIssuer>;
  * ceremony fail as a closed dialog does. It signs nothing: use it with the
  * fake issuer, never against Bridge.
  */
-export function fakeWebAuthn(options: { supported?: boolean; autofill?: boolean } = {}) {
+export function fakeWebAuthn(options: { supported?: boolean; autofill?: boolean; automatic?: boolean } = {}) {
+  /** How each passkey was made: `true` for one the browser made on its own (conditional create). */
+  const automaticallyMade: boolean[] = [];
   const made: string[] = [];
   /** What the page told the browser through the Signal API, in order. */
   const signals: { kind: 'unknown' | 'accepted' | 'details'; rpId: string; credentialId?: string; userId?: string; ids?: readonly string[]; name?: string; displayName?: string }[] = [];
@@ -1281,10 +1320,13 @@ export function fakeWebAuthn(options: { supported?: boolean; autofill?: boolean 
     },
     supported: () => options.supported ?? true,
     autofillSupported: () => Promise.resolve(options.autofill ?? true),
-    create(given: Record<string, unknown>): Promise<Record<string, unknown>> {
+    automaticSupported: () => Promise.resolve(options.automatic ?? false),
+    automaticallyMade,
+    create(given: Record<string, unknown>, automatic = false): Promise<Record<string, unknown>> {
       refuseIfCancelled();
       const id = secret();
       made.push(id);
+      automaticallyMade.push(automatic);
       return Promise.resolve({ id, rawId: id, type: 'public-key', response: { clientDataJSON: client('webauthn.create', given['challenge']), attestationObject: 'fake' }, clientExtensionResults: {} });
     },
     get(given: Record<string, unknown>): Promise<Record<string, unknown>> {

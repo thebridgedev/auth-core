@@ -141,3 +141,73 @@ describe('passkeys (TBP-861)', () => {
     expect(webauthn.signals.at(-1)).toEqual({ kind: 'unknown', rpId: 'localhost', credentialId: made.id });
   });
 });
+
+describe('offering a passkey at the right moment (TBP-536)', () => {
+  it('asks Bridge whether to offer one, keeps the answer for the person, and offers nothing once they have one', async () => {
+    const { fake } = issuerWithPeople({ methods: ['password', 'passkeys'] });
+    const client = clientOn(fake, { webauthn: fakeWebAuthn() });
+    expect((await client.signIn.options()).passkeyOffer).toEqual({ afterSignIn: true, automatic: true });
+    await client.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    await expect(client.passkeys.offer()).resolves.toEqual({ offer: true, automatic: true });
+    await client.passkeys.answerOffer('later');
+    await expect(client.passkeys.offer()).resolves.toEqual({ offer: false, automatic: true });
+    await client.passkeys.answerOffer('never');
+    await expect(client.passkeys.offer()).resolves.toEqual({ offer: false, automatic: false });
+    // "Don't ask again" stops automatic creation too: nothing is made, and nothing fails.
+    await expect(client.passkeys.addAutomatically()).resolves.toBeNull();
+  });
+
+  it('no offer in a browser without passkeys, and none when the app turned it off', async () => {
+    const off = issuerWithPeople({ methods: ['password', 'passkeys'], passkeyOffer: { afterSignIn: false, automatic: false } }).fake;
+    const client = clientOn(off, { webauthn: fakeWebAuthn() });
+    await client.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    await expect(client.passkeys.offer()).resolves.toEqual({ offer: false, automatic: false });
+    const bare = clientOn(issuerWithPeople({ methods: ['password', 'passkeys'] }).fake, { webauthn: fakeWebAuthn({ supported: false }) });
+    await bare.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    await expect(bare.passkeys.offer()).resolves.toEqual({ offer: false, automatic: false });
+  });
+
+  it('makes a passkey on its own only where the browser can, marked as automatic, and never fails', async () => {
+    const { fake } = issuerWithPeople({ methods: ['password', 'passkeys'] });
+    const cannot = fakeWebAuthn();
+    const first = clientOn(fake, { webauthn: cannot });
+    await first.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    await expect(first.passkeys.addAutomatically()).resolves.toBeNull();
+    expect(cannot.made).toEqual([]);
+    const can = fakeWebAuthn({ automatic: true });
+    const second = clientOn(fake, { webauthn: can });
+    await second.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    await expect(second.passkeys.addAutomatically()).resolves.toMatchObject({ usable: true });
+    expect(can.automaticallyMade).toEqual([true]);
+    // Now they have one: nothing more is offered.
+    await expect(second.passkeys.offer()).resolves.toEqual({ offer: false, automatic: false });
+  });
+
+  it('a password reset hands back what adds one passkey on this browser, without signing anyone in', async () => {
+    const { fake } = issuerWithPeople({ methods: ['password', 'passkeys'] });
+    const client = clientOn(fake, { webauthn: fakeWebAuthn() });
+    await client.password.forgot('alice@acme.test');
+    const { afterReset } = await client.password.set(fake.lastLink('alice@acme.test', 'reset-password')!, 'another long password');
+    expect(afterReset).not.toBeNull();
+    await expect(client.passkeys.addAfterReset(afterReset!)).resolves.toMatchObject({ usable: true });
+    await expect(client.passkeys.addAfterReset(afterReset!)).rejects.toMatchObject({ code: 'invalid_link' });
+    // Someone with a passkey gets nothing back.
+    await client.password.forgot('alice@acme.test');
+    await expect(client.password.set(fake.lastLink('alice@acme.test', 'reset-password')!, 'yet another password')).resolves.toEqual({ afterReset: null });
+  });
+});
+
+describe('removing your password', () => {
+  it('says whether it may go, removes it once a passkey exists, and the password no longer signs in', async () => {
+    const { fake } = issuerWithPeople({ methods: ['password', 'passkeys'] });
+    const client = clientOn(fake, { webauthn: fakeWebAuthn() });
+    await client.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    await expect(client.passkeys.passwordState()).resolves.toEqual({ set: true, removable: false, why: 'no_passkey' });
+    await expect(client.passkeys.removePassword()).rejects.toMatchObject({ code: 'no_passkey' });
+    await client.passkeys.add('Laptop');
+    await expect(client.passkeys.passwordState()).resolves.toEqual({ set: true, removable: true });
+    await client.passkeys.removePassword();
+    await expect(client.passkeys.passwordState()).resolves.toEqual({ set: false, removable: false });
+    await expect(clientOn(fake).signIn.start({ email: 'alice@acme.test', password: PASSWORD })).rejects.toBeTruthy();
+  });
+});
