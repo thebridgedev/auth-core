@@ -1,0 +1,172 @@
+# CLI 1.0 command paths, with their arguments. Generated from bridge-cli v1 (scripts/command-tree.mjs over buildProgram); regenerate when CLI 1.0 adds or removes a command.
+bridge auth
+bridge auth login
+bridge auth logout
+bridge auth whoami
+bridge auth workspace [id]
+bridge auth methods
+bridge auth methods list
+bridge auth methods enable <method>
+bridge auth methods disable <method>
+bridge auth config
+bridge auth password-policy
+bridge app
+bridge app list
+bridge app create
+bridge app use <id>
+bridge app get
+bridge app update
+bridge app delete
+bridge app default-return <url>
+bridge app setup
+bridge app address
+bridge app address list
+bridge app address add <url>
+bridge app address remove <url>
+bridge key
+bridge key list
+bridge key create
+bridge key revoke <id>
+bridge plan
+bridge plan list
+bridge plan get <key>
+bridge plan create <key>
+bridge plan update <key>
+bridge plan apply <file>
+bridge plan archive <key>
+bridge plan delete <key>
+bridge plan price
+bridge plan price set <plan> <price>
+bridge plan price remove <plan> <currency-interval>
+bridge plan usage-price
+bridge plan usage-price set <plan> <usage>
+bridge plan usage-price remove <plan> <metric>
+bridge plan feature
+bridge plan feature add <plan> <feature>
+bridge plan feature remove <plan> <feature>
+bridge plan limit
+bridge plan limit set <plan> <limit>
+bridge plan limit remove <plan> <metric>
+bridge product
+bridge product list
+bridge product get <key>
+bridge product create <key>
+bridge product update <key>
+bridge product archive <key>
+bridge product delete <key>
+bridge metric
+bridge metric list
+bridge metric set <key>
+bridge metric remove <key>
+bridge tax
+bridge tax list
+bridge tax set <country>
+bridge tax remove <country>
+bridge billing
+bridge billing settings
+bridge stripe
+bridge stripe status
+bridge stripe connect
+bridge stripe disconnect
+bridge flag
+bridge flag list
+bridge flag get <key>
+bridge flag create <key>
+bridge flag update <key>
+bridge flag on <key>
+bridge flag off <key>
+bridge flag restore <key>
+bridge flag delete <key>
+bridge flag toggle <key>
+bridge flag eval <key>
+bridge flag init
+bridge flag schedule
+bridge flag schedule set <key>
+bridge flag schedule clear <key>
+bridge flag schedule list [key]
+bridge flag export
+bridge flag import <file>
+bridge flag rule
+bridge flag rule show <key>
+bridge flag rule set <key>
+bridge flag rule add <key>
+bridge flag rule clear <key>
+bridge role
+bridge role list
+bridge role create <key>
+bridge role update <role>
+bridge role delete <role>
+bridge role set-default <role>
+bridge privilege
+bridge privilege list
+bridge privilege create <key>
+bridge privilege update <privilege>
+bridge privilege delete <privilege>
+bridge workspace
+bridge workspace list
+bridge member
+bridge member list
+bridge member get <member>
+bridge member update <member>
+bridge member remove <member>
+bridge invite
+bridge invite list
+bridge invite send <email>
+bridge invite revoke <invite>
+bridge tenant
+bridge tenant list
+bridge tenant get
+bridge tenant create
+bridge tenant update
+bridge tenant set-plan
+bridge tenant delete
+bridge user
+bridge user list
+bridge user get
+bridge user invite
+bridge user update
+bridge user remove
+bridge token
+bridge token list
+bridge token create
+bridge token revoke
+bridge branding
+bridge branding get
+bridge branding update
+bridge event
+bridge event list
+bridge event auth-attempts
+bridge setup
+bridge setup communication
+bridge setup status
+bridge doctor
+bridge info
+bridge info app
+bridge info auth-config
+bridge info flags
+bridge info plans
+bridge info roles
+bridge guide
+bridge guide list
+bridge guide flags
+bridge guide billing
+bridge guide mechanisms
+bridge guide orientation
+bridge guide fit-together
+bridge guide integration-success
+bridge guide decision <domain>
+bridge guide svelte [feature]
+bridge guide react [feature]
+bridge guide angular [feature]
+bridge guide nextjs [feature]
+bridge guide nestjs [feature]
+bridge guide express [feature]
+bridge guide add-login
+bridge guide add-paid-plan
+bridge guide add-feature-flag
+bridge guide add-teams
+bridge guide go-live
+bridge guide verify-setup
+bridge guide whats-wrong
+bridge check
+bridge check gates
