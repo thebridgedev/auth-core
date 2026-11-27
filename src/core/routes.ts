@@ -38,6 +38,7 @@ export type EndpointName =
   | 'passkey_setup_options'
   | 'passkey_setup'
   | 'passkeys'
+  | 'account_password'
   | 'social_start'
   | 'social_finish'
   | 'social_link'
@@ -79,6 +80,7 @@ export const CONTRACT_PATHS: Readonly<Record<EndpointName, string>> = {
   passkey_setup_options: '/v2/identity-access/apps/{appId}/passkeys/setup/options',
   passkey_setup: '/v2/identity-access/apps/{appId}/passkeys/setup',
   passkeys: '/v2/identity-access/passkeys',
+  account_password: '/v2/identity-access/password',
   social_start: '/v2/identity-access/apps/{appId}/social/start',
   social_finish: '/v2/identity-access/apps/{appId}/social/finish',
   social_link: '/v2/identity-access/social/link',
@@ -162,6 +164,12 @@ export const ROUTES = {
   passkeyAdd: route('POST', 'passkeys'),
   passkeyRemove: route('DELETE', 'passkeys', '/{passkeyId}'),
   passkeyRename: route('PATCH', 'passkeys', '/{passkeyId}'),
+  // The passkey offer: whether to offer one now, and the person's answer (Not now, Don't ask again).
+  passkeyOffer: route('GET', 'passkeys', '/offer'),
+  passkeyOfferAnswer: route('POST', 'passkeys', '/offer'),
+  // The signed-in person's own password: whether it may go, and removing it.
+  accountPassword: route('GET', 'account_password'),
+  accountPasswordRemove: route('DELETE', 'account_password'),
 
   // Accounts.
   me: route('GET', 'accounts', '/me'),
