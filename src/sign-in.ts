@@ -4,7 +4,7 @@ import { call, type Fetch } from './core/http.js';
 import { ROUTES } from './core/routes.js';
 import { readJson, storageKey, type BridgeStorage } from './core/storage.js';
 import { createPkce, isS256Challenge } from './core/util.js';
-import { createPasskeys, type WebAuthnCeremonies } from './passkeys.js';
+import { createPasskeys, type PasskeyAfterReset, type WebAuthnCeremonies } from './passkeys.js';
 import type { Session } from './session.js';
 import type { SignInPlace } from './sign-in-place.js';
 
@@ -219,6 +219,8 @@ export interface SignInOptions {
   readonly password?: PasswordRules;
   /** The social providers the app offers a button for, such as `google` and `github`. */
   readonly social?: readonly SocialProvider[];
+  /** When the app offers a passkey: after a sign-in another way, and made by the browser on its own. Absent: passkeys off. */
+  readonly passkeyOffer?: { readonly afterSignIn: boolean; readonly automatic: boolean };
   /**
    * Where the app's users sign in: the app's "Users sign in" setting, its main address and sign-in path, and
    * where signed-out users go and land after signing out. Absent for an app from before the setting. Read it with
@@ -712,9 +714,16 @@ export function createSignIn(deps: SignInDeps) {
       async forgot(email: string): Promise<void> {
         await post(ROUTES.passwordForgot, { email, ...linkOf() });
       },
-      /** Sets a new password from a reset link. Signs nobody in, and ends every session of the account. */
-      async set(token: string, password: string): Promise<void> {
-        await post(ROUTES.passwordSet, { token, password });
+      /**
+       * Sets a new password from a reset link. Signs nobody in, and ends every session of the account. When Bridge would
+       * offer the person a passkey, the answer's `afterReset` adds one on this browser with
+       * `passkeys.addAfterReset`, within minutes and once.
+       */
+      async set(token: string, password: string): Promise<{ readonly afterReset: PasskeyAfterReset | null }> {
+        const pkce = await createPkce();
+        const answer = (await post(ROUTES.passwordSet, { token, password, code_challenge: pkce.challenge, code_challenge_method: 'S256' })) as unknown as { passkeyPass?: unknown } | undefined;
+        const pass = answer?.passkeyPass;
+        return { afterReset: typeof pass === 'string' && pass !== '' ? { pass, verifier: pkce.verifier } : null };
       },
     },
 
