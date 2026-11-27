@@ -66,6 +66,11 @@ export interface FakeIssuerOptions {
    * sign-in, sent to the person's phone (`lastText`), or a number to set up first. @default true
    */
   readonly secondStep?: boolean;
+  /**
+   * Where the app's users sign in, as its sign-in options publish it: `{ location, main, path, emailLinks,
+   * url, signedOutUrl }`. @default none (an app from before the setting)
+   */
+  readonly signIn?: Readonly<Record<string, unknown>>;
 }
 
 /** A Child App's sign-in request, held by the issuer: its challenge, return and state. */
@@ -193,6 +198,10 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   const codes = new Map<string, Code>();
   const flows = new Map<string, { user: string; challenge: string; request?: SignInRequest }>();
   const socialStates = new Map<string, { provider: string; intent: string; challenge: string; returnPage: string; request?: SignInRequest; used: boolean }>();
+  /** Links waiting for their person: the handle, the address's person (null for an address with none), the provider and the device's challenge. */
+  const waitingLinks = new Map<string, { person: string | null; provider: string; challenge: string; used: boolean }>();
+  /** The providers linked to each person by a waiting link. */
+  const linked = new Map<string, string[]>();
   const socialCodes = new Map<string, { email: string; verified: boolean; unconfirmed: boolean; state: string }>();
   const secondSteps = new Map<string, { user: string; challenge: string; workspace: string; request?: SignInRequest; code: string | null; tries: number; settingUp: string | null }>();
   const sentTexts: { to: string; code: string }[] = [];
@@ -270,6 +279,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           passkeys: `${v2}/identity-access/passkeys`,
           social_start: `${at}/social/start`,
           social_finish: `${at}/social/finish`,
+          social_link: `${v2}/identity-access/social/link`,
           second_step: `${at}/second-step`,
           recheck: `${v2}/identity-access/recheck`,
           password_forgot: `${at}/password/forgot`,
@@ -464,7 +474,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     passkeys.set(credential, { id: credential, user, name: typeof name === 'string' && name !== '' ? name : 'Passkey', createdAt: new Date(now()).toISOString(), lastUsedAt: null });
     return { id: credential };
   }
-  const passkeyView = (each: { id: string; name: string; createdAt: string; lastUsedAt: string | null; usable?: boolean }) => ({ id: each.id, name: each.name, createdAt: each.createdAt, lastUsedAt: each.lastUsedAt, deviceType: 'multiDevice', backedUp: true, aaguid: '00000000-0000-0000-0000-000000000000', usable: each.usable !== false });
+  const passkeyView = (each: { id: string; name: string; createdAt: string; lastUsedAt: string | null; usable?: boolean; user?: string }) => ({ id: each.id, name: each.name, createdAt: each.createdAt, lastUsedAt: each.lastUsedAt, deviceType: 'multiDevice', backedUp: true, aaguid: '00000000-0000-0000-0000-000000000000', authenticator: { name: 'Passkey', icon: null }, credentialId: each.id, rpId: 'localhost', userHandle: base64url(each.user ?? ''), usable: each.usable !== false });
 
   function channelsFor(who: { session: Session; person: FakePerson } | null) {
     const channels = [{ kind: 'app', name: `/app/${appId}` }];
@@ -523,7 +533,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         signInRequests.set(id, { challenge: body['code_challenge'], redirectUri: body['redirect_uri'], state: body['state'], linkAddress: typeof body['link_address'] === 'string' ? body['link_address'] : `${origin}/sign-in/${appId}/`, expiresAt: now() + 10 * 60 * 1000, used: false });
         return json(201, { request: id, expires_in: 600 });
       }
-      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, social, ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}) });
+      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, social, ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}), ...(options.signIn === undefined ? {} : { signIn: options.signIn }) });
       if (route === '/social/start') {
         const provider = String(body['provider']);
         if (!social.includes(provider)) return oauth(403, 'method_disabled');
@@ -546,15 +556,19 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           // sign-up is proved by Bridge's own link first, which only this device's verifier finishes.
           // An address that has an account is never linked: it is answered as a password sign-up answers it (the same step, and the
           // email says the account exists), so nothing tells the page which it is.
-          if ([...people.values()].some((each) => each.email === said.email)) {
+          // Link required: either way the answer carries a handle; only one for an address with an account links anything.
+          const holder = [...people.values()].find((each) => each.email === said.email) ?? null;
+          const link = secret();
+          waitingLinks.set(link, { person: holder?.id ?? null, provider: state.provider, challenge: state.challenge, used: false });
+          if (holder !== null) {
             sentLinks.push({ to: said.email, purpose: 'account-exists', token: '' });
-            return json(202, { next: 'verify_email', email: said.email });
+            return json(202, { next: 'verify_email', email: said.email, link });
           }
           if (state.intent !== 'sign-up') return oauth(400, 'no_account', { error_description: 'There is no account for this address yet. Sign up first.' });
           const token = secret();
           links.set(token, { purpose: 'sign-up', email: said.email, challenge: state.challenge, ...(state.request === undefined ? {} : { request: state.request }), signUp: { password: secret(), firstName: null, lastName: null, workspace: null } });
           sentLinks.push({ to: said.email, purpose: 'verify-sign-up', token });
-          return json(202, { next: 'verify_email', email: said.email });
+          return json(202, { next: 'verify_email', email: said.email, link });
         }
         if (!said.verified) return oauth(400, 'email_not_verified', { error_description: "Your account's email address is not verified there." });
         let person = [...people.values()].find((each) => each.email === said.email);
@@ -841,7 +855,23 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       const kept = keepPasskey(body['response'], person.id, body['name']);
       return kept instanceof Response ? kept : json(201, passkeyView(passkeys.get(kept.id) as { id: string; name: string; createdAt: string; lastUsedAt: string | null }));
     }
+    if (path === '/v2/identity-access/social/link' && method === 'POST') {
+      const waiting = waitingLinks.get(String(body['link']));
+      const presented = typeof body['code_verifier'] === 'string' ? await s256(body['code_verifier']) : null;
+      if (waiting === undefined || waiting.used || waiting.person !== person.id || presented !== waiting.challenge) return oauth(400, 'invalid_link', { error_description: 'This link to connect your account has expired or was already used.' });
+      waiting.used = true;
+      linked.set(person.id, [...(linked.get(person.id) ?? []), waiting.provider]);
+      const names: Record<string, string> = { google: 'Google', linkedin: 'LinkedIn', facebook: 'Facebook', github: 'GitHub', azure: 'Microsoft' };
+      return json(200, { linked: waiting.provider, name: names[waiting.provider] ?? waiting.provider });
+    }
     const passkeyMatch = path.match(/^\/v2\/identity-access\/passkeys\/([^/]+)$/);
+    if (passkeyMatch !== null && method === 'PATCH') {
+      const found = passkeys.get(decodeURIComponent(passkeyMatch[1] as string));
+      if (found?.user !== person.id) return problem(404, 'not-found', '');
+      if (typeof body['name'] !== 'string' || body['name'].trim() === '' || body['name'].length > 64) return problem(400, 'invalid', 'name is 1 to 64 characters.');
+      found.name = body['name'].trim();
+      return json(200, passkeyView(found));
+    }
     if (passkeyMatch !== null && method === 'DELETE') {
       const found = passkeys.get(decodeURIComponent(passkeyMatch[1] as string));
       if (found?.user !== person.id) return problem(404, 'not-found', '');
@@ -1056,6 +1086,11 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
      * The person at a social provider: answers the provider's address from `social.start` as the provider would after
      * they signed in there, with the fragment the app's page gets back (`#bridge=social&state=…&code=…`).
      */
+    /** The providers linked to a person by a waiting link, in order. */
+    linkedProviders(email: string): readonly string[] {
+      const person = [...people.values()].find((each) => each.email === email.toLowerCase());
+      return person === undefined ? [] : (linked.get(person.id) ?? []);
+    },
     socialReturn(url: string, person: { email: string; verified?: boolean; unconfirmed?: boolean }): string {
       const state = String(new URL(url).searchParams.get('state'));
       const found = socialStates.get(state);
@@ -1226,6 +1261,8 @@ export type FakeIssuer = ReturnType<typeof createFakeIssuer>;
  */
 export function fakeWebAuthn(options: { supported?: boolean; autofill?: boolean } = {}) {
   const made: string[] = [];
+  /** What the page told the browser through the Signal API, in order. */
+  const signals: { kind: 'unknown' | 'accepted'; rpId: string; credentialId?: string; userId?: string; ids?: readonly string[] }[] = [];
   let picked: string | null = null;
   let cancel = false;
   const client = (type: string, challenge: unknown) => base64url(JSON.stringify({ type, challenge, origin: 'http://localhost' }));
@@ -1236,6 +1273,11 @@ export function fakeWebAuthn(options: { supported?: boolean; autofill?: boolean 
   };
   return {
     made,
+    signals,
+    signal: {
+      unknownCredential: (rpId: string, credentialId: string) => Promise.resolve(void signals.push({ kind: 'unknown', rpId, credentialId })),
+      allAcceptedCredentials: (rpId: string, userId: string, ids: readonly string[]) => Promise.resolve(void signals.push({ kind: 'accepted', rpId, userId, ids: [...ids] })),
+    },
     supported: () => options.supported ?? true,
     autofillSupported: () => Promise.resolve(options.autofill ?? true),
     create(given: Record<string, unknown>): Promise<Record<string, unknown>> {

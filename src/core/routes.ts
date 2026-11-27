@@ -40,6 +40,7 @@ export type EndpointName =
   | 'passkeys'
   | 'social_start'
   | 'social_finish'
+  | 'social_link'
   | 'second_step'
   | 'recheck'
   | 'invites'
@@ -78,6 +79,7 @@ export const CONTRACT_PATHS: Readonly<Record<EndpointName, string>> = {
   passkeys: '/v2/identity-access/passkeys',
   social_start: '/v2/identity-access/apps/{appId}/social/start',
   social_finish: '/v2/identity-access/apps/{appId}/social/finish',
+  social_link: '/v2/identity-access/social/link',
   second_step: '/v2/identity-access/apps/{appId}/second-step',
   recheck: '/v2/identity-access/recheck',
   invites: '/v2/identity-access/invites',
@@ -129,6 +131,8 @@ export const ROUTES = {
   // Social sign-in: the provider's address to go to, then the provider's answer finished on this page.
   socialStart: route('POST', 'social_start'),
   socialFinish: route('POST', 'social_finish'),
+  // Link required: signed in the way they already do, the person links the provider they tried first.
+  socialLink: route('POST', 'social_link', '', 'linking a provider to an account'),
   // The text-message second step: the code, a phone number to set up, a new code, or the backup code's reset.
   secondStep: route('POST', 'second_step'),
   secondStepSetup: route('POST', 'second_step', '/setup'),
@@ -150,6 +154,7 @@ export const ROUTES = {
   passkeyOptions: route('POST', 'passkeys', '/options'),
   passkeyAdd: route('POST', 'passkeys'),
   passkeyRemove: route('DELETE', 'passkeys', '/{passkeyId}'),
+  passkeyRename: route('PATCH', 'passkeys', '/{passkeyId}', 'renaming a passkey'),
 
   // Accounts.
   me: route('GET', 'accounts', '/me'),

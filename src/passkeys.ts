@@ -27,6 +27,15 @@ export interface WebAuthnCeremonies {
   get(options: Record<string, unknown>, autofill: boolean): Promise<Record<string, unknown>>;
   /** Stops a ceremony that is waiting, such as autofill when the page moves on. */
   cancel(): void;
+  /**
+   * The WebAuthn Signal API, where the browser has it: tells the browser and the person's password manager
+   * that a passkey is gone, or which ones are still the person's, so they stop offering the others. Left out, or a
+   * browser without it: nothing happens. Never fails.
+   */
+  readonly signal?: {
+    unknownCredential(rpId: string, credentialId: string): Promise<void>;
+    allAcceptedCredentials(rpId: string, userId: string, credentialIds: readonly string[]): Promise<void>;
+  };
 }
 
 /** One of the signed-in person's passkeys. */
@@ -40,6 +49,12 @@ export interface PasskeyInfo {
   readonly backedUp: boolean;
   /** The authenticator's model, all zeros when it gives none. */
   readonly aaguid: string;
+  /** Who keeps the passkey, from its model: "iCloud Keychain", "Google Password Manager", or "Passkey" when unknown, with its icon (a data address) when known. */
+  readonly authenticator?: { readonly name: string; readonly icon: string | null };
+  /** The passkey's credential id, its domain (RP ID) and the person's user handle: what the Signal API is told. */
+  readonly credentialId?: string;
+  readonly rpId?: string;
+  readonly userHandle?: string;
   /**
    * False for a passkey made for another domain than the app's own (on Bridge's pages, before passkeys followed the
    * app's main address): it cannot sign in any more. Tell the person, let them sign in another way, and offer a new one.
@@ -81,6 +96,7 @@ export function ceremonyError(error: unknown): BridgeError {
   if (error instanceof BridgeError) return error;
   const { name, code } = (error ?? {}) as { name?: unknown; code?: unknown };
   if (name === 'NotAllowedError' || name === 'AbortError' || code === 'ERROR_CEREMONY_ABORTED') return new BridgeError('cancelled', 'No passkey was used.', { cause: error });
+  if (code === 'ERROR_AUTHENTICATOR_MISSING_USER_VERIFICATION_SUPPORT') return new BridgeError('invalid', 'This key needs a PIN or fingerprint to be used here.', { code: 'passkey_needs_verification', cause: error });
   if (name === 'InvalidStateError' || code === 'ERROR_AUTHENTICATOR_PREVIOUSLY_REGISTERED') return new BridgeError('conflict', 'This device has a passkey for the app already.', { code: 'passkey_exists', cause: error });
   if (name === 'SecurityError') return new BridgeError('origin-not-allowed', 'This page cannot use passkeys for the app: its address does not match.', { cause: error });
   return new BridgeError('not-supported', 'This browser could not use a passkey.', { cause: error });
@@ -106,7 +122,47 @@ export function browserCeremonies(): WebAuthnCeremonies {
     cancel() {
       void library().then(({ WebAuthnAbortService }) => WebAuthnAbortService.cancelCeremony());
     },
+    signal: {
+      async unknownCredential(rpId, credentialId) {
+        const api = signalApi();
+        if (api?.signalUnknownCredential !== undefined) await api.signalUnknownCredential({ rpId, credentialId }).catch(() => undefined);
+      },
+      async allAcceptedCredentials(rpId, userId, credentialIds) {
+        const api = signalApi();
+        if (api?.signalAllAcceptedCredentials !== undefined) await api.signalAllAcceptedCredentials({ rpId, userId, allAcceptedCredentialIds: [...credentialIds] }).catch(() => undefined);
+      },
+    },
   };
+}
+
+/** The browser's Signal API methods, where it has them (Chrome 132+, Safari 26+): feature-detected, never assumed. */
+interface SignalApi {
+  signalUnknownCredential?(input: { rpId: string; credentialId: string }): Promise<void>;
+  signalAllAcceptedCredentials?(input: { rpId: string; userId: string; allAcceptedCredentialIds: string[] }): Promise<void>;
+}
+function signalApi(): SignalApi | null {
+  if (typeof window === 'undefined' || typeof window.PublicKeyCredential !== 'function') return null;
+  return window.PublicKeyCredential as unknown as SignalApi;
+}
+
+/** Tells the browser which of the person's passkeys are still theirs, per domain. Never fails. */
+export async function signalAccepted(ceremonies: WebAuthnCeremonies, passkeys: readonly PasskeyInfo[]): Promise<void> {
+  if (ceremonies.signal === undefined) return;
+  const groups = new Map<string, { userId: string; ids: string[] }>();
+  for (const each of passkeys) {
+    if (each.rpId === undefined || each.userHandle === undefined || each.credentialId === undefined) continue;
+    const key = `${each.rpId} ${each.userHandle}`;
+    const group = groups.get(key) ?? { userId: each.userHandle, ids: [] };
+    group.ids.push(each.credentialId);
+    groups.set(key, group);
+  }
+  for (const [key, group] of groups) {
+    try {
+      await ceremonies.signal.allAcceptedCredentials(key.split(' ')[0] ?? '', group.userId, group.ids);
+    } catch {
+      // The Signal API is a courtesy to the browser: it never stops the page.
+    }
+  }
 }
 
 export interface PasskeyDeps {
@@ -138,7 +194,7 @@ export function createPasskeys<Step>(deps: PasskeyDeps) {
       throw ceremonyError(error);
     }
   };
-  const signedIn = async <T>(method: 'GET' | 'POST' | 'DELETE', route: (typeof ROUTES)[keyof typeof ROUTES], body?: Readonly<Record<string, unknown>>, params?: Readonly<Record<string, string>>) =>
+  const signedIn = async <T>(method: 'GET' | 'POST' | 'DELETE' | 'PATCH', route: (typeof ROUTES)[keyof typeof ROUTES], body?: Readonly<Record<string, unknown>>, params?: Readonly<Record<string, string>>) =>
     (await call<T>(deps.fetch, deps.endpoints().url(route, params), { method, token: await deps.session.accessToken(), ...(body === undefined ? {} : { body }) })).body;
 
   return {
@@ -165,12 +221,35 @@ export function createPasskeys<Step>(deps: PasskeyDeps) {
         if (input.autofill === true && error instanceof BridgeError && error.kind === 'not-supported') throw new BridgeError('cancelled', 'This browser cannot offer passkeys in the autofill list.', { cause: error });
         throw error;
       });
-      const answer = await deps.post(ROUTES.passkeySignIn, { response, ...(input.workspace === undefined ? {} : { workspace: input.workspace }) });
+      let answer;
+      try {
+        answer = await deps.post(ROUTES.passkeySignIn, { response, ...(input.workspace === undefined ? {} : { workspace: input.workspace }) });
+      } catch (error) {
+        // A passkey Bridge has no record of (removed, or the app's data gone): the browser is told to stop offering it.
+        const rpId = typeof options['rpId'] === 'string' ? options['rpId'] : null;
+        const credentialId = typeof response['id'] === 'string' ? response['id'] : null;
+        if (error instanceof BridgeError && error.code === 'unknown_passkey' && rpId !== null && credentialId !== null) await deps.ceremonies.signal?.unknownCredential(rpId, credentialId).catch(() => undefined);
+        throw error;
+      }
       return deps.signInSteps<Step>(answer, pkce.verifier);
     },
 
     /** The signed-in person's passkeys, newest first. A passkey made for another domain says `usable: false`. */
-    list: async (): Promise<PasskeyInfo[]> => (await signedIn<(Omit<PasskeyInfo, 'usable'> & { usable?: boolean })[]>('GET', ROUTES.passkeys)).map((each) => ({ ...each, usable: each.usable !== false })),
+    async list(): Promise<PasskeyInfo[]> {
+      const listed = (await signedIn<(Omit<PasskeyInfo, 'usable'> & { usable?: boolean })[]>('GET', ROUTES.passkeys)).map((each) => ({ ...each, usable: each.usable !== false }));
+      // The browser and the person's password manager stop offering passkeys that are no longer theirs.
+      await signalAccepted(deps.ceremonies, listed);
+      return listed;
+    },
+
+    /**
+     * Renames one of the signed-in person's passkeys: 1 to 64 characters. Needs a recent sign-in, as adding one does:
+     * otherwise it fails with `reauthenticate`.
+     */
+    async rename(passkeyId: string, name: string): Promise<PasskeyInfo> {
+      const renamed = await signedIn<Omit<PasskeyInfo, 'usable'> & { usable?: boolean }>('PATCH', ROUTES.passkeyRename, { name }, { passkeyId });
+      return { ...renamed, usable: renamed.usable !== false };
+    },
 
     /**
      * Adds a passkey for the signed-in person, from this device. Needs a
@@ -190,6 +269,12 @@ export function createPasskeys<Step>(deps: PasskeyDeps) {
      */
     async remove(passkeyId: string): Promise<void> {
       await signedIn<void>('DELETE', ROUTES.passkeyRemove, undefined, { passkeyId });
+      // The browser stops offering the removed one: it is told which are left. Never fails the removal.
+      try {
+        await signalAccepted(deps.ceremonies, (await signedIn<PasskeyInfo[]>('GET', ROUTES.passkeys)) ?? []);
+      } catch {
+        // Nothing to tell.
+      }
     },
 
     setupLink: {

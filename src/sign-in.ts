@@ -6,6 +6,7 @@ import { readJson, storageKey, type BridgeStorage } from './core/storage.js';
 import { createPkce, isS256Challenge } from './core/util.js';
 import { createPasskeys, type WebAuthnCeremonies } from './passkeys.js';
 import type { Session } from './session.js';
+import type { SignInPlace } from './sign-in-place.js';
 
 /**
  * Sign-in, sign-up and password recovery, in the Child App's own pages.
@@ -60,6 +61,12 @@ export type SignInStep =
        * session already open here was renewed, and no new one was made.
        */
       readonly rechecked?: true;
+      /**
+       * Set when this sign-in also linked a provider the person tried first on this device: Bridge
+       * found an account for the address that provider gave, and linked it once the person signed in the way they
+       * already do. Say "<name> is now connected to your account".
+       */
+      readonly linked?: { readonly provider: string; readonly name: string };
       /**
        * Set once, when the person has just set up the text-message second step:
        * the backup code that resets it if they lose their phone. Show it once
@@ -212,6 +219,12 @@ export interface SignInOptions {
   readonly password?: PasswordRules;
   /** The social providers the app offers a button for, such as `google` and `github`. */
   readonly social?: readonly SocialProvider[];
+  /**
+   * Where the app's users sign in: the app's "Users sign in" setting, its main address and sign-in path, and
+   * where signed-out users go and land after signing out. Absent for an app from before the setting. Read it with
+   * `signInPlaceOf`, `signsInOnHostedPage`, `signedOutTarget` and `hostedPageRedirect`.
+   */
+  readonly signIn?: Omit<SignInPlace, 'returnPath'> & { readonly returnPath?: string };
 }
 
 /** The social sign-in providers Bridge offers. */
@@ -232,7 +245,7 @@ export interface SocialStartInput {
 }
 
 /** A social provider's answer, as it lands on the page: `#bridge=social&state=…&code=…`, or `&error=…`. */
-export type SocialReturn = { readonly state: string; readonly code: string } | { readonly error: 'access_denied' | 'provider_error' };
+export type SocialReturn = { readonly state: string; readonly code: string } | { readonly error: 'access_denied' | 'provider_error'; readonly reason?: string };
 
 /** An app's password rules, as Bridge checks every new password against them. */
 export interface PasswordRules {
@@ -244,6 +257,10 @@ export interface PasswordRules {
   readonly requireSymbol?: boolean;
   /** A password may not contain the person's email address, or the part before its `@`. */
   readonly blockEmail?: boolean;
+  /** A password may not be a common one: Bridge checks it against its list, refreshed every release. */
+  readonly blockCommon?: boolean;
+  /** A password may not contain the app's name: Bridge checks it. */
+  readonly blockAppName?: boolean;
 }
 
 /** An email link Bridge sent, as it lands on the app's page: `#bridge=<kind>&token=<token>`. */
@@ -283,6 +300,13 @@ const SIGN_UP_KEEP_MS = 15 * 60 * 1000;
 const MAGIC_LINK_KEEP_MS = 15 * 60 * 1000;
 /** How long a social sign-in may take at the provider, and so how long its verifier is kept. */
 const SOCIAL_KEEP_MS = 10 * 60 * 1000;
+
+/** A provider waiting to be linked once the person signs in the way they already do: Bridge's handle and the verifier it is bound to. */
+interface PendingLink {
+  readonly link: string;
+  readonly verifier: string;
+  readonly expiresAt: number;
+}
 
 function choicesOf(value: unknown): WorkspaceChoice[] {
   if (!Array.isArray(value)) return [];
@@ -333,6 +357,26 @@ export function createSignIn(deps: SignInDeps) {
   const signUpKey = storageKey(deps.issuer, 'sign-up');
   const magicLinkKey = storageKey(deps.issuer, 'magic-link');
   const socialKey = storageKey(deps.issuer, 'social');
+  /** A provider waiting to be linked: every tab of the origin reads it, as the sign-up link it came with opens in a new tab. */
+  const linkKey = storageKey(deps.issuer, 'social-link');
+
+  /**
+   * After a sign-in: links the provider the person tried first on this device, when one waits. Never fails the
+   * sign-in: a handle that no longer works, or an issuer that does not offer linking yet, links nothing.
+   */
+  async function linkWaiting(): Promise<{ readonly provider: string; readonly name: string } | null> {
+    const waiting = await readJson<PendingLink>(deps.signUpStorage, linkKey);
+    if (waiting === null) return null;
+    await deps.signUpStorage.remove(linkKey);
+    if (!(waiting.expiresAt > Date.now()) || typeof waiting.link !== 'string' || typeof waiting.verifier !== 'string') return null;
+    try {
+      if (!deps.endpoints().offers(ROUTES.socialLink)) return null;
+      const answer = (await post(ROUTES.socialLink, { link: waiting.link, code_verifier: waiting.verifier }, await deps.session.accessToken())) as Record<string, unknown> | undefined;
+      return typeof answer?.['linked'] === 'string' ? { provider: answer['linked'], name: typeof answer['name'] === 'string' ? answer['name'] : answer['linked'] } : null;
+    } catch {
+      return null;
+    }
+  }
   /** Where hosted mode keeps the app's own verifier for its sign-in request (see `hosted.ts`). */
   const hostedKey = storageKey(deps.issuer, 'hosted');
   /** The sign-in request this page signs in for, if any (see `request.use`). */
@@ -387,7 +431,8 @@ export function createSignIn(deps: SignInDeps) {
         // A code made for a sign-in request is the other app's: it goes to the app's return, and is never traded here.
         if (typeof answer?.redirect_uri === 'string' && typeof answer.state === 'string') return { done: true, handoff: requestReturnUrl(answer.redirect_uri, code, answer.state, deps.issuer), ...(answer.confirm_return === true ? { confirmReturn: true as const } : {}), ...backupCode };
         await deps.session.exchangeCode(code, verifier);
-        return { done: true, ...backupCode };
+        const linked = await linkWaiting();
+        return { done: true, ...backupCode, ...(linked === null ? {} : { linked }) };
       },
       (flow, workspaces) => ({
         done: false,
@@ -557,7 +602,7 @@ export function createSignIn(deps: SignInDeps) {
         const pkce = await createPkce();
         const page = input.returnPage ?? (typeof window === 'undefined' ? undefined : `${window.location.origin}${window.location.pathname}${window.location.search}`);
         if (page === undefined) throw new BridgeError('invalid', 'Name the page the provider comes back to: returnPage.');
-        await deps.signUpStorage.set(socialKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + SOCIAL_KEEP_MS } satisfies StoredSignUp));
+        await deps.signUpStorage.set(socialKey, JSON.stringify({ verifier: pkce.verifier, expiresAt: Date.now() + SOCIAL_KEEP_MS, provider } satisfies StoredSignUp & { provider: SocialProvider }));
         const signingUp = input.intent === 'sign-up';
         const answer = (await post(ROUTES.socialStart, {
           provider,
@@ -587,15 +632,28 @@ export function createSignIn(deps: SignInDeps) {
        * already has an account gets the same answer and is never linked).
        */
       async finish(answer: SocialReturn): Promise<SignInStep> {
-        if ('error' in answer) throw new BridgeError(answer.error === 'access_denied' ? 'cancelled' : 'unavailable', answer.error === 'access_denied' ? 'The sign-in was cancelled at the provider.' : 'The provider did not confirm the sign-in. Try again.', { code: answer.error });
+        if ('error' in answer) throw new BridgeError(answer.error === 'access_denied' ? 'cancelled' : 'unavailable', answer.error === 'access_denied' ? 'The sign-in was cancelled at the provider.' : 'The provider did not confirm the sign-in. Try again.', { code: answer.error, ...(answer.error === 'provider_error' && answer.reason !== undefined ? { reason: answer.reason } : {}) });
+        const started = await readJson<{ provider?: unknown }>(deps.signUpStorage, socialKey);
         const verifier = await waitingVerifier(socialKey);
-        const reply = await post(ROUTES.socialFinish, { state: answer.state, code: answer.code, ...(verifier === null ? {} : { code_verifier: verifier }) });
+        let reply;
+        try {
+          reply = await post(ROUTES.socialFinish, { state: answer.state, code: answer.code, ...(verifier === null ? {} : { code_verifier: verifier }) });
+        } catch (error) {
+          // No account for the address: the error's `reason` names the provider used, so the page can offer
+          // "Create an account with <provider>" in one click (`start(provider, { intent: 'sign-up' })`).
+          if (error instanceof BridgeError && error.code === 'no_account' && typeof started?.provider === 'string') throw new BridgeError(error.kind, error.message, { status: error.status, code: error.code, reason: started.provider, cause: error });
+          throw error;
+        }
         if (verifier === null) throw new BridgeError('wrong-device', 'Finish signing in in the browser you started in.', { code: 'wrong_device' });
         await deps.signUpStorage.remove(socialKey);
         // An address the provider did not confirm (Facebook): Bridge emailed its own link, as a password sign-up does. The link opens in a
         // new tab and finishes the sign-up only with this device's verifier, so it waits where a sign-up's does.
         if (reply?.next === 'verify_email') {
           await deps.signUpStorage.set(signUpKey, JSON.stringify({ verifier, expiresAt: Date.now() + SIGN_UP_KEEP_MS } satisfies StoredSignUp));
+          // Link required: when the address has an account, the person signs in the way they already do, on this
+          // device, and the provider is linked then. Bridge gives the handle either way, so nothing says whether it has one.
+          const link = (reply as Record<string, unknown>)['link'];
+          if (typeof link === 'string' && link !== '') await deps.signUpStorage.set(linkKey, JSON.stringify({ link, verifier, expiresAt: Date.now() + SOCIAL_KEEP_MS } satisfies PendingLink));
           return { done: false, next: 'verify_email', email: typeof reply.email === 'string' ? reply.email : '' };
         }
         // On a sign-in request the code is the other app's, and goes to its return.
@@ -736,7 +794,12 @@ export function readSocialReturn(hashOrUrl: string): SocialReturn | null {
   const params = new URLSearchParams(hash);
   if (params.get('bridge') !== 'social') return null;
   const error = params.get('error');
-  if (error !== null) return { error: error === 'access_denied' ? 'access_denied' : 'provider_error' };
+  if (error !== null) {
+    if (error === 'access_denied') return { error };
+    // What Microsoft's error meant, when Bridge knows: a short word, never the provider's own text.
+    const reason = params.get('reason');
+    return reason !== null && /^[a-z_]{1,40}$/.test(reason) ? { error: 'provider_error', reason } : { error: 'provider_error' };
+  }
   const state = params.get('state');
   const code = params.get('code');
   return state === null || state === '' || code === null || code === '' ? null : { state, code };

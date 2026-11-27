@@ -80,6 +80,7 @@ export interface BridgeErrorInit {
   readonly quota?: LimitReached | null;
   readonly signInUrl?: string | null;
   readonly failed?: readonly string[] | null;
+  readonly reason?: string | null;
   readonly cause?: unknown;
 }
 
@@ -112,6 +113,12 @@ export class BridgeError extends Error {
   readonly signInUrl: string | null;
   /** For `password_change_required`: which of the app's password rules the person's password breaks. Never the password. */
   readonly failed: readonly string[] | null;
+  /**
+   * For `microsoft_account_not_allowed`: `personal`, `work` or `directory` (who can sign in turned the account away). For
+   * `provider_error`: what Microsoft's error means, when Bridge knows it (`secret_expired`, `wrong_return_address`,
+   * `wrong_account_types`, `app_not_in_directory`, `admin_approval_needed`).
+   */
+  readonly reason: string | null;
 
   constructor(kind: BridgeErrorKind, message: string, init: BridgeErrorInit = {}) {
     super(message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -125,6 +132,7 @@ export class BridgeError extends Error {
     this.quota = init.quota ?? null;
     this.signInUrl = init.signInUrl ?? null;
     this.failed = init.failed ?? null;
+    this.reason = init.reason ?? null;
   }
 }
 
@@ -166,6 +174,21 @@ const isLockName = (value: unknown): boolean => typeof value === 'string' && LOC
 export function isBillingLocked(error: unknown): boolean {
   if (!isBridgeError(error) || error.status !== 402) return false;
   return isLockName(error.code) || isLockName(error.problem?.type);
+}
+
+/** Whether a passkey was refused because it did no fingerprint, face or PIN check (`passkey_needs_verification`). */
+export function needsUserVerification(error: unknown): boolean {
+  return isBridgeError(error) && error.code === 'passkey_needs_verification';
+}
+
+/**
+ * A social sign-in's refusal the page can name: who can sign in turned the Microsoft account away
+ * (`microsoft_account_not_allowed`, with `personal`, `work` or `directory`), or the provider refused for a known cause
+ * (`provider_error`, with its reason). Null for any other error, and for a provider error with no known cause.
+ */
+export function socialRefusal(error: unknown): { readonly code: 'microsoft_account_not_allowed' | 'provider_error'; readonly reason: string } | null {
+  if (!isBridgeError(error) || error.reason === null) return null;
+  return error.code === 'microsoft_account_not_allowed' || error.code === 'provider_error' ? { code: error.code, reason: error.reason } : null;
 }
 
 /**
@@ -214,6 +237,11 @@ const CODE_KINDS: Readonly<Record<string, BridgeErrorKind>> = {
   // Passkeys: one that could not be verified, one Bridge does not know, a ceremony that took too long or was used.
   passkey_refused: 'wrong-credentials',
   unknown_passkey: 'wrong-credentials',
+  // A passkey or security key that did no fingerprint, face or PIN check: the person can fix it, so it is told apart.
+  passkey_needs_verification: 'invalid',
+  // Social sign-in: who can sign in with Microsoft turned the account away; the provider refused, with a known cause or not.
+  microsoft_account_not_allowed: 'forbidden',
+  provider_error: 'unavailable',
   invalid_challenge: 'flow-expired',
   origin_not_allowed: 'origin-not-allowed',
   // An invite's link that no longer works: revoked, used, or out of date (also what a link that names no invite gets).
@@ -299,12 +327,15 @@ export function errorFromAnswer(status: number, body: unknown, headers?: { get(n
     const message = text(record['error_description']) ?? (reason !== undefined ? `Refused: ${reason}.` : `Bridge refused the request (${oauth}).`);
     const handOverTo = oauth === 'passkey_on_app_page' ? webAddress(record['sign_in_url']) : null;
     const failed = Array.isArray(record['failed']) ? record['failed'].filter((each): each is string => typeof each === 'string') : null;
+    // These keep their own code, and carry the reason beside it.
+    const ownCode = oauth === 'microsoft_account_not_allowed' || oauth === 'provider_error';
     return new BridgeError(kind, message, {
       status,
-      code: reason ?? oauth,
+      code: ownCode ? oauth : (reason ?? oauth),
+      ...(ownCode && reason !== undefined ? { reason } : {}),
       retryAfterSeconds,
       ...(handOverTo === null ? {} : { signInUrl: handOverTo }),
-      ...(oauth === 'password_change_required' && failed !== null ? { failed } : {}),
+      ...((oauth === 'password_change_required' || oauth === 'password_rules') && failed !== null ? { failed } : {}),
     });
   }
 

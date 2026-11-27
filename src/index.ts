@@ -16,7 +16,8 @@ registerInstance();
 export { createBridge } from './bridge.js';
 export type { Bridge, BridgeEvents, BridgeOptions } from './bridge.js';
 
-export { BridgeError, checkoutSetupProblem, isBridgeError, isPasswordChangeRequired, passkeyHandOver, waitMinutes } from './core/errors.js';
+export { BridgeError, checkoutSetupProblem, isBridgeError, isPasswordChangeRequired, needsUserVerification, passkeyHandOver, socialRefusal, waitMinutes } from './core/errors.js';
+export { hostedPageRedirect, signedOutTarget, signInPlaceOf, signsInOnHostedPage, type SignInPlace } from './sign-in-place.js';
 export type { BridgeErrorKind, LimitReached, Problem } from './core/errors.js';
 export { API_VERSION } from './core/routes.js';
 export type { IssuerMetadata } from './core/discovery.js';
@@ -30,7 +31,7 @@ export { browserCeremonies } from './passkeys.js';
 export { needsRecheck } from './recheck.js';
 export type { Recheck, RecheckMethod } from './recheck.js';
 export type { PasskeyInfo, PasskeySignInInput, WebAuthnCeremonies } from './passkeys.js';
-export type { AcceptedInvite, EmailLink, EmailLinkWindow, HandoffInput, HandoffStep, InvitePreview, InviteSignUpInput, SignInInput, SignInOptions, SignInStep, SignUpAttribution, SignUpInput, SocialProvider, SocialReturn, SocialStartInput, WorkspaceChoice } from './sign-in.js';
+export type { AcceptedInvite, EmailLink, EmailLinkWindow, HandoffInput, HandoffStep, InvitePreview, InviteSignUpInput, PasswordRules, SignInInput, SignInOptions, SignInStep, SignUpAttribution, SignUpInput, SocialProvider, SocialReturn, SocialStartInput, WorkspaceChoice } from './sign-in.js';
 export { HANDOFF_CALLBACK_PATH, handoffReturnUrl, isLoopbackRedirect, readHandoffRequest } from './handoff.js';
 export type { HandoffRequest } from './handoff.js';
 export { initiatedSignIn, isHostedReturn } from './hosted.js';
