@@ -168,21 +168,21 @@ export const en: Messages = {
   'login.submitting': 'Signing in…',
   'login.forgotPassword': 'Forgot password?',
   'login.signupPrompt': "Don't have an account?",
-  'login.signupLink': 'Sign up',
+  'login.signupLink': "Create account",
   'login.error.invalidCredentials': 'Wrong email or password. Try again, or reset your password.',
-  'error.originNotAllowed': 'This page\'s address, {origin}, is not one of this app\'s registered addresses in Bridge.',
+  'error.originNotAllowed': "This page's address, {origin}, is not registered for this app in Bridge. Ask the app's owner to add it.",
 
   'forgot.headingRequest': 'Reset your password',
-  'forgot.headingSet': 'Set new password',
+  'forgot.headingSet': "Choose a new password",
   'forgot.description': "Enter your email and we'll send you a link to reset your password.",
   'forgot.submit': 'Send reset link',
   'forgot.setSubmit': 'Save new password',
   'forgot.emailSent': 'If this address has an account, a link to reset your password is on its way.',
-  'forgot.successHeading': 'Password set',
+  'forgot.successHeading': "Password saved",
   'forgot.error.send': 'The link could not be sent. Try again in a moment.',
   'forgot.error.update': 'Your password could not be changed. Try again, or ask for a new link.',
   'forgot.error.mismatch': 'Passwords do not match.',
-  'forgot.error.tooShort': 'Password must be at least 8 characters.',
+  'forgot.error.tooShort': "Use at least 8 characters.",
 
   'signup.heading': 'Create your account',
   'signup.submit': 'Create account',
@@ -202,11 +202,11 @@ export const en: Messages = {
   'verify.finishing': 'Finishing sign-up…',
   'verify.error.wrongDevice': 'This link works only in the browser where you signed up. Open it there, or sign up again here.',
   'link.error.invalid': 'This link is no longer valid. Ask for a new one.',
-  'login.error.flowExpired': 'That took too long. Please sign in again.',
+  'login.error.flowExpired': "That took too long. Sign in again.",
   'login.error.unsupportedStep': 'Your workspace asks for a sign-in step that is not available here yet. Ask your workspace admin for help.',
-  'error.unavailable': 'This is not available right now. Please try again shortly.',
+  'error.unavailable': "This is not available right now. Try again in a moment.",
   'error.network': 'Could not connect. Check your connection and try again.',
-  'error.rateLimited': 'Too many attempts. Please wait a moment and try again.',
+  'error.rateLimited': "Too many attempts. Wait a moment, then try again.",
   'login.error.tooManyAttempts': 'Too many attempts. Try again in {minutes} minutes.',
   'login.error.tooManyAttemptsOneMinute': 'Too many attempts. Try again in 1 minute.',
   'login.error.accountLocked': 'Too many attempts. This account is locked. Reset your password to sign in again.',
@@ -275,7 +275,7 @@ export const sv: Messages = {
   'error.originNotAllowed': 'Sidans adress, {origin}, är inte en av appens registrerade adresser i Bridge.',
 
   'forgot.headingRequest': 'Återställ ditt lösenord',
-  'forgot.headingSet': 'Ange nytt lösenord',
+  'forgot.headingSet': "Välj ett nytt lösenord",
   'forgot.description':
     'Ange din e-postadress så skickar vi en länk för att återställa lösenordet.',
   'forgot.submit': 'Skicka återställningslänk',
@@ -285,7 +285,7 @@ export const sv: Messages = {
   'forgot.error.send': 'Länken kunde inte skickas. Försök igen om en stund.',
   'forgot.error.update': 'Lösenordet kunde inte ändras. Försök igen eller be om en ny länk.',
   'forgot.error.mismatch': 'Lösenorden stämmer inte överens.',
-  'forgot.error.tooShort': 'Lösenordet måste vara minst 8 tecken.',
+  'forgot.error.tooShort': "Använd minst 8 tecken.",
 
   'signup.heading': 'Skapa ditt konto',
   'signup.submit': 'Skapa konto',
@@ -307,7 +307,7 @@ export const sv: Messages = {
   'link.error.invalid': 'Länken är inte längre giltig. Be om en ny.',
   'login.error.flowExpired': 'Det tog för lång tid. Logga in igen.',
   'login.error.unsupportedStep': 'Din arbetsyta kräver ett inloggningssteg som inte finns här än. Be arbetsytans administratör om hjälp.',
-  'error.unavailable': 'Det går inte just nu. Försök igen om en stund.',
+  'error.unavailable': "Det här är inte tillgängligt just nu. Försök igen om en stund.",
   'error.network': 'Det gick inte att ansluta. Kontrollera anslutningen och försök igen.',
   'error.rateLimited': 'För många försök. Vänta en stund och försök igen.',
   'login.error.tooManyAttempts': 'För många försök. Försök igen om {minutes} minuter.',
@@ -357,7 +357,7 @@ export const da: Messages = {
   'error.originNotAllowed': 'Sidens adresse, {origin}, er ikke en af appens registrerede adresser i Bridge.',
 
   'forgot.headingRequest': 'Nulstil din adgangskode',
-  'forgot.headingSet': 'Vælg ny adgangskode',
+  'forgot.headingSet': "Vælg en ny adgangskode",
   'forgot.description':
     'Indtast din e-mail, så sender vi dig et link til at nulstille din adgangskode.',
   'forgot.submit': 'Send nulstillingslink',
@@ -367,7 +367,7 @@ export const da: Messages = {
   'forgot.error.send': 'Linket kunne ikke sendes. Prøv igen om lidt.',
   'forgot.error.update': 'Din adgangskode kunne ikke ændres. Prøv igen, eller bed om et nyt link.',
   'forgot.error.mismatch': 'Adgangskoderne er ikke ens.',
-  'forgot.error.tooShort': 'Adgangskoden skal være på mindst 8 tegn.',
+  'forgot.error.tooShort': "Brug mindst 8 tegn.",
 
   'signup.heading': 'Opret din konto',
   'signup.submit': 'Opret konto',
@@ -399,7 +399,7 @@ export const da: Messages = {
   'handoff.done': 'Du er logget ind. Du kan lukke fanen og gå tilbage til {program}.',
   'action.signOut': 'Log ud',
   'invite.heading': 'Bliv medlem af {workspace}',
-  'invite.accept': 'Accepter invitationen',
+  'invite.accept': "Tag imod invitationen",
 };
 
 /** Norwegian Bokmål. Informal `du`. */
@@ -420,8 +420,8 @@ export const nb: Messages = {
   'placeholder.phoneNumber': '',
   'action.showPassword': 'Vis passord',
   'action.hidePassword': 'Skjul passord',
-  'action.showPasswords': 'Vis passord',
-  'action.hidePasswords': 'Skjul passord',
+  'action.showPasswords': "Vis passordene",
+  'action.hidePasswords': "Skjul passordene",
   'action.backToLogin': 'Tilbake til innlogging',
   'action.backToSignIn': 'Tilbake til innlogging',
   'action.copy': 'Kopier',
@@ -439,7 +439,7 @@ export const nb: Messages = {
   'error.originNotAllowed': 'Sidens adresse, {origin}, er ikke en av appens registrerte adresser i Bridge.',
 
   'forgot.headingRequest': 'Tilbakestill passordet ditt',
-  'forgot.headingSet': 'Velg nytt passord',
+  'forgot.headingSet': "Velg et nytt passord",
   'forgot.description':
     'Skriv inn e-postadressen din, så sender vi deg en lenke for å tilbakestille passordet.',
   'forgot.submit': 'Send tilbakestillingslenke',
@@ -449,7 +449,7 @@ export const nb: Messages = {
   'forgot.error.send': 'Lenken kunne ikke sendes. Prøv igjen om litt.',
   'forgot.error.update': 'Passordet ditt kunne ikke endres. Prøv igjen, eller be om en ny lenke.',
   'forgot.error.mismatch': 'Passordene er ikke like.',
-  'forgot.error.tooShort': 'Passordet må være på minst 8 tegn.',
+  'forgot.error.tooShort': "Bruk minst 8 tegn.",
 
   'signup.heading': 'Opprett kontoen din',
   'signup.submit': 'Opprett konto',
@@ -481,7 +481,7 @@ export const nb: Messages = {
   'handoff.done': 'Du er logget inn. Du kan lukke fanen og gå tilbake til {program}.',
   'action.signOut': 'Logg ut',
   'invite.heading': 'Bli med i {workspace}',
-  'invite.accept': 'Godta invitasjonen',
+  'invite.accept': "Ta imot invitasjonen",
 };
 
 /** Dutch. Informal `je`/`jij`. */
@@ -521,7 +521,7 @@ export const nl: Messages = {
   'error.originNotAllowed': 'Het adres van deze pagina, {origin}, is niet een van de geregistreerde adressen van deze app in Bridge.',
 
   'forgot.headingRequest': 'Stel je wachtwoord opnieuw in',
-  'forgot.headingSet': 'Nieuw wachtwoord instellen',
+  'forgot.headingSet': "Kies een nieuw wachtwoord",
   'forgot.description':
     'Voer je e-mailadres in, dan sturen we je een link om je wachtwoord opnieuw in te stellen.',
   'forgot.submit': 'Link versturen',
@@ -531,7 +531,7 @@ export const nl: Messages = {
   'forgot.error.send': 'De link kon niet worden verstuurd. Probeer het zo opnieuw.',
   'forgot.error.update': 'Je wachtwoord kon niet worden gewijzigd. Probeer het opnieuw of vraag een nieuwe link aan.',
   'forgot.error.mismatch': 'De wachtwoorden komen niet overeen.',
-  'forgot.error.tooShort': 'Het wachtwoord moet minimaal 8 tekens lang zijn.',
+  'forgot.error.tooShort': "Gebruik minstens 8 tekens.",
 
   'signup.heading': 'Maak je account aan',
   'signup.submit': 'Account aanmaken',
@@ -548,8 +548,8 @@ export const nl: Messages = {
   'workspace.error.switch': 'Wisselen van werkruimte is niet gelukt. Probeer het opnieuw.',
 
 
-  'verify.finishing': 'Aanmelding afronden…',
-  'verify.error.wrongDevice': 'Deze link werkt alleen in de browser waarin je je hebt aangemeld. Open hem daar, of meld je hier opnieuw aan.',
+  'verify.finishing': "Account aanmaken afronden…",
+  'verify.error.wrongDevice': "Deze link werkt alleen in de browser waarin je je account hebt aangemaakt. Open hem daar, of maak hier opnieuw een account aan.",
   'link.error.invalid': 'Deze link is niet meer geldig. Vraag een nieuwe aan.',
   'login.error.flowExpired': 'Dat duurde te lang. Log opnieuw in.',
   'login.error.unsupportedStep': 'Je werkruimte vraagt een inlogstap die hier nog niet beschikbaar is. Vraag de beheerder van je werkruimte om hulp.',
@@ -563,7 +563,7 @@ export const nl: Messages = {
   'handoff.done': 'Je bent ingelogd. Je kunt dit tabblad sluiten en teruggaan naar {program}.',
   'action.signOut': 'Uitloggen',
   'invite.heading': 'Word lid van {workspace}',
-  'invite.accept': 'Uitnodiging accepteren',
+  'invite.accept': "Uitnodiging aannemen",
 };
 
 /** German. Informal `du`. */
@@ -603,17 +603,17 @@ export const de: Messages = {
   'error.originNotAllowed': 'Die Adresse dieser Seite, {origin}, gehört nicht zu den registrierten Adressen dieser App in Bridge.',
 
   'forgot.headingRequest': 'Passwort zurücksetzen',
-  'forgot.headingSet': 'Neues Passwort festlegen',
+  'forgot.headingSet': "Wähle ein neues Passwort",
   'forgot.description':
     'Gib deine E-Mail-Adresse ein, dann schicken wir dir einen Link zum Zurücksetzen deines Passworts.',
-  'forgot.submit': 'Link senden',
+  'forgot.submit': "Link zum Zurücksetzen senden",
   'forgot.setSubmit': 'Neues Passwort speichern',
   'forgot.emailSent': 'Wenn es für diese Adresse ein Konto gibt, ist ein Link zum Zurücksetzen deines Passworts unterwegs.',
   'forgot.successHeading': 'Passwort gespeichert',
   'forgot.error.send': 'Der Link konnte nicht gesendet werden. Versuche es gleich noch einmal.',
   'forgot.error.update': 'Dein Passwort konnte nicht geändert werden. Versuche es erneut oder fordere einen neuen Link an.',
   'forgot.error.mismatch': 'Die Passwörter stimmen nicht überein.',
-  'forgot.error.tooShort': 'Das Passwort muss mindestens 8 Zeichen lang sein.',
+  'forgot.error.tooShort': "Verwende mindestens 8 Zeichen.",
 
   'signup.heading': 'Konto erstellen',
   'signup.submit': 'Konto erstellen',
@@ -638,9 +638,9 @@ export const de: Messages = {
   'error.unavailable': 'Das ist gerade nicht verfügbar. Versuche es gleich noch einmal.',
   'error.network': 'Keine Verbindung möglich. Prüfe deine Verbindung und versuche es erneut.',
   'error.rateLimited': 'Zu viele Versuche. Warte einen Moment und versuche es erneut.',
-  'login.error.tooManyAttempts': 'Zu viele Versuche. Versuchen Sie es in {minutes} Minuten erneut.',
-  'login.error.tooManyAttemptsOneMinute': 'Zu viele Versuche. Versuchen Sie es in 1 Minute erneut.',
-  'login.error.accountLocked': 'Zu viele Versuche. Dieses Konto ist gesperrt. Setzen Sie Ihr Passwort zurück, um sich wieder anzumelden.',
+  'login.error.tooManyAttempts': "Zu viele Versuche. Versuche es in {minutes} Minuten erneut.",
+  'login.error.tooManyAttemptsOneMinute': "Zu viele Versuche. Versuche es in 1 Minute erneut.",
+  'login.error.accountLocked': "Zu viele Versuche. Dieses Konto ist gesperrt. Setze dein Passwort zurück, um dich wieder anzumelden.",
   'handoff.heading': 'Bei {program} anmelden',
   'handoff.done': 'Du bist angemeldet. Du kannst diesen Tab schließen und zu {program} zurückkehren.',
   'action.signOut': 'Abmelden',
@@ -685,7 +685,7 @@ export const fi: Messages = {
   'error.originNotAllowed': 'Tämän sivun osoite, {origin}, ei ole yksi sovelluksen rekisteröidyistä osoitteista Bridgessä.',
 
   'forgot.headingRequest': 'Nollaa salasanasi',
-  'forgot.headingSet': 'Aseta uusi salasana',
+  'forgot.headingSet': "Valitse uusi salasana",
   'forgot.description':
     'Kirjoita sähköpostiosoitteesi, niin lähetämme linkin salasanan nollaamiseen.',
   'forgot.submit': 'Lähetä nollauslinkki',
@@ -695,7 +695,7 @@ export const fi: Messages = {
   'forgot.error.send': 'Linkkiä ei voitu lähettää. Yritä hetken päästä uudelleen.',
   'forgot.error.update': 'Salasanaa ei voitu vaihtaa. Yritä uudelleen tai pyydä uusi linkki.',
   'forgot.error.mismatch': 'Salasanat eivät täsmää.',
-  'forgot.error.tooShort': 'Salasanan pitää olla vähintään 8 merkkiä pitkä.',
+  'forgot.error.tooShort': "Käytä vähintään 8 merkkiä.",
 
   'signup.heading': 'Luo tilisi',
   'signup.submit': 'Luo tili',
@@ -764,10 +764,10 @@ export const fr: Messages = {
   'login.signupPrompt': 'Tu n’as pas de compte ?',
   'login.signupLink': 'Créer un compte',
   'login.error.invalidCredentials': 'E-mail ou mot de passe incorrect. Réessaie, ou réinitialise ton mot de passe.',
-  'error.originNotAllowed': 'L’adresse de cette page, {origin}, ne fait pas partie des adresses enregistrées de cette appli dans Bridge.',
+  'error.originNotAllowed': "L’adresse de cette page, {origin}, ne fait pas partie des adresses enregistrées de cette application dans Bridge.",
 
   'forgot.headingRequest': 'Réinitialise ton mot de passe',
-  'forgot.headingSet': 'Définis un nouveau mot de passe',
+  'forgot.headingSet': "Choisis un nouveau mot de passe",
   'forgot.description':
     'Saisis ton e-mail et nous t’enverrons un lien pour réinitialiser ton mot de passe.',
   'forgot.submit': 'Envoyer le lien',
@@ -777,7 +777,7 @@ export const fr: Messages = {
   'forgot.error.send': 'Le lien n’a pas pu être envoyé. Réessaie dans un instant.',
   'forgot.error.update': 'Ton mot de passe n’a pas pu être modifié. Réessaie, ou demande un nouveau lien.',
   'forgot.error.mismatch': 'Les mots de passe ne correspondent pas.',
-  'forgot.error.tooShort': 'Le mot de passe doit comporter au moins 8 caractères.',
+  'forgot.error.tooShort': "Utilise au moins 8 caractères.",
 
   'signup.heading': 'Crée ton compte',
   'signup.submit': 'Créer un compte',
@@ -797,14 +797,14 @@ export const fr: Messages = {
   'verify.finishing': 'Finalisation de l’inscription…',
   'verify.error.wrongDevice': 'Ce lien ne fonctionne que dans le navigateur où tu t’es inscrit. Ouvre-le là-bas, ou inscris-toi de nouveau ici.',
   'link.error.invalid': 'Ce lien n’est plus valide. Demandes-en un nouveau.',
-  'login.error.flowExpired': 'C’était trop long. Reconnecte-toi.',
+  'login.error.flowExpired': "Cela a pris trop de temps. Reconnecte-toi.",
   'login.error.unsupportedStep': 'Ton espace de travail demande une étape de connexion qui n’est pas encore disponible ici. Demande de l’aide à l’administrateur de ton espace de travail.',
   'error.unavailable': 'Ce n’est pas disponible pour le moment. Réessaie dans un instant.',
   'error.network': 'Connexion impossible. Vérifie ta connexion et réessaie.',
   'error.rateLimited': 'Trop de tentatives. Patiente un instant et réessaie.',
-  'login.error.tooManyAttempts': 'Trop de tentatives. Réessayez dans {minutes} minutes.',
-  'login.error.tooManyAttemptsOneMinute': 'Trop de tentatives. Réessayez dans 1 minute.',
-  'login.error.accountLocked': 'Trop de tentatives. Ce compte est verrouillé. Réinitialisez votre mot de passe pour vous reconnecter.',
+  'login.error.tooManyAttempts': "Trop de tentatives. Réessaie dans {minutes} minutes.",
+  'login.error.tooManyAttemptsOneMinute': "Trop de tentatives. Réessaie dans 1 minute.",
+  'login.error.accountLocked': "Trop de tentatives. Ce compte est verrouillé. Réinitialise ton mot de passe pour te reconnecter.",
   'handoff.heading': 'Se connecter à {program}',
   'handoff.done': 'Tu es connecté. Tu peux fermer cet onglet et revenir à {program}.',
   'action.signOut': 'Se déconnecter',
@@ -846,20 +846,20 @@ export const es: Messages = {
   'login.signupPrompt': '¿Aún no tienes cuenta?',
   'login.signupLink': 'Crear cuenta',
   'login.error.invalidCredentials': 'Correo electrónico o contraseña incorrectos. Inténtalo de nuevo o restablece tu contraseña.',
-  'error.originNotAllowed': 'La dirección de esta página, {origin}, no es una de las direcciones registradas de esta app en Bridge.',
+  'error.originNotAllowed': "La dirección de esta página, {origin}, no es una de las direcciones registradas de esta aplicación en Bridge.",
 
   'forgot.headingRequest': 'Restablece tu contraseña',
-  'forgot.headingSet': 'Establece una nueva contraseña',
+  'forgot.headingSet': "Elige una nueva contraseña",
   'forgot.description':
     'Escribe tu correo electrónico y te enviaremos un enlace para restablecer la contraseña.',
-  'forgot.submit': 'Enviar enlace',
+  'forgot.submit': "Enviar enlace de restablecimiento",
   'forgot.setSubmit': 'Guardar la contraseña nueva',
   'forgot.emailSent': 'Si esta dirección tiene una cuenta, te llegará un enlace para restablecer la contraseña.',
   'forgot.successHeading': 'Contraseña guardada',
   'forgot.error.send': 'No se ha podido enviar el enlace. Inténtalo de nuevo en un momento.',
   'forgot.error.update': 'No se ha podido cambiar tu contraseña. Inténtalo de nuevo o pide un enlace nuevo.',
   'forgot.error.mismatch': 'Las contraseñas no coinciden.',
-  'forgot.error.tooShort': 'La contraseña debe tener al menos 8 caracteres.',
+  'forgot.error.tooShort': "Usa al menos 8 caracteres.",
 
   'signup.heading': 'Crea tu cuenta',
   'signup.submit': 'Crear cuenta',
@@ -931,7 +931,7 @@ export const it: Messages = {
   'error.originNotAllowed': 'L’indirizzo di questa pagina, {origin}, non è tra gli indirizzi registrati di questa app in Bridge.',
 
   'forgot.headingRequest': 'Reimposta la tua password',
-  'forgot.headingSet': 'Imposta una nuova password',
+  'forgot.headingSet': "Scegli una nuova password",
   'forgot.description':
     'Inserisci la tua e-mail e ti invieremo un link per reimpostare la password.',
   'forgot.submit': 'Invia il link',
@@ -941,10 +941,10 @@ export const it: Messages = {
   'forgot.error.send': 'Non è stato possibile inviare il link. Riprova tra poco.',
   'forgot.error.update': 'Non è stato possibile cambiare la password. Riprova oppure chiedi un nuovo link.',
   'forgot.error.mismatch': 'Le password non coincidono.',
-  'forgot.error.tooShort': 'La password deve contenere almeno 8 caratteri.',
+  'forgot.error.tooShort': "Usa almeno 8 caratteri.",
 
   'signup.heading': 'Crea il tuo account',
-  'signup.submit': 'Crea account',
+  'signup.submit': "Crea un account",
   'signup.successHeading': 'Controlla la tua e-mail',
   'signup.successDescription':
     'Abbiamo inviato un link a {email}. Aprilo per completare il tuo account.',
@@ -1009,27 +1009,27 @@ export const pt: Messages = {
   'login.forgotPassword': 'Esqueceste-te da palavra-passe?',
   'login.signupPrompt': 'Ainda não tens conta?',
   'login.signupLink': 'Criar conta',
-  'login.error.invalidCredentials': 'E-mail ou palavra-passe incorretos. Tenta novamente ou repõe a tua palavra-passe.',
-  'error.originNotAllowed': 'O endereço desta página, {origin}, não é um dos endereços registados desta app no Bridge.',
+  'login.error.invalidCredentials': "E-mail ou palavra-passe incorretos. Tenta novamente ou redefine a tua palavra-passe.",
+  'error.originNotAllowed': "O endereço desta página, {origin}, não é um dos endereços registados desta aplicação no Bridge.",
 
-  'forgot.headingRequest': 'Repõe a tua palavra-passe',
-  'forgot.headingSet': 'Define uma nova palavra-passe',
+  'forgot.headingRequest': "Redefine a tua palavra-passe",
+  'forgot.headingSet': "Escolhe uma nova palavra-passe",
   'forgot.description':
-    'Introduz o teu e-mail e enviamos-te um link para repores a palavra-passe.',
-  'forgot.submit': 'Enviar link',
+    "Introduz o teu e-mail e enviamos-te um link para redefinas a palavra-passe.",
+  'forgot.submit': "Enviar link de redefinição",
   'forgot.setSubmit': 'Guardar nova palavra-passe',
   'forgot.emailSent': 'Se este endereço tiver uma conta, vais receber um link para repor a palavra-passe.',
   'forgot.successHeading': 'Palavra-passe guardada',
   'forgot.error.send': 'Não foi possível enviar o link. Tenta novamente daqui a pouco.',
   'forgot.error.update': 'Não foi possível alterar a tua palavra-passe. Tenta novamente ou pede um novo link.',
   'forgot.error.mismatch': 'As palavras-passe não coincidem.',
-  'forgot.error.tooShort': 'A palavra-passe tem de ter pelo menos 8 caracteres.',
+  'forgot.error.tooShort': "Usa pelo menos 8 caracteres.",
 
   'signup.heading': 'Cria a tua conta',
   'signup.submit': 'Criar conta',
   'signup.successHeading': 'Vê o teu e-mail',
   'signup.successDescription':
-    'Enviámos um link para {email}. Abre-o para concluíres a tua conta.',
+    "Enviámos um link para {email}. Abre-o para concluíres a criação da tua conta.",
   'signup.loginPrompt': 'Já tens conta?',
   'signup.loginLink': 'Iniciar sessão',
   'signup.error.create': 'Não foi possível criar a tua conta. Tenta novamente daqui a pouco.',
@@ -1041,12 +1041,12 @@ export const pt: Messages = {
 
 
   'verify.finishing': 'A concluir o registo…',
-  'verify.error.wrongDevice': 'Esta ligação só funciona no navegador em que te registaste. Abre-a lá ou regista-te de novo aqui.',
-  'link.error.invalid': 'Esta ligação já não é válida. Pede uma nova.',
+  'verify.error.wrongDevice': "Esta link só funciona no navegador em que te registaste. Abre-a lá ou regista-te de novo aqui.",
+  'link.error.invalid': "Esta link já não é válida. Pede um novo.",
   'login.error.flowExpired': 'Demorou demasiado. Inicia sessão novamente.',
   'login.error.unsupportedStep': 'O teu espaço de trabalho pede um passo de início de sessão que ainda não está disponível aqui. Pede ajuda ao administrador do teu espaço de trabalho.',
   'error.unavailable': 'Não está disponível neste momento. Tenta novamente daqui a pouco.',
-  'error.network': 'Não foi possível ligar. Verifica a tua ligação e tenta novamente.',
+  'error.network': "Não foi possível ligar. Verifica a tua ligação à internet e tenta novamente.",
   'error.rateLimited': 'Demasiadas tentativas. Aguarda um momento e tenta novamente.',
   'login.error.tooManyAttempts': 'Demasiadas tentativas. Tenta novamente dentro de {minutes} minutos.',
   'login.error.tooManyAttemptsOneMinute': 'Demasiadas tentativas. Tenta novamente dentro de 1 minuto.',
@@ -1095,7 +1095,7 @@ export const pl: Messages = {
   'error.originNotAllowed': 'Adres tej strony, {origin}, nie należy do zarejestrowanych adresów tej aplikacji w Bridge.',
 
   'forgot.headingRequest': 'Zresetuj hasło',
-  'forgot.headingSet': 'Ustaw nowe hasło',
+  'forgot.headingSet': "Wybierz nowe hasło",
   'forgot.description':
     'Podaj swój e-mail, a wyślemy Ci link do zresetowania hasła.',
   'forgot.submit': 'Wyślij link resetujący',
@@ -1105,7 +1105,7 @@ export const pl: Messages = {
   'forgot.error.send': 'Nie udało się wysłać linku. Spróbuj ponownie za chwilę.',
   'forgot.error.update': 'Nie udało się zmienić hasła. Spróbuj ponownie albo poproś o nowy link.',
   'forgot.error.mismatch': 'Hasła nie są takie same.',
-  'forgot.error.tooShort': 'Hasło musi mieć co najmniej 8 znaków.',
+  'forgot.error.tooShort': "Użyj co najmniej 8 znaków.",
 
   'signup.heading': 'Załóż konto',
   'signup.submit': 'Załóż konto',

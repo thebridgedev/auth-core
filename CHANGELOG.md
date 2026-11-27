@@ -4,7 +4,7 @@
 
 ### Changed
 
-- **Clearer sign-in wording, in all 12 languages (proposed, for the owner's review).** One word for signing in ("Sign in", never "Log in"); errors say what happened and what to do next ("The link could not be sent. Try again in a moment."); a wrong password names the way out (reset); the reset screen says a link is on its way *if* the address has an account; the sign-up button says "Create account". Keys are unchanged.
+- **Clearer sign-in wording, in all 12 languages (proposed, for the owner's review).** One word for signing in ("Sign in", never "Log in"); errors say what happened and what to do next ("The link could not be sent. Try again in a moment."); a wrong password names the way out (reset); the reset screen says a link is on its way *if* the address has an account; the sign-up button says "Create account". Keys are unchanged. One voice in every language: the informal address the screens use (du, tu, je…), where some German and French errors were formal. "Create account" is also the sign-in page's link; "Choose a new password" heads the reset form; no "Please" in errors.
 
 ### Added
 
