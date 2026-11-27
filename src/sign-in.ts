@@ -227,8 +227,8 @@ export interface SignInOptions {
   readonly signIn?: Omit<SignInPlace, 'returnPath'> & { readonly returnPath?: string };
 }
 
-/** The social sign-in providers Bridge offers. */
-export type SocialProvider = 'google' | 'linkedin' | 'facebook' | 'github' | 'azure';
+/** The social sign-in providers Bridge offers; Apple is Sign in with Apple on the web. */
+export type SocialProvider = 'google' | 'linkedin' | 'facebook' | 'github' | 'azure' | 'apple';
 
 /** Where a social sign-in starts, and what a sign-up through it asks for. */
 export interface SocialStartInput {
