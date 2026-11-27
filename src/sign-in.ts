@@ -603,6 +603,8 @@ export function createSignIn(deps: SignInDeps) {
           ...(request === null ? {} : { request }),
           ...(signingUp && input.workspace !== undefined && input.workspace !== false ? { workspace: input.workspace } : {}),
           ...(signingUp && input.attribution !== undefined ? { attribution: input.attribution } : {}),
+          // The screen's language: the new User keeps it as their own, and a confirmation email is written in it.
+          ...(signingUp ? languageOf() : {}),
           ...(signingUp && input.plan !== undefined && input.plan !== '' ? { plan: input.plan } : {}),
           ...(signingUp && input.plan !== undefined && input.plan !== '' && input.currency && input.interval ? { currency: input.currency, interval: input.interval } : {}),
         })) as Record<string, unknown> | undefined;

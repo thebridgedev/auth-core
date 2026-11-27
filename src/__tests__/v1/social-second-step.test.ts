@@ -28,6 +28,16 @@ describe('social sign-in', () => {
     expect(challengeOf(exchange.code_verifier)).toBe((start.body as { code_challenge: string }).code_challenge);
   });
 
+  it('a sign-up names the screen\'s language, so the new User keeps it and its emails come in it; a sign-in names none', async () => {
+    const { fake } = issuerWithPeople({ social: ['google'] });
+    const client = clientOn(fake, { language: 'da' });
+    const starts = () => fake.requests.filter((request) => request.path.endsWith('/social/start'));
+    await client.social.start('google', { returnPage: PAGE, intent: 'sign-up' });
+    expect(starts().at(-1)!.body).toMatchObject({ intent: 'sign-up', language: 'da' });
+    await client.social.start('google', { returnPage: PAGE });
+    expect(starts().at(-1)!.body).not.toHaveProperty('language');
+  });
+
   it('signs up an address with no account only when asked to sign up; a provider\'s unverified address or a cancel is an error', async () => {
     const { fake } = issuerWithPeople({ social: ['google'] });
     const client = clientOn(fake);
