@@ -184,6 +184,8 @@ export interface PasskeyDeps {
   readonly signInSteps: <T>(answer: CodeAnswer | undefined, verifier: string) => Promise<T> | T;
   /** What binds a sign-in's code: this device's challenge, or the sign-in request the page signs in for. */
   readonly proofOf: (pkce: { readonly challenge: string }) => Readonly<Record<string, string>>;
+  /** A provider link waiting on this device, sent with the sign-in step on a request (see sign-in.ts). */
+  readonly linkFields?: () => Promise<Readonly<Record<string, string>>>;
 }
 
 export function createPasskeys<Step>(deps: PasskeyDeps) {
@@ -230,7 +232,7 @@ export function createPasskeys<Step>(deps: PasskeyDeps) {
       });
       let answer;
       try {
-        answer = await deps.post(ROUTES.passkeySignIn, { response, ...(input.workspace === undefined ? {} : { workspace: input.workspace }) });
+        answer = await deps.post(ROUTES.passkeySignIn, { response, ...(input.workspace === undefined ? {} : { workspace: input.workspace }), ...((await deps.linkFields?.()) ?? {}) });
       } catch (error) {
         // A passkey Bridge has no record of (removed, or the app's data gone): the browser is told to stop offering it.
         const rpId = typeof options['rpId'] === 'string' ? options['rpId'] : null;

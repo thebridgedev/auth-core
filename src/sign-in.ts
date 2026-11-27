@@ -278,6 +278,8 @@ interface CodeAnswer {
   readonly state?: unknown;
   /** With `redirect_uri`: the person confirms with a click before the browser goes back. */
   readonly confirm_return?: unknown;
+  /** On a sign-in request, a provider this device tried first, linked as the code was made. */
+  readonly linked?: unknown;
   readonly next?: unknown;
   /** With `next: 'verify_email'` after a social finish: the address Bridge emailed. */
   readonly email?: unknown;
@@ -364,6 +366,24 @@ export function createSignIn(deps: SignInDeps) {
    * After a sign-in: links the provider the person tried first on this device, when one waits. Never fails the
    * sign-in: a handle that no longer works, or an issuer that does not offer linking yet, links nothing.
    */
+  /**
+   * A provider waiting to be linked, sent with a sign-in step: on a sign-in request (Bridge's hosted page), which never
+   * holds the person's token, Bridge links it as the request's code is made, when the step proved the login the link
+   * names on the device that tried the provider. Elsewhere Bridge takes no notice, and it is linked after the sign-in.
+   */
+  async function linkFields(): Promise<Record<string, string>> {
+    const waiting = await readJson<PendingLink>(deps.signUpStorage, linkKey);
+    if (waiting === null || !(waiting.expiresAt > Date.now()) || typeof waiting.link !== 'string' || typeof waiting.verifier !== 'string') return {};
+    return { link: waiting.link, link_verifier: waiting.verifier };
+  }
+  /** What a code made on a request says it linked: the waiting link is spent then. */
+  async function linkedOnRequest(answer: CodeAnswer | undefined): Promise<{ readonly linked?: { readonly provider: string; readonly name: string } }> {
+    const linked = answer?.linked as { provider?: unknown; name?: unknown } | undefined;
+    if (typeof linked?.provider !== 'string') return {};
+    await deps.signUpStorage.remove(linkKey);
+    return { linked: { provider: linked.provider, name: typeof linked.name === 'string' ? linked.name : linked.provider } };
+  }
+
   async function linkWaiting(): Promise<{ readonly provider: string; readonly name: string } | null> {
     const waiting = await readJson<PendingLink>(deps.signUpStorage, linkKey);
     if (waiting === null) return null;
@@ -429,7 +449,7 @@ export function createSignIn(deps: SignInDeps) {
       answer,
       async (code) => {
         // A code made for a sign-in request is the other app's: it goes to the app's return, and is never traded here.
-        if (typeof answer?.redirect_uri === 'string' && typeof answer.state === 'string') return { done: true, handoff: requestReturnUrl(answer.redirect_uri, code, answer.state, deps.issuer), ...(answer.confirm_return === true ? { confirmReturn: true as const } : {}), ...backupCode };
+        if (typeof answer?.redirect_uri === 'string' && typeof answer.state === 'string') return { done: true, handoff: requestReturnUrl(answer.redirect_uri, code, answer.state, deps.issuer), ...(answer.confirm_return === true ? { confirmReturn: true as const } : {}), ...backupCode, ...(await linkedOnRequest(answer)) };
         await deps.session.exchangeCode(code, verifier);
         const linked = await linkWaiting();
         return { done: true, ...backupCode, ...(linked === null ? {} : { linked }) };
@@ -466,6 +486,7 @@ export function createSignIn(deps: SignInDeps) {
           password: input.password,
           ...proofOf(pkce),
           ...(input.workspace === undefined ? {} : { workspace: input.workspace }),
+          ...(request === null ? {} : await linkFields()),
         });
         return signInSteps(answer, pkce.verifier);
       },
@@ -574,7 +595,7 @@ export function createSignIn(deps: SignInDeps) {
         const own = await waitingVerifier(magicLinkKey);
         // A link sent for this app's hosted sign-in, landed on the app's own page: the app's verifier for its request opens it.
         const verifier = own ?? (await waitingVerifier(hostedKey));
-        const answer = await post(ROUTES.magicLinkVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }) });
+        const answer = await post(ROUTES.magicLinkVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }), ...(await linkFields()) });
         if (verifier === null) throw new BridgeError('wrong-device', 'Open the link on the device you asked for it on.', { code: 'wrong_device' });
         // Bridge took the verifier: it is spent. The app's own verifier stays, for its return to trade the code with.
         if (own !== null) await deps.signUpStorage.remove(magicLinkKey);
@@ -662,7 +683,7 @@ export function createSignIn(deps: SignInDeps) {
       },
     },
 
-    passkeys: createPasskeys<SignInStep>({ ...deps, post, waitingVerifier, proofOf, signInSteps: (answer, verifier) => signInSteps(answer, verifier) as never }),
+    passkeys: createPasskeys<SignInStep>({ ...deps, post, waitingVerifier, proofOf, linkFields: async () => (request === null ? {} : linkFields()), signInSteps: (answer, verifier) => signInSteps(answer, verifier) as never }),
 
     request: {
       /**

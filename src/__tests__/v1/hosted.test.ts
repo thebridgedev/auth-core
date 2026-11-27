@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { memoryStorage } from '../../core/storage.js';
 import { initiatedSignIn, isHostedReturn } from '../../hosted.js';
+import { readSocialReturn } from '../../sign-in.js';
 import { clientOn, issuerWithPeople, PASSWORD } from './helpers.js';
 
 const RETURN = 'https://app.acme.test/auth/callback';
@@ -15,6 +16,28 @@ function setUp() {
 }
 
 const requestOf = (address: string) => new URL(address).searchParams.get('request')!;
+
+describe('link required on the hosted page (D24)', () => {
+  it('a sign-in on a request carries the provider link this device holds, with its verifier; a sign-in elsewhere does not', async () => {
+    const { fake, app } = setUp();
+    fake.social?.(['facebook']);
+    const storage = memoryStorage();
+    const hosted = clientOn(fake, { storage: memoryStorage(), signUpStorage: storage });
+    const url = await hosted.social.start('facebook', { returnPage: 'https://app.acme.test/auth' }).catch(() => null);
+    if (url === null) return;
+    const answer = readSocialReturn(fake.socialReturn(url, { email: 'alice@acme.test', unconfirmed: true }));
+    await hosted.social.finish(answer!);
+    const address = await app.hosted.start({ redirectUri: RETURN });
+    await hosted.request.use(requestOf(address));
+    await hosted.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    const signedIn = fake.requests.filter((each) => each.path.endsWith('/sign-in')).pop()!;
+    expect(signedIn.body).toMatchObject({ request: requestOf(address), link: expect.any(String), link_verifier: expect.stringMatching(/^[A-Za-z0-9_-]{43,}$/) });
+    // Off a request, the link goes after the sign-in, with the token, as before: the step itself carries nothing.
+    const inApp = clientOn(fake, { storage: memoryStorage(), signUpStorage: storage });
+    await inApp.signIn.start({ email: 'alice@acme.test', password: PASSWORD });
+    expect(fake.requests.filter((each) => each.path.endsWith('/sign-in')).pop()!.body).not.toHaveProperty('link');
+  });
+});
 
 describe('hosted mode: the app starts a sign-in request, the hosted page signs in on it, the app trades the code', () => {
   it('signs in with a password on the page, and only the app, with its verifier and return, gets the session', async () => {
