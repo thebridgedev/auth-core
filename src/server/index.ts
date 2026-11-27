@@ -831,3 +831,13 @@ export { DEFAULT_MANAGE_ROUTE, ENTITLEMENT_FLAG_PREFIX, entitlementFlag, isLimit
 export type { QuotaExceededBody, QuotaSnapshot } from '../quota.js';
 export type { LimitReached } from '../core/errors.js';
 export type { FlagReason, FlagResult, Hint } from '../flags.js';
+export {
+  bridgeMcpGuard,
+  mcpChallenge,
+  protectedResourceMetadata,
+  protectedResourceMetadataPaths,
+  protectedResourceMetadataUrl,
+  scopesAllowDelete,
+  PROTECTED_RESOURCE_METADATA_PATH,
+} from './mcp.js';
+export type { McpCaller, McpCheck, McpGuard, McpGuardOptions, McpRefusal, McpRequestLike, ProtectedResourceMetadata, ProtectedResourceOptions } from './mcp.js';

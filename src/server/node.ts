@@ -27,10 +27,15 @@
  * for a server that keeps its disk. On a platform whose disk does not outlive
  * the process (functions, containers without a volume) pass a `usageStore` of
  * your own that writes to something that does.
+ *
+ * And `bridgeMcpMiddleware`, the MCP guard for Node's `http` server and
+ * Express-style apps (see the end of this file).
  */
 import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { QueuedUsageReport, UsageQueueStore } from './index.js';
+import type { McpCaller, McpGuard, McpRefusal } from './mcp.js';
 
 export interface FileUsageQueueOptions {
   /** The directory that holds the queue. It is made when it does not exist. */
@@ -112,5 +117,78 @@ export function fileUsageQueue(options: FileUsageQueueOptions): FileUsageQueue {
       for (const id of known) waiting.delete(id);
       append(known.length === 0 ? [] : [{ d: known }]);
     },
+  };
+}
+
+/** A Node request the MCP middleware has let through: the caller is on it. */
+export type McpIncomingMessage = IncomingMessage & { bridge?: { readonly caller: McpCaller }; auth?: McpAuthInfo };
+
+/** The shape the official MCP SDK reads from `req.auth` and hands to tools as `extra.authInfo`. */
+export interface McpAuthInfo {
+  readonly token: string;
+  readonly clientId: string;
+  readonly scopes: string[];
+  readonly expiresAt?: number;
+  readonly resource?: URL;
+  readonly extra: { readonly caller: McpCaller };
+}
+
+/** Writes a refusal (401 with `WWW-Authenticate`, or 503) to a Node response. */
+export function writeMcpRefusal(res: ServerResponse, refusal: McpRefusal): void {
+  res.statusCode = refusal.status;
+  for (const [name, value] of Object.entries(refusal.headers)) res.setHeader(name, value);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Expose-Headers', 'WWW-Authenticate');
+  res.end(JSON.stringify(refusal.body));
+}
+
+/** Writes the endpoint's protected-resource metadata to a Node response. */
+export function writeMcpMetadata(res: ServerResponse, guard: McpGuard, method = 'GET'): void {
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.end(method.toUpperCase() === 'HEAD' ? undefined : JSON.stringify(guard.metadata()));
+}
+
+/**
+ * The MCP guard as Node middleware, `(req, res, next)`, for Node's `http`
+ * server and Express-style apps. Mount it in front of the MCP endpoint and of
+ * the well-known paths (or app-wide):
+ *
+ * - a GET to one of `guard.metadataPaths` is answered with the metadata;
+ * - a call without a valid token is answered 401 with `WWW-Authenticate`
+ *   (503 while Bridge cannot be checked) and `next` is not called;
+ * - otherwise `req.bridge.caller` is the caller, `req.auth` is set for the
+ *   official MCP SDK (tools read it as `extra.authInfo.extra.caller`), and
+ *   `next()` runs.
+ */
+export function bridgeMcpMiddleware(guard: McpGuard) {
+  return async (req: IncomingMessage, res: ServerResponse, next: (error?: unknown) => void): Promise<void> => {
+    try {
+      if (guard.isMetadataRequest({ method: req.method, url: req.url })) {
+        writeMcpMetadata(res, guard, req.method);
+        return;
+      }
+      const answer = await guard.check(req);
+      if (!answer.ok) {
+        writeMcpRefusal(res, answer.refusal);
+        return;
+      }
+      const caller = answer.caller;
+      const request = req as McpIncomingMessage;
+      request.bridge = Object.freeze({ caller });
+      request.auth = Object.freeze({
+        token: answer.token,
+        clientId: caller.client.id ?? caller.appId,
+        scopes: [...caller.scopes],
+        ...(caller.expiresAt === null ? {} : { expiresAt: caller.expiresAt }),
+        resource: new URL(guard.resource),
+        extra: Object.freeze({ caller }),
+      });
+      next();
+    } catch (error) {
+      next(error);
+    }
   };
 }
