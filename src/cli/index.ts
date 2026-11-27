@@ -194,6 +194,9 @@ export function createBridgeCli(options: BridgeCliOptions): BridgeCli {
           warn: print,
         });
 
+  // Sessions are kept under the issuer as configured (the metadata names the same one, give or take a trailing slash),
+  // so `whoami` needs no network call.
+  const issuerKey = options.issuer.replace(/\/+$/, '');
   let endpoints: Endpoints | null = null;
   let renewing: Promise<StoredCliSession> | null = null;
 
@@ -263,7 +266,7 @@ export function createBridgeCli(options: BridgeCliOptions): BridgeCli {
       name: text(id?.['name']) ?? previous?.person.name ?? null,
     };
     return {
-      issuer: d.issuer,
+      issuer: issuerKey,
       appId: d.appId,
       accessToken: answer.access_token,
       accessTokenExpiresAt: now() + answer.expires_in * 1000,
@@ -379,8 +382,8 @@ export function createBridgeCli(options: BridgeCliOptions): BridgeCli {
     }
   }
 
-  async function current(d: Endpoints): Promise<StoredCliSession> {
-    const session = await store.read(d.issuer);
+  async function current(_d?: Endpoints): Promise<StoredCliSession> {
+    const session = await store.read(issuerKey);
     if (session === null) throw new BridgeError('signed-out', `Not signed in. ${signInAgain(name)}`, { code: 'not_signed_in' });
     return session;
   }
@@ -392,14 +395,14 @@ export function createBridgeCli(options: BridgeCliOptions): BridgeCli {
       if (session.accessToken !== stale && session.accessTokenExpiresAt - now() > RENEW_BEFORE_MS) return session;
       if (!force && session.accessTokenExpiresAt - now() > RENEW_BEFORE_MS) return session;
       if (session.refreshToken === null) {
-        await store.remove(d.issuer);
+        await store.remove(issuerKey);
         throw new BridgeError('signed-out', `The session cannot be renewed. ${signInAgain(name)}`, { code: 'session_ended' });
       }
       const answer = await post(d.token, { grant_type: 'refresh_token', refresh_token: session.refreshToken, client_id: d.appId });
       if (answer.status >= 400) {
         // Refused for good: signed out elsewhere, the connection ended, the token reused.
         if (answer.status === 400 || answer.status === 401) {
-          await store.remove(d.issuer);
+          await store.remove(issuerKey);
           throw new BridgeError('signed-out', `The session ended. ${signInAgain(name)}`, { status: answer.status, code: 'session_ended' });
         }
         throw refusedBy(answer, 'Renewing the session');
@@ -411,9 +414,10 @@ export function createBridgeCli(options: BridgeCliOptions): BridgeCli {
   }
 
   async function getAccessToken(tokenOptions: { readonly force?: boolean } = {}): Promise<string> {
-    const d = await discover();
-    const session = await current(d);
+    // Signed out, or a token still good: no network call.
+    const session = await current();
     if (!tokenOptions.force && session.accessTokenExpiresAt - now() > RENEW_BEFORE_MS) return session.accessToken;
+    const d = await discover();
     // One renewal at a time in this process; the lock covers other processes.
     renewing ??= renew(d, session.accessToken, tokenOptions.force === true).finally(() => {
       renewing = null;
@@ -431,12 +435,17 @@ export function createBridgeCli(options: BridgeCliOptions): BridgeCli {
       return loginWithBrowser(d);
     },
     async logout() {
-      const d = await discover();
-      const session = await store.read(d.issuer);
+      const session = await store.read(issuerKey);
       if (session === null) return { signedOut: false, revoked: false, reason: 'not signed in' };
       let revoked = false;
       let reason: string | undefined;
-      if (session.refreshToken !== null && d.revoke !== null) {
+      let d: Endpoints | null = null;
+      try {
+        d = await discover();
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String(error);
+      }
+      if (d !== null && session.refreshToken !== null && d.revoke !== null) {
         try {
           const answer = await post(d.revoke, { token: session.refreshToken, token_type_hint: 'refresh_token', client_id: d.appId });
           revoked = answer.status < 400;
@@ -444,14 +453,14 @@ export function createBridgeCli(options: BridgeCliOptions): BridgeCli {
         } catch (error) {
           reason = error instanceof Error ? error.message : String(error);
         }
-      } else {
+      } else if (d !== null) {
         reason = 'there was no refresh token to end the session with';
       }
-      await store.remove(d.issuer);
+      await store.remove(issuerKey);
       return reason === undefined ? { signedOut: true, revoked } : { signedOut: true, revoked, reason };
     },
     async whoami() {
-      const session = await store.read((await discover()).issuer);
+      const session = await store.read(issuerKey);
       return session === null ? null : whoamiOf(session);
     },
     getAccessToken,

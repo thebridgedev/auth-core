@@ -200,6 +200,14 @@ describe('CLI helper: browser sign-in through a loopback', () => {
     expect(JSON.stringify(kept)).not.toContain('id_token');
   });
 
+  it('whoami reads the kept session with no network call, under the issuer with or without a trailing slash', async () => {
+    const fake = fakeIssuer();
+    const { cli, configDir } = await makeCli(fake);
+    const me = await cli.login();
+    const offline = createBridgeCli({ issuer: `${ISSUER}/`, name: 'acme', configDir, store: 'file', fetch: (async () => { throw new TypeError('offline'); }) as typeof fetch });
+    expect(await offline.whoami()).toEqual(me);
+  });
+
   it.each([
     ['another state', (q: URLSearchParams) => q.set('state', 'someone-elses-state'), 'state_mismatch'],
     ['another issuer', (q: URLSearchParams) => q.set('iss', 'https://evil.test'), 'issuer_mismatch'],
