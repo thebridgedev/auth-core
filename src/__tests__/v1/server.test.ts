@@ -171,11 +171,18 @@ describe('server: token checks that honour every revocation lane', () => {
   });
 
   it('with strict, refuses when the list is further behind than the tighter limit', async () => {
-    // The lanes' signed checkpoints vouch for a minute ago: fine for reads, too old for a write.
-    const { server, ring } = await setUp({ listNow: () => Date.now() - 60_000 });
+    // The lanes' signed checkpoints vouch for two minutes ago: fine for reads, too old for a write.
+    const { server, ring } = await setUp({ listNow: () => Date.now() - 120_000 });
     const token = await personToken(ring);
     await expect(server.verify(withBearer(token))).resolves.toMatchObject({ id: 'usr-alice' });
     await expect(server.verify(withBearer(token), { strict: true })).rejects.toMatchObject({ kind: 'unavailable', status: 503 });
+    await server.close();
+  });
+
+  it("by default lets a write through on a list up to 90 seconds behind, as Bridge's own Access Layer does", async () => {
+    const { server, ring } = await setUp({ listNow: () => Date.now() - 60_000 });
+    const token = await personToken(ring);
+    await expect(server.verify(withBearer(token), { strict: true })).resolves.toMatchObject({ id: 'usr-alice' });
     await server.close();
   });
 

@@ -27,9 +27,11 @@ describe('errors: one BridgeError for both answer shapes', () => {
   });
 
   it('keeps the reason of a refused sign-in as its code', () => {
-    const error = errorFromAnswer(403, { error: 'access_denied', reason: 'user_suspended' });
+    const error = errorFromAnswer(403, { error: 'access_denied', reason: 'not_a_member' });
     expect(error.kind).toBe('forbidden');
-    expect(error.code).toBe('user_suspended');
+    expect(error.code).toBe('not_a_member');
+    // A suspension has a kind of its own, and keeps its reason as the code too.
+    expect(errorFromAnswer(403, { error: 'access_denied', reason: 'user_suspended' }).kind).toBe('suspended');
   });
 
   it('reads a workspace that needs another sign-in step as unsupported-step, naming the step', () => {

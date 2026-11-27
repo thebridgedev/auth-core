@@ -149,8 +149,8 @@ export interface RevocationPuller {
    */
   readonly check: RevocationCheck;
   /**
-   * The same check with a stricter limit, for example 30 seconds for writes
-   * and sensitive actions.
+   * The same check with a stricter limit, for example 90 seconds for writes
+   * and sensitive actions (what Bridge's own Access Layer uses).
    */
   checkWithin(maxLagMs: number): RevocationCheck;
   /** Fetch new entries now. Never rejects; `status()` says how it went. */

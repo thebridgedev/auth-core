@@ -59,7 +59,28 @@ export type BridgeErrorKind =
   /** The person closed the passkey dialog, or it timed out. */
   | 'cancelled'
   /** This browser cannot use passkeys, or could not use this one. */
-  | 'not-supported';
+  | 'not-supported'
+  /**
+   * The app's owner suspended this person (`code` `user_suspended`). Show "Your account has been suspended" with the
+   * app's support contact (`signIn.options().supportContact`); who suspended and why is only for the app's admins.
+   */
+  | 'suspended'
+  /** Sign-ups from this email domain are not accepted, by the app or by the workspace (`code` `domain_blocked`). */
+  | 'domain-blocked'
+  /** The app's sign-up protection (Block) refused this address: ask for a permanent email address. */
+  | 'permanent-email-required'
+  /** The invisible bot check did not pass, or its answer was missing. Try again; the page makes a new one. */
+  | 'bot-check-failed'
+  /**
+   * The new password appeared in a public data leak. `leakedPasswords` says what the app does: on `warn` the person
+   * may use it anyway (send it again with `acceptLeaked: true`); on `refuse` they choose another.
+   */
+  | 'password-leaked'
+  /**
+   * The password was right, but it must be changed before signing in (`code` says why, such as `leaked_password`): no
+   * session was made. Offer the recovery link (`password.forgot`) to set a new one.
+   */
+  | 'password-change-required';
 
 /** An RFC 9457 problem, as Bridge sent it. */
 export interface Problem {
@@ -78,6 +99,7 @@ export interface BridgeErrorInit {
   readonly step?: string | null;
   readonly problem?: Problem | null;
   readonly quota?: LimitReached | null;
+  readonly leakedPasswords?: 'warn' | 'refuse' | null;
   readonly cause?: unknown;
 }
 
@@ -103,6 +125,8 @@ export class BridgeError extends Error {
   readonly problem: Problem | null;
   /** For a refusal because the plan's limit is reached (`limit-reached`): the metric, the limit and what is used. */
   readonly quota: LimitReached | null;
+  /** For `password-leaked`: the app's setting. `warn` lets the person go on once they confirm (`acceptLeaked: true`). */
+  readonly leakedPasswords: 'warn' | 'refuse' | null;
 
   constructor(kind: BridgeErrorKind, message: string, init: BridgeErrorInit = {}) {
     super(message, init.cause === undefined ? undefined : { cause: init.cause });
@@ -114,6 +138,7 @@ export class BridgeError extends Error {
     this.step = init.step ?? null;
     this.problem = init.problem ?? null;
     this.quota = init.quota ?? null;
+    this.leakedPasswords = init.leakedPasswords ?? null;
   }
 }
 
@@ -192,6 +217,17 @@ const CODE_KINDS: Readonly<Record<string, BridgeErrorKind>> = {
   invite_revoked: 'link-invalid',
   invite_used: 'link-invalid',
   invite_expired: 'link-invalid',
+  // Login security: sign-up protection, the bot check, leaked passwords.
+  permanent_email_required: 'permanent-email-required',
+  bot_check_failed: 'bot-check-failed',
+  password_leaked: 'password-leaked',
+  password_change_required: 'password-change-required',
+};
+
+/** A refusal's `reason` whose kind is its own, whatever the `error` it came with: `access_denied` with `user_suspended`. */
+const REASON_KINDS: Readonly<Record<string, BridgeErrorKind>> = {
+  user_suspended: 'suspended',
+  domain_blocked: 'domain-blocked',
 };
 
 /** Problem `type`s whose kind is not the status's. */
@@ -255,10 +291,12 @@ export function errorFromAnswer(status: number, body: unknown, headers?: { get(n
       if (needs !== undefined) return new BridgeError('unsupported-step', `Signing in to this workspace needs a step this SDK does not offer yet: ${needs}.`, { status, code: oauth, step: needs });
       return new BridgeError('reauthenticate', text(record['error_description']) ?? 'Sign in again to confirm it is you.', { status, code: oauth });
     }
-    const kind = CODE_KINDS[oauth] ?? kindOfStatus(status);
     const reason = text(record['reason']);
+    const kind = (reason !== undefined ? REASON_KINDS[reason] : undefined) ?? CODE_KINDS[oauth] ?? kindOfStatus(status);
     const message = text(record['error_description']) ?? (reason !== undefined ? `Refused: ${reason}.` : `Bridge refused the request (${oauth}).`);
-    return new BridgeError(kind, message, { status, code: reason ?? oauth, retryAfterSeconds });
+    const mode = record['mode'];
+    const leakedPasswords = oauth === 'password_leaked' && (mode === 'warn' || mode === 'refuse') ? mode : null;
+    return new BridgeError(kind, message, { status, code: reason ?? oauth, retryAfterSeconds, leakedPasswords });
   }
 
   // Problem details: every API route.

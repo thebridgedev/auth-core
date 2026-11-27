@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Login security.** New error kinds: `suspended` (the app's owner suspended the person; show it with `signIn.options().supportContact`), `domain-blocked`, `permanent-email-required` (sign-up protection on Block), `bot-check-failed`, `password-leaked` (with `leakedPasswords`: `warn` lets the person go on with `acceptLeaked: true`) and `password-change-required` (`code` `leaked_password`: no session; offer `password.forgot`).
+- `signUp.start` takes `turnstileToken` (the invisible bot check, when `signIn.options().botCheck` asks for it), `formMs`, `website` (a hidden field) and `acceptLeaked`; `signUp.finish(token, password, { acceptLeaked })`, `password.set(token, password, { acceptLeaked })` and `invites.signUp({ acceptLeaked })` take the confirmation too. Social sign-in never sends a bot-check answer.
+- Sign-in steps carry `passwordLeaked` (signed in with a password from a public leak, on Warn: offer to change it) and `alreadyHadAccount` (a repeat sign-up at the app's workspace limit signed the person in), on the workspace choice and the step that finishes.
+- The test issuer: `leakPasswords`, `suspend`/`resume`, `blockDomain`, `markThrowaway`, `requireBotCheck`, `setSupportContact`, `setWorkspaceLimit`.
+
+### Changed
+
+- A refusal for a suspended person (`access_denied`, `user_suspended`) is now the kind `suspended`, not `forbidden`; its `code` is still `user_suspended`. Renewing a suspended person's session ends it (`access-removed`), as before.
+- `createBridgeServer`'s `strictLagMs` (writes and sensitive actions) defaults to 90 seconds, as Bridge's own Access Layer; reads stay at 5 minutes.
+
 ## [1.0.0-alpha.16] - Unreleased
 
 ### Added

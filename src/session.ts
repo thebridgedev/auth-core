@@ -295,8 +295,8 @@ export class Session {
     try {
       answer = await grant(stored.refreshToken);
     } catch (error) {
-      if ((isBridgeError(error, 'forbidden') || isBridgeError(error, 'unsupported-step')) && options.workspace === undefined) {
-        // The person may no longer enter this workspace (removed, suspended, or it now asks for a step this SDK lacks):
+      if ((isBridgeError(error, 'forbidden') || isBridgeError(error, 'suspended') || isBridgeError(error, 'unsupported-step')) && options.workspace === undefined) {
+        // The person may no longer enter this workspace (removed, suspended across the app, or it now asks for a step this SDK lacks):
         // renewing will never work, so end the session cleanly instead of retrying.
         await this.revokeQuietly(stored.refreshToken);
         this.endLocally('access-removed', true);

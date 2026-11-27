@@ -32,6 +32,25 @@ export interface WorkspaceChoice {
   readonly needs?: string;
 }
 
+/**
+ * What Bridge said alongside a sign-in, for the page to tell the person. Carried to the step that
+ * finishes, and on the workspace choice before it.
+ */
+export interface SignInNotes {
+  /**
+   * The password just used appeared in a public data leak, and the app is on Warn: the person is signed in, and the
+   * page should offer to change it now (`password.forgot` sends the link), with "Not now". On Refuse no session is
+   * made: the sign-in fails with `password-change-required` instead.
+   */
+  readonly passwordLeaked?: true;
+  /**
+   * The person signed up again with an address that already has an account, at the app's limit of workspaces one
+   * person can create: nothing was made, and they are signed in as usual. Show "You already have an account, so we
+   * signed you in".
+   */
+  readonly alreadyHadAccount?: true;
+}
+
 export type SignInStep =
   | {
       /**
@@ -42,7 +61,7 @@ export type SignInStep =
       readonly next: 'verify_email';
       readonly email: string;
     }
-  | {
+  | ({
       readonly done: true;
       /**
        * Set when the sign-in was for another app's sign-in request (see
@@ -61,14 +80,14 @@ export type SignInStep =
        * and ask them to keep it; Bridge keeps only its hash.
        */
       readonly backupCode?: string;
-    }
-  | {
+    } & SignInNotes)
+  | ({
       readonly done: false;
       readonly next: 'workspace';
       readonly workspaces: readonly WorkspaceChoice[];
       /** Goes on with the chosen workspace. Works once. */
       choose(workspaceId: string): Promise<SignInStep>;
-    }
+    } & SignInNotes)
   | {
       /** The workspace requires a second step: a code was sent by text message to `phone`. */
       readonly done: false;
@@ -134,6 +153,23 @@ export interface SignUpInput {
    */
   readonly currency?: string;
   readonly interval?: 'day' | 'week' | 'month' | 'year';
+  /**
+   * The new password appeared in a public data leak and the app is on Warn (`password-leaked`, `leakedPasswords`
+   * `warn`): the person confirmed they want it anyway. Never set it without asking them.
+   */
+  readonly acceptLeaked?: boolean;
+  /**
+   * The invisible bot check's answer (Cloudflare Turnstile), when `signIn.options().botCheck` asks for one: on Block,
+   * a sign-up without a good one fails with `bot-check-failed`. Social and company sign-in never take one.
+   */
+  readonly turnstileToken?: string;
+  /** How long the person took to fill in the form, in milliseconds: sign-up protection treats a very fast form as a script's. */
+  readonly formMs?: number;
+  /**
+   * A field people never see or fill in (a honeypot), sent as the form holds it. Leave out, or send it empty, from a
+   * form of your own: anything in it marks the sign-up as a script's.
+   */
+  readonly website?: string;
 }
 
 /** A sign-up's attribution: campaign tags as plain strings, and whether the visitor consented to marketing. */
@@ -172,6 +208,8 @@ export interface InviteSignUpInput {
   readonly lastName?: string;
   /** The address the invite was sent to. Optional: when given, it must be that address. */
   readonly email?: string;
+  /** As `SignUpInput.acceptLeaked`: the person confirmed a leaked password on an app that warns. */
+  readonly acceptLeaked?: boolean;
 }
 
 /** An accepted invite: the workspace the person joined, and their membership there. */
@@ -207,6 +245,17 @@ export interface SignInOptions {
   readonly password?: PasswordRules;
   /** The social providers the app offers a button for, such as `google` and `github`. */
   readonly social?: readonly SocialProvider[];
+  /**
+   * The invisible bot check a sign-up of one's own must pass: present only when the app's sign-up protection
+   * is on Block with the check set up. Run the provider's widget with `siteKey` and send its answer as
+   * `SignUpInput.turnstileToken`. Never for social or company sign-in.
+   */
+  readonly botCheck?: { readonly provider: 'turnstile'; readonly siteKey: string };
+  /**
+   * The app's own support contact, as its owner set it with the app's public details: an email address or
+   * an https address. Shown with "Your account has been suspended"; absent when the app set none.
+   */
+  readonly supportContact?: string;
 }
 
 /** The social sign-in providers Bridge offers. */
@@ -263,6 +312,19 @@ interface CodeAnswer {
   readonly phone?: unknown;
   readonly sent?: unknown;
   readonly backup_code?: unknown;
+  /** On Warn: the password used appeared in a public data leak. */
+  readonly password_leaked?: unknown;
+  /** A repeat sign-up at the app's workspace limit signed the person in instead. */
+  readonly already_have_account?: unknown;
+}
+
+/** The notes an answer carries, on top of those an earlier step of the same sign-in carried. */
+function notesOf(answer: CodeAnswer | undefined, carried: SignInNotes): SignInNotes {
+  return {
+    ...carried,
+    ...(answer?.password_leaked === true ? { passwordLeaked: true as const } : {}),
+    ...(answer?.already_have_account === true ? { alreadyHadAccount: true as const } : {}),
+  };
 }
 
 interface StoredSignUp {
@@ -371,22 +433,26 @@ export function createSignIn(deps: SignInDeps) {
     };
   }
 
-  function signInSteps(answer: CodeAnswer | undefined, verifier: string): Promise<SignInStep> | SignInStep {
-    if ((answer?.next === 'second_step' || answer?.next === 'second_step_setup') && typeof answer.flow === 'string') return secondStepOf(answer, (next) => signInSteps(next, verifier));
+  function signInSteps(answer: CodeAnswer | undefined, verifier: string, carried: SignInNotes = {}): Promise<SignInStep> | SignInStep {
+    // What this answer says for the person (a leaked password on Warn, a repeat sign-up that signed in) stays with the
+    // sign-in through its later steps, to the one that finishes it.
+    const notes = notesOf(answer, carried);
+    if ((answer?.next === 'second_step' || answer?.next === 'second_step_setup') && typeof answer.flow === 'string') return secondStepOf(answer, (next) => signInSteps(next, verifier, notes));
     const backupCode = typeof answer?.backup_code === 'string' ? { backupCode: answer.backup_code } : {};
     return stepOf<SignInStep>(
       answer,
       async (code) => {
         // A code made for a sign-in request is the other app's: it goes to the app's return, and is never traded here.
-        if (typeof answer?.redirect_uri === 'string' && typeof answer.state === 'string') return { done: true, handoff: requestReturnUrl(answer.redirect_uri, code, answer.state, deps.issuer), ...backupCode };
+        if (typeof answer?.redirect_uri === 'string' && typeof answer.state === 'string') return { done: true, handoff: requestReturnUrl(answer.redirect_uri, code, answer.state, deps.issuer), ...backupCode, ...notes };
         await deps.session.exchangeCode(code, verifier);
-        return { done: true, ...backupCode };
+        return { done: true, ...backupCode, ...notes };
       },
       (flow, workspaces) => ({
         done: false,
         next: 'workspace',
         workspaces,
-        choose: async (workspace) => signInSteps(await post(ROUTES.signIn, { flow, workspace }), verifier),
+        ...notes,
+        choose: async (workspace) => signInSteps(await post(ROUTES.signIn, { flow, workspace }), verifier, notes),
       }),
     );
   }
@@ -466,6 +532,10 @@ export function createSignIn(deps: SignInDeps) {
           ...(input.attribution === undefined ? {} : { attribution: input.attribution }),
           ...(input.plan === undefined || input.plan === '' ? {} : { plan: input.plan }),
           ...(input.plan === undefined || input.plan === '' || !input.currency || !input.interval ? {} : { currency: input.currency, interval: input.interval }),
+          ...(input.acceptLeaked === true ? { acceptLeaked: true } : {}),
+          ...(input.turnstileToken === undefined || input.turnstileToken === '' ? {} : { turnstileToken: input.turnstileToken }),
+          ...(typeof input.formMs === 'number' && Number.isFinite(input.formMs) && input.formMs >= 0 ? { formMs: Math.round(input.formMs) } : {}),
+          ...(input.website === undefined ? {} : { website: input.website }),
         });
         return { next: 'verify_email' };
       },
@@ -476,11 +546,17 @@ export function createSignIn(deps: SignInDeps) {
        * still works on the right device. A sign-up started with no password
        * on an app that takes passwords fails with the code
        * `password_required` until it is finished with one: ask the person to
-       * choose it, then call this again with it. The link stays usable.
+       * choose it, then call this again with it. The link stays usable. A
+       * password from a public leak fails with `password-leaked`; on Warn,
+       * call again with `{ acceptLeaked: true }` once the person confirms.
+       *
+       * Signing up again with an address that has an account adds a
+       * workspace to it, or, at the app's limit, signs the person in with
+       * `alreadyHadAccount` on the step.
        */
-      async finish(token: string, password?: string): Promise<SignInStep> {
+      async finish(token: string, password?: string, options: { readonly acceptLeaked?: boolean } = {}): Promise<SignInStep> {
         const verifier = await waitingVerifier(signUpKey);
-        const answer = await post(ROUTES.signUpVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }), ...(password === undefined ? {} : { password }) });
+        const answer = await post(ROUTES.signUpVerify, { token, ...(verifier === null ? {} : { code_verifier: verifier }), ...(password === undefined ? {} : { password }), ...(options.acceptLeaked === true ? { acceptLeaked: true } : {}) });
         if (verifier === null) throw new BridgeError('wrong-device', 'This link finishes the sign-up only in the browser where it was started. Open it there, or sign up again here.', { code: 'wrong_device' });
         // Bridge took the verifier: it is spent, and the rest needs it only in memory.
         await deps.signUpStorage.remove(signUpKey);
@@ -626,9 +702,13 @@ export function createSignIn(deps: SignInDeps) {
       async forgot(email: string): Promise<void> {
         await post(ROUTES.passwordForgot, { email, ...linkOf() });
       },
-      /** Sets a new password from a reset link. Signs nobody in, and ends every session of the account. */
-      async set(token: string, password: string): Promise<void> {
-        await post(ROUTES.passwordSet, { token, password });
+      /**
+       * Sets a new password from a reset link. Signs nobody in, and ends every session of the account. A password
+       * from a public leak fails with `password-leaked`; on Warn, call again with `{ acceptLeaked: true }` once the
+       * person confirms.
+       */
+      async set(token: string, password: string, options: { readonly acceptLeaked?: boolean } = {}): Promise<void> {
+        await post(ROUTES.passwordSet, { token, password, ...(options.acceptLeaked === true ? { acceptLeaked: true } : {}) });
       },
     },
 
@@ -674,6 +754,7 @@ export function createSignIn(deps: SignInDeps) {
           ...(input.email === undefined ? {} : { email: input.email }),
           ...(input.firstName === undefined ? {} : { firstName: input.firstName }),
           ...(input.lastName === undefined ? {} : { lastName: input.lastName }),
+          ...(input.acceptLeaked === true ? { acceptLeaked: true } : {}),
         });
         return signInSteps(answer, pkce.verifier);
       },

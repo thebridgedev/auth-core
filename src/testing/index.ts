@@ -195,8 +195,28 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
   // Passkeys: each ceremony's challenge, used once; each registered passkey, by its credential id.
   const passkeyChallenges = new Map<string, { purpose: 'sign-in' | 'register' | 'recheck'; pkce?: string; email?: string | null; user?: string; link?: string; request?: SignInRequest }>();
   const passkeys = new Map<string, { id: string; user: string; name: string; createdAt: string; lastUsedAt: string | null }>();
-  const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link' | 'passkey-setup' | 'recheck'; email: string; session?: string; challenge?: string; request?: SignInRequest; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null } }>();
+  const links = new Map<string, { purpose: 'sign-up' | 'reset' | 'magic-link' | 'passkey-setup' | 'recheck'; email: string; session?: string; challenge?: string; request?: SignInRequest; expiresAt?: number; signUp?: { password: string; firstName: string | null; lastName: string | null; workspace: string | boolean | null; existing?: string } }>();
   const sentLinks: { to: string; purpose: string; token: string }[] = [];
+  // Login security: what the app's owner set, and what the issuer found.
+  const security = {
+    leaked: new Set<string>(),
+    leakedMode: 'warn' as 'warn' | 'refuse',
+    suspended: new Set<string>(),
+    blockedDomains: new Set<string>(),
+    throwaway: new Set<string>(),
+    botCheckSiteKey: null as string | null,
+    supportContact: null as string | null,
+    workspaceLimit: null as number | null,
+  };
+  const domainOf = (email: string) => email.slice(email.lastIndexOf('@') + 1).toLowerCase();
+  /** A new password from a public leak: refused, or on Warn taken once the person confirms (`acceptLeaked`). */
+  const leakedRefusal = (password: unknown, acceptLeaked: unknown): Response | null =>
+    typeof password === 'string' && security.leaked.has(password) && !(security.leakedMode === 'warn' && acceptLeaked === true)
+      ? oauth(400, 'password_leaked', { mode: security.leakedMode, error_description: 'This password has appeared in a public data leak. Choose another.' })
+      : null;
+  const suspendedRefusal = () => oauth(403, 'access_denied', { reason: 'user_suspended' });
+  /** A Response's JSON body with more fields, same status. */
+  const withFields = async (reply: Response, fields: Record<string, unknown>): Promise<Response> => (reply.status === 200 ? json(200, { ...((await reply.json()) as Record<string, unknown>), ...fields }) : reply);
   const requests: RecordedRequest[] = [];
   const invites: FakeInvite[] = [];
   const usage: unknown[] = [];
@@ -492,8 +512,12 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (request !== undefined && (body['code_challenge'] !== undefined || body['redirect_uri'] !== undefined)) return oauth(400, 'invalid_request');
         const person = [...people.values()].find((each) => each.email === String(body['email']).toLowerCase());
         if (person === undefined || person.password !== body['password']) return oauth(400, 'wrong_credentials');
+        if (security.suspended.has(person.id)) return suspendedRefusal();
+        const leaked = security.leaked.has(person.password);
+        if (leaked && security.leakedMode === 'refuse') return oauth(403, 'password_change_required', { reason: 'leaked_password', error_description: 'This password has appeared in a public data leak. Set a new one with the recovery link.' });
         if (request !== undefined) request.used = true;
-        return toWorkspace(person, request?.challenge ?? String(body['code_challenge']), typeof body['workspace'] === 'string' ? body['workspace'] : null, request);
+        const reply = toWorkspace(person, request?.challenge ?? String(body['code_challenge']), typeof body['workspace'] === 'string' ? body['workspace'] : null, request);
+        return leaked ? withFields(reply, { password_leaked: true }) : reply;
       }
       if (route === '/sign-in-requests' && returns.length > 0) {
         if (body['code_challenge_method'] !== 'S256' || typeof body['code_challenge'] !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body['code_challenge'])) return oauth(400, 'invalid_request');
@@ -503,7 +527,17 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         signInRequests.set(id, { challenge: body['code_challenge'], redirectUri: body['redirect_uri'], state: body['state'], linkAddress: typeof body['link_address'] === 'string' ? body['link_address'] : `${origin}/sign-in/${appId}/`, expiresAt: now() + 10 * 60 * 1000, used: false });
         return json(201, { request: id, expires_in: 600 });
       }
-      if (route === '/sign-in-options' && method === 'GET') return json(200, { app: { id: appId }, signUp: true, methods, social, ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}) });
+      if (route === '/sign-in-options' && method === 'GET') {
+        return json(200, {
+          app: { id: appId },
+          signUp: true,
+          methods,
+          social,
+          ...(methods.includes('password') ? { password: { minLength: 8, maxLength: 128 } } : {}),
+          ...(security.botCheckSiteKey === null ? {} : { botCheck: { provider: 'turnstile', siteKey: security.botCheckSiteKey } }),
+          ...(security.supportContact === null ? {} : { supportContact: security.supportContact }),
+        });
+      }
       if (route === '/social/start') {
         const provider = String(body['provider']);
         if (!social.includes(provider)) return oauth(403, 'method_disabled');
@@ -668,6 +702,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
           const record = refreshTokens.get(String(body['refresh_token']));
           const session = record === undefined ? undefined : sessions.get(record.session);
           if (record === undefined || session === undefined || session.ended) return oauth(400, 'invalid_grant', { error_description: 'The session has ended; sign in again.' });
+          if (security.suspended.has(session.user)) return suspendedRefusal();
           if (record.rotatedAt !== null && now() - record.rotatedAt > graceMs) {
             endSession(session.id);
             return oauth(400, 'invalid_grant', { error_description: 'The refresh token was already used; the session has ended.' });
@@ -699,6 +734,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (typeof found === 'string') return inviteRefused(found);
         if (body['email'] !== undefined && String(body['email']).toLowerCase() !== found.email) return oauth(403, 'invite_for_another_address', { error_description: 'This invite is for another email address.' });
         if ([...people.values()].some((each) => each.email === found.email)) return oauth(409, 'account_exists', { error_description: 'This address has an account already: sign in, then accept the invite.' });
+        const leakedInvite = leakedRefusal(body['password'], body['acceptLeaked']);
+        if (leakedInvite !== null) return leakedInvite;
         const person = addPerson({ email: found.email, password: String(body['password']), firstName: (body['firstName'] as string) ?? null, lastName: (body['lastName'] as string) ?? null });
         join(person, found);
         return toWorkspace(person, body['code_challenge'], found.workspace.id);
@@ -708,8 +745,20 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         const token = secret();
         const request = openRequest(body);
         if (request instanceof Response) return request;
-        if (![...people.values()].some((each) => each.email === email)) {
-          links.set(token, { purpose: 'sign-up', email, challenge: String(body['code_challenge']), ...(request === undefined ? {} : { request }), signUp: { password: String(body['password']), firstName: (body['firstName'] as string) ?? null, lastName: (body['lastName'] as string) ?? null, workspace: (body['workspace'] as string | boolean) ?? null } });
+        // Login security, in the order Bridge checks: the bot check, the password, the domain, sign-up protection.
+        if (security.botCheckSiteKey !== null && (typeof body['turnstileToken'] !== 'string' || body['turnstileToken'] === '' || body['turnstileToken'] === 'fail')) return oauth(400, 'bot_check_failed', { error_description: 'We could not check that you are a person. Please try again.' });
+        const leaked = leakedRefusal(body['password'], body['acceptLeaked']);
+        if (leaked !== null) return leaked;
+        if (security.blockedDomains.has(domainOf(email))) return oauth(403, 'access_denied', { reason: 'domain_blocked' });
+        if (security.throwaway.has(domainOf(email))) return oauth(400, 'permanent_email_required', { error_description: 'Please use a permanent email address.' });
+        const signUp = { password: String(body['password']), firstName: (body['firstName'] as string) ?? null, lastName: (body['lastName'] as string) ?? null, workspace: (body['workspace'] as string | boolean) ?? null };
+        const existing = [...people.values()].find((each) => each.email === email);
+        if (existing === undefined) {
+          links.set(token, { purpose: 'sign-up', email, challenge: String(body['code_challenge']), ...(request === undefined ? {} : { request }), signUp });
+          sentLinks.push({ to: email, purpose: 'verify-sign-up', token });
+        } else if (security.workspaceLimit !== null) {
+          // With a workspace limit set: the address is proved first, then a workspace is added below the limit, or the person is signed in at it.
+          links.set(token, { purpose: 'sign-up', email, challenge: String(body['code_challenge']), ...(request === undefined ? {} : { request }), signUp: { ...signUp, existing: existing.id } });
           sentLinks.push({ to: email, purpose: 'verify-sign-up', token });
         } else {
           sentLinks.push({ to: email, purpose: 'account-exists', token: '' });
@@ -723,6 +772,15 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (link.request?.used === true) return oauth(400, 'invalid_request_uri');
         links.delete(String(body['token']));
         if (link.request !== undefined) link.request.used = true;
+        const existing = link.signUp.existing === undefined ? undefined : people.get(link.signUp.existing);
+        if (existing !== undefined) {
+          // A repeat sign-up: the password is never changed by it.
+          const own = existing.workspaces.filter((each) => each.role === 'OWNER').length;
+          if (security.workspaceLimit !== null && own >= security.workspaceLimit) return withFields(toWorkspace(existing, link.challenge as string, null, link.request), { already_have_account: true });
+          const added = { id: id('ws'), name: typeof link.signUp.workspace === 'string' ? link.signUp.workspace : '', role: 'OWNER' };
+          existing.workspaces.push(added);
+          return toWorkspace(existing, link.challenge as string, added.id, link.request);
+        }
         const workspaces = link.signUp.workspace === null ? [] : [{ id: id('ws'), name: typeof link.signUp.workspace === 'string' ? link.signUp.workspace : '', role: 'OWNER' }];
         const person = addPerson({ email: link.email, password: link.signUp.password, firstName: link.signUp.firstName, lastName: link.signUp.lastName, workspaces });
         return toWorkspace(person, link.challenge as string, workspaces[0]?.id ?? null, link.request);
@@ -739,6 +797,8 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       if (route === '/password') {
         const link = links.get(String(body['token']));
         if (link?.purpose !== 'reset') return oauth(400, 'invalid_link');
+        const leakedReset = leakedRefusal(body['password'], body['acceptLeaked']);
+        if (leakedReset !== null) return leakedReset;
         links.delete(String(body['token']));
         const person = [...people.values()].find((each) => each.email === link.email) as FakePerson;
         person.password = String(body['password']);
@@ -1044,6 +1104,58 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
     lastText: (to: string): string | null => [...sentTexts].reverse().find((each) => each.to === to)?.code ?? null,
     /** The person, by email. */
     person: (email: string) => [...people.values()].find((each) => each.email === email.toLowerCase()),
+    /**
+     * Login security: these passwords are "in a public leak". `warn` signs in with `password_leaked: true`
+     * and takes a new one once confirmed (`acceptLeaked`); `refuse` answers `password_change_required` at sign-in and
+     * refuses it as a new password.
+     */
+    leakPasswords(passwords: readonly string[], mode: 'warn' | 'refuse' = 'warn'): void {
+      security.leaked.clear();
+      for (const each of passwords) security.leaked.add(each);
+      security.leakedMode = mode;
+    },
+    /**
+     * Suspends the person across the app, as its owner would: their tokens are refused at once, renewing
+     * and signing in answer `access_denied` with `user_suspended`.
+     */
+    suspend(email: string): void {
+      const found = [...people.values()].find((each) => each.email === email.toLowerCase());
+      if (found === undefined) throw new Error(`No person ${email}.`);
+      security.suspended.add(found.id);
+      for (const each of accessTokens.values()) if (each.user === found.id) each.refused = true;
+    },
+    resume(email: string): void {
+      const found = [...people.values()].find((each) => each.email === email.toLowerCase());
+      if (found !== undefined) security.suspended.delete(found.id);
+    },
+    /** Blocks sign-ups from an email domain: refused at the first step, before any email, with `domain_blocked`. */
+    blockDomain(domain: string, blocked = true): void {
+      if (blocked) security.blockedDomains.add(domain.toLowerCase());
+      else security.blockedDomains.delete(domain.toLowerCase());
+    },
+    /** Sign-up protection on Block refuses this domain as a throwaway one: `permanent_email_required`. */
+    markThrowaway(domain: string): void {
+      security.throwaway.add(domain.toLowerCase());
+    },
+    /**
+     * The invisible bot check on Block: sign-in options carry `botCheck` with this site key, and a sign-up
+     * of one's own without a `turnstileToken` (or with `fail`) answers `bot_check_failed`. `null` turns it off.
+     */
+    requireBotCheck(siteKey: string | null): void {
+      security.botCheckSiteKey = siteKey;
+    },
+    /** The app's support contact, as sign-in options serve it: an email address or an https address; `null` for none. */
+    setSupportContact(contact: string | null): void {
+      security.supportContact = contact;
+    },
+    /**
+     * "Workspaces one person can create": with a number set, signing up again with an address that has an
+     * account sends the sign-up link, and opening it adds a workspace below the limit, or signs in with
+     * `already_have_account: true` at it. `null`: today's "account exists" email.
+     */
+    setWorkspaceLimit(limit: number | null): void {
+      security.workspaceLimit = limit;
+    },
     /**
      * The last email link sent to an address for a purpose (`verify-sign-up`,
      * `reset-password`, `invite-new`, `invite-existing`; `invite` for either

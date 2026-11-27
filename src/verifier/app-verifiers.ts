@@ -92,7 +92,7 @@ export interface AppVerifyOptions {
   readonly appId?: string;
   /**
    * How far behind the app's revocation list may be for this check, such as
-   * 30000 for writes and sensitive actions. @default the list's `maxLagMs`
+   * 90000 for writes and sensitive actions, as Bridge's own Access Layer. @default the list's `maxLagMs`
    */
   readonly maxLagMs?: number;
 }
@@ -166,7 +166,7 @@ function usableSettings(settings: AppSettings): boolean {
  *   apps: async (appId) => (await appSettingsFor(appId)) ?? null,
  *   introspectionUrl,
  * });
- * const result = await verifiers.verifyRequest(request, { maxLagMs: isWrite ? 30_000 : undefined });
+ * const result = await verifiers.verifyRequest(request, { maxLagMs: isWrite ? 90_000 : undefined });
  * ```
  */
 export function createAppVerifiers(options: AppVerifiersOptions): AppVerifiers {

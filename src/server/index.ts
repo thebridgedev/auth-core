@@ -61,7 +61,7 @@ export interface BridgeServerOptions {
   readonly fetch?: Fetch;
   /** How far behind the revocation list may fall before checks answer `unavailable`. @default 300000 (5 minutes) */
   readonly maxLagMs?: number;
-  /** The tighter limit for `verify(..., { strict: true })`, for writes and sensitive actions. @default 30000 */
+  /** The tighter limit for `verify(..., { strict: true })`, for writes and sensitive actions. @default 90000 (90 seconds, as Bridge's own Access Layer) */
   readonly strictLagMs?: number;
   /** How often to fetch new revocation entries. @default 2000 */
   readonly revocationIntervalMs?: number;
@@ -256,7 +256,8 @@ export function createBridgeServer(options: BridgeServerOptions) {
   const fetchFn = options.fetch ?? platformFetch();
   // The key set, the revocation lanes and key introspection are read only where the metadata says, never via a redirect.
   const guardedFetch = withoutRedirects(fetchFn);
-  const strictLagMs = options.strictLagMs ?? 30_000;
+  // 90 seconds, as Bridge's own Access Layer refuses writes; reads stay at 5 minutes (`maxLagMs`).
+  const strictLagMs = options.strictLagMs ?? 90_000;
   const maxQueued = options.maxQueuedReports ?? 10_000;
   let metadata: IssuerMetadata | null = null;
   let verifier: CredentialVerifier | null = null;
