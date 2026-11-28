@@ -2,7 +2,7 @@
   "about": "The issuer's metadata exactly as Bridge's discovery endpoint builds it, field for field, with the values of Bridge's own test of it. The revocation lanes are the four every app's copy carries when deployed. The discovery test checks that the SDK reads this document as it is.",
   "source": {
     "file": "microservices/identity-access/src/controllers.ts (discovery) and identity-access.test.ts",
-    "commit": "92d61ad80c714080f034cebe825029f5190e35a1"
+    "commit": "c443583bcd10d0c877a0beccb86bec4de7764bec"
   },
   "document": {
     "issuer": "https://bridge.test/identity-access/apps/app-1",
@@ -56,15 +56,24 @@
         "password": "https://bridge.test/v2/identity-access/apps/app-1/password",
         "magic_link": "https://bridge.test/v2/identity-access/apps/app-1/magic-link",
         "magic_link_verify": "https://bridge.test/v2/identity-access/apps/app-1/magic-link/verify",
+        "email_code": "https://bridge.test/v2/identity-access/apps/app-1/email-code",
+        "email_code_verify": "https://bridge.test/v2/identity-access/apps/app-1/email-code/verify",
+        "sign_up_code": "https://bridge.test/v2/identity-access/apps/app-1/sign-up/code",
+        "password_forgot_verify": "https://bridge.test/v2/identity-access/apps/app-1/password/forgot/verify",
+        "security": "https://bridge.test/v2/identity-access/second-step",
+        "password_change": "https://bridge.test/v2/identity-access/password/change",
         "passkey_sign_in_options": "https://bridge.test/v2/identity-access/apps/app-1/passkeys/sign-in/options",
         "passkey_sign_in": "https://bridge.test/v2/identity-access/apps/app-1/passkeys/sign-in",
         "passkey_setup_link": "https://bridge.test/v2/identity-access/apps/app-1/passkeys/setup-link",
         "passkey_setup_options": "https://bridge.test/v2/identity-access/apps/app-1/passkeys/setup/options",
         "passkey_setup": "https://bridge.test/v2/identity-access/apps/app-1/passkeys/setup",
         "passkeys": "https://bridge.test/v2/identity-access/passkeys",
+        "account_password": "https://bridge.test/v2/identity-access/password",
         "social_start": "https://bridge.test/v2/identity-access/apps/app-1/social/start",
         "social_finish": "https://bridge.test/v2/identity-access/apps/app-1/social/finish",
         "social_link": "https://bridge.test/v2/identity-access/social/link",
+        "company_login_start": "https://bridge.test/v2/identity-access/apps/app-1/company-login/start",
+        "company_login_finish": "https://bridge.test/v2/identity-access/apps/app-1/company-login/finish",
         "recheck": "https://bridge.test/v2/identity-access/recheck",
         "second_step": "https://bridge.test/v2/identity-access/apps/app-1/second-step",
         "sign_out": "https://bridge.test/v2/identity-access/sign-out",

@@ -2,7 +2,7 @@
   "about": "A pinned copy of the endpoints Bridge's public API promises, from Bridge's API contract: each one's method, path, callers and the body fields it accepts. The contract test checks every route the SDK calls, and the fields it sends, against it. To update: copy the contract's endpoints at a newer commit and change `source`.",
   "source": {
     "file": "tools/access/public-api.json",
-    "commit": "7af20e8da3aa8a183913d80ea612513cf5902300"
+    "commit": "c443583bcd10d0c877a0beccb86bec4de7764bec"
   },
   "endpoints": [
     {
@@ -219,6 +219,86 @@
         "name",
         "onboarded"
       ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/company-login/dry-run",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "domains"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/directory-sync",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/directory-sync",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "enabled",
+        "groupRoles",
+        "key",
+        "mode",
+        "sendWelcomeEmail"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/domains",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/domains",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "domain"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/domains/{domain}",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/apps/{appId}/workspaces/{workspaceId}/domains/{domain}/verify",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
     },
     {
       "method": "GET",
@@ -598,6 +678,309 @@
     },
     {
       "method": "GET",
+      "path": "/v2/accounts/scim/v2/Groups",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/scim/v2/Groups",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": [
+        "Operations",
+        "active",
+        "addresses",
+        "displayName",
+        "emails",
+        "entitlements",
+        "externalId",
+        "groups",
+        "id",
+        "ims",
+        "locale",
+        "members",
+        "meta",
+        "name",
+        "nickName",
+        "password",
+        "phoneNumbers",
+        "photos",
+        "preferredLanguage",
+        "profileUrl",
+        "roles",
+        "schemas",
+        "timezone",
+        "title",
+        "userName",
+        "userType",
+        "x509Certificates"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/scim/v2/Groups/{id}",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/scim/v2/Groups/{id}",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/accounts/scim/v2/Groups/{id}",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": [
+        "Operations",
+        "active",
+        "addresses",
+        "displayName",
+        "emails",
+        "entitlements",
+        "externalId",
+        "groups",
+        "id",
+        "ims",
+        "locale",
+        "members",
+        "meta",
+        "name",
+        "nickName",
+        "password",
+        "phoneNumbers",
+        "photos",
+        "preferredLanguage",
+        "profileUrl",
+        "roles",
+        "schemas",
+        "timezone",
+        "title",
+        "userName",
+        "userType",
+        "x509Certificates"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/accounts/scim/v2/Groups/{id}",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": [
+        "Operations",
+        "active",
+        "addresses",
+        "displayName",
+        "emails",
+        "entitlements",
+        "externalId",
+        "groups",
+        "id",
+        "ims",
+        "locale",
+        "members",
+        "meta",
+        "name",
+        "nickName",
+        "password",
+        "phoneNumbers",
+        "photos",
+        "preferredLanguage",
+        "profileUrl",
+        "roles",
+        "schemas",
+        "timezone",
+        "title",
+        "userName",
+        "userType",
+        "x509Certificates"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/scim/v2/ResourceTypes",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/scim/v2/Schemas",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/scim/v2/ServiceProviderConfig",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/scim/v2/Users",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/scim/v2/Users",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": [
+        "Operations",
+        "active",
+        "addresses",
+        "displayName",
+        "emails",
+        "entitlements",
+        "externalId",
+        "groups",
+        "id",
+        "ims",
+        "locale",
+        "members",
+        "meta",
+        "name",
+        "nickName",
+        "password",
+        "phoneNumbers",
+        "photos",
+        "preferredLanguage",
+        "profileUrl",
+        "roles",
+        "schemas",
+        "timezone",
+        "title",
+        "userName",
+        "userType",
+        "x509Certificates"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/scim/v2/Users/{id}",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/scim/v2/Users/{id}",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/accounts/scim/v2/Users/{id}",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": [
+        "Operations",
+        "active",
+        "addresses",
+        "displayName",
+        "emails",
+        "entitlements",
+        "externalId",
+        "groups",
+        "id",
+        "ims",
+        "locale",
+        "members",
+        "meta",
+        "name",
+        "nickName",
+        "password",
+        "phoneNumbers",
+        "photos",
+        "preferredLanguage",
+        "profileUrl",
+        "roles",
+        "schemas",
+        "timezone",
+        "title",
+        "userName",
+        "userType",
+        "x509Certificates"
+      ]
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/accounts/scim/v2/Users/{id}",
+      "public": false,
+      "callers": [
+        "service_account_key"
+      ],
+      "fields": [
+        "Operations",
+        "active",
+        "addresses",
+        "displayName",
+        "emails",
+        "entitlements",
+        "externalId",
+        "groups",
+        "id",
+        "ims",
+        "locale",
+        "members",
+        "meta",
+        "name",
+        "nickName",
+        "password",
+        "phoneNumbers",
+        "photos",
+        "preferredLanguage",
+        "profileUrl",
+        "roles",
+        "schemas",
+        "timezone",
+        "title",
+        "userName",
+        "userType",
+        "x509Certificates"
+      ]
+    },
+    {
+      "method": "GET",
       "path": "/v2/accounts/users/{userId}",
       "public": false,
       "callers": [
@@ -667,6 +1050,60 @@
       "path": "/v2/accounts/workspace-key-privileges",
       "public": false,
       "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/workspace/company-login/dry-run",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": [
+        "domains"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/accounts/workspace/domains",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/workspace/domains",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": [
+        "domain"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/accounts/workspace/domains/{domain}",
+      "public": false,
+      "callers": [
+        "app_key",
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/accounts/workspace/domains/{domain}/verify",
+      "public": false,
+      "callers": [
+        "app_key",
         "person"
       ],
       "fields": []
@@ -785,6 +1222,7 @@
         "mode",
         "name",
         "privacyPolicy",
+        "relatedOrigins",
         "signIn",
         "termsOfService",
         "website"
@@ -826,6 +1264,7 @@
         "mode",
         "name",
         "privacyPolicy",
+        "relatedOrigins",
         "signIn",
         "termsOfService",
         "website"
@@ -924,6 +1363,16 @@
       "fields": []
     },
     {
+      "method": "POST",
+      "path": "/v2/app-registry/apps/{appId}/related-origins/check",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
       "method": "GET",
       "path": "/v2/app-registry/apps/{appId}/revocations/{lane}",
       "public": true,
@@ -954,6 +1403,57 @@
         "font",
         "radius",
         "scheme"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/app-registry/mode",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/app-registry/mode",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "confirm",
+        "mode"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/app-registry/your-app",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/app-registry/your-app",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "addresses",
+        "confirmPasskeys",
+        "defaultReturn",
+        "main",
+        "mode",
+        "relatedOrigins",
+        "signIn"
       ]
     },
     {
@@ -3100,6 +3600,65 @@
     },
     {
       "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/company-login/finish",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "code",
+        "code_verifier",
+        "state"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/company-login/start",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "client_id",
+        "code_challenge",
+        "code_challenge_method",
+        "connection",
+        "email",
+        "redirect_uri",
+        "request",
+        "return_page",
+        "workspace"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/company-login/{connection}/metadata",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/company-login/{connection}/portal",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/company-login/{connection}/return",
+      "public": true,
+      "callers": [],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/company-login/{connection}/saml",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "RelayState",
+        "SAMLResponse"
+      ]
+    },
+    {
+      "method": "POST",
       "path": "/v2/identity-access/apps/{appId}/consent",
       "public": true,
       "callers": [],
@@ -3120,11 +3679,59 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/email-code",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "client_id",
+        "code_challenge",
+        "code_challenge_method",
+        "email",
+        "redirect_uri",
+        "request"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/email-code/resend",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "flow"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/email-code/verify",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "code",
+        "code_verifier",
+        "device",
+        "flow"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/v2/identity-access/apps/{appId}/federated/{provider}/return",
       "public": true,
       "callers": [],
       "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/federated/{provider}/return",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "code",
+        "error",
+        "error_description",
+        "state",
+        "user"
+      ]
     },
     {
       "method": "POST",
@@ -3207,6 +3814,9 @@
       "callers": [],
       "fields": [
         "code_verifier",
+        "device",
+        "link",
+        "link_verifier",
         "token"
       ]
     },
@@ -3249,6 +3859,8 @@
       "public": true,
       "callers": [],
       "fields": [
+        "link",
+        "link_verifier",
         "response",
         "workspace"
       ]
@@ -3273,6 +3885,8 @@
       "public": true,
       "callers": [],
       "fields": [
+        "code_challenge",
+        "code_challenge_method",
         "password",
         "token"
       ]
@@ -3297,6 +3911,25 @@
       "fields": [
         "email",
         "link_address"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/password/forgot/resend",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "flow"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/password/forgot/verify",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "code",
+        "flow"
       ]
     },
     {
@@ -3349,7 +3982,19 @@
       "callers": [],
       "fields": [
         "code",
-        "flow"
+        "flow",
+        "recovery_code",
+        "remember"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/second-step/method",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "flow",
+        "method"
       ]
     },
     {
@@ -3378,6 +4023,7 @@
       "callers": [],
       "fields": [
         "flow",
+        "method",
         "phone"
       ]
     },
@@ -3391,8 +4037,11 @@
         "code_challenge",
         "code_challenge_method",
         "delete",
+        "device",
         "email",
         "flow",
+        "link",
+        "link_verifier",
         "password",
         "redirect_uri",
         "request",
@@ -3441,9 +4090,15 @@
         "service:mcp"
       ],
       "fields": [
+        "companyLogin",
+        "emailConfirmation",
         "lifetimes",
         "methods",
+        "mfa",
+        "passkeyOffer",
         "password",
+        "passwordExpiryDays",
+        "passwordHistory",
         "secondStep",
         "signUp",
         "signUpPlan",
@@ -3451,8 +4106,32 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-settings/mfa-dry-run",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": [
+        "all",
+        "settings",
+        "users"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/v2/identity-access/apps/{appId}/sign-in-settings/passkey-impact",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-settings/password-impact",
       "public": false,
       "callers": [
         "person",
@@ -3481,8 +4160,37 @@
       "fields": [
         "clientId",
         "clientSecret",
+        "keyId",
+        "privateKey",
         "secretExpiresAt",
+        "teamId",
         "tenantId"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-settings/providers/{provider}/test",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "code_challenge",
+        "code_challenge_method",
+        "return_page"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/sign-in-settings/providers/{provider}/test/finish",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "code",
+        "code_verifier",
+        "state"
       ]
     },
     {
@@ -3505,6 +4213,27 @@
         "plan",
         "request",
         "workspace"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/sign-up/code",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "code",
+        "code_verifier",
+        "flow",
+        "password"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/sign-up/resend",
+      "public": true,
+      "callers": [],
+      "fields": [
+        "flow"
       ]
     },
     {
@@ -3571,6 +4300,15 @@
     },
     {
       "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/users-credentials",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
       "path": "/v2/identity-access/apps/{appId}/users/{userId}/passkeys",
       "public": false,
       "callers": [
@@ -3586,6 +4324,85 @@
       "callers": [
         "person",
         "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/users/{userId}/second-step/reset",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/identity-access/apps/{appId}/workspaces/{workspaceId}/company-login",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/workspaces/{workspaceId}/company-login",
+      "public": false,
+      "callers": [
+        "person",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PUT",
+      "path": "/v2/identity-access/apps/{appId}/workspaces/{workspaceId}/company-login",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "attributes",
+        "domains",
+        "enabled",
+        "groupRoles",
+        "landingPage",
+        "name",
+        "oidc",
+        "provider",
+        "saml",
+        "trustSecondStep",
+        "type"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/workspaces/{workspaceId}/company-login/directory-sync-key",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "expiresInDays"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/apps/{appId}/workspaces/{workspaceId}/company-login/test",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/apps/{appId}/workspaces/{workspaceId}/company-login/test/{test}",
+      "public": false,
+      "callers": [
+        "person"
       ],
       "fields": []
     },
@@ -3671,13 +4488,35 @@
       ]
     },
     {
+      "method": "GET",
+      "path": "/v2/identity-access/passkeys/offer",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/passkeys/offer",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "action"
+      ]
+    },
+    {
       "method": "POST",
       "path": "/v2/identity-access/passkeys/options",
       "public": false,
       "callers": [
         "person"
       ],
-      "fields": []
+      "fields": [
+        "automatic"
+      ]
     },
     {
       "method": "DELETE",
@@ -3700,6 +4539,24 @@
       ]
     },
     {
+      "method": "DELETE",
+      "path": "/v2/identity-access/password",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/password",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
       "method": "POST",
       "path": "/v2/identity-access/password-links",
       "public": false,
@@ -3709,6 +4566,18 @@
       "fields": [
         "email",
         "send"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/password/change",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "current",
+        "password"
       ]
     },
     {
@@ -3739,6 +4608,96 @@
     {
       "method": "POST",
       "path": "/v2/identity-access/recheck/passkey-options",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/second-step",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/v2/identity-access/second-step",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "first",
+        "on"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/identity-access/second-step/devices",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/second-step/recovery-codes",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/second-step/sms",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "phone"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/second-step/sms/confirm",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "code"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/second-step/totp",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/second-step/totp/confirm",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": [
+        "code"
+      ]
+    },
+    {
+      "method": "DELETE",
+      "path": "/v2/identity-access/second-step/{method}",
       "public": false,
       "callers": [
         "person"
@@ -3796,9 +4755,15 @@
         "service:mcp"
       ],
       "fields": [
+        "companyLogin",
+        "emailConfirmation",
         "lifetimes",
         "methods",
+        "mfa",
+        "passkeyOffer",
         "password",
+        "passwordExpiryDays",
+        "passwordHistory",
         "secondStep",
         "signUp",
         "signUpPlan",
@@ -3806,8 +4771,32 @@
       ]
     },
     {
+      "method": "POST",
+      "path": "/v2/identity-access/sign-in-settings/mfa-dry-run",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": [
+        "all",
+        "settings",
+        "users"
+      ]
+    },
+    {
       "method": "GET",
       "path": "/v2/identity-access/sign-in-settings/passkey-impact",
+      "public": false,
+      "callers": [
+        "app_key",
+        "service:mcp"
+      ],
+      "fields": []
+    },
+    {
+      "method": "GET",
+      "path": "/v2/identity-access/sign-in-settings/password-impact",
       "public": false,
       "callers": [
         "app_key",
@@ -3836,7 +4825,10 @@
       "fields": [
         "clientId",
         "clientSecret",
+        "keyId",
+        "privateKey",
         "secretExpiresAt",
+        "teamId",
         "tenantId"
       ]
     },
@@ -3886,6 +4878,15 @@
     {
       "method": "DELETE",
       "path": "/v2/identity-access/workspace-keys/{keyId}",
+      "public": false,
+      "callers": [
+        "person"
+      ],
+      "fields": []
+    },
+    {
+      "method": "POST",
+      "path": "/v2/identity-access/workspace/members/{userId}/second-step/reset",
       "public": false,
       "callers": [
         "person"

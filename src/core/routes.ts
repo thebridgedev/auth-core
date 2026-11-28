@@ -44,9 +44,12 @@ export type EndpointName =
   | 'passkey_setup_options'
   | 'passkey_setup'
   | 'passkeys'
+  | 'account_password'
   | 'social_start'
   | 'social_finish'
   | 'social_link'
+  | 'company_login_start'
+  | 'company_login_finish'
   | 'second_step'
   | 'recheck'
   | 'invites'
@@ -89,9 +92,12 @@ export const CONTRACT_PATHS: Readonly<Record<EndpointName, string>> = {
   passkey_setup_options: '/v2/identity-access/apps/{appId}/passkeys/setup/options',
   passkey_setup: '/v2/identity-access/apps/{appId}/passkeys/setup',
   passkeys: '/v2/identity-access/passkeys',
+  account_password: '/v2/identity-access/password',
   social_start: '/v2/identity-access/apps/{appId}/social/start',
   social_finish: '/v2/identity-access/apps/{appId}/social/finish',
   social_link: '/v2/identity-access/social/link',
+  company_login_start: '/v2/identity-access/apps/{appId}/company-login/start',
+  company_login_finish: '/v2/identity-access/apps/{appId}/company-login/finish',
   second_step: '/v2/identity-access/apps/{appId}/second-step',
   recheck: '/v2/identity-access/recheck',
   invites: '/v2/identity-access/invites',
@@ -119,12 +125,6 @@ function route(method: Route['method'], at: EndpointName, path = '', pending?: s
   return pending === undefined ? { method, at, path } : { method, at, path, pending };
 }
 
-/**
- * Served by Bridge before its API contract lists them: pending until
- * the pinned contract lists them, then the contract test says to unmark them.
- */
-const CODES_PENDING = 'email codes and two-step verification';
-
 export const ROUTES = {
   // Identity and Access: before a token.
   signIn: route('POST', 'sign_in'),
@@ -151,21 +151,24 @@ export const ROUTES = {
   socialFinish: route('POST', 'social_finish'),
   // Link required: signed in the way they already do, the person links the provider they tried first.
   socialLink: route('POST', 'social_link'),
+  // Company login: "Sign in with SSO" by work email, then the company's answer finished on this page.
+  companyLoginStart: route('POST', 'company_login_start'),
+  companyLoginFinish: route('POST', 'company_login_finish'),
   // The text-message second step: the code, a phone number to set up, a new code, or the backup code's reset.
   secondStep: route('POST', 'second_step'),
   secondStepSetup: route('POST', 'second_step', '/setup'),
   secondStepResend: route('POST', 'second_step', '/resend'),
   secondStepReset: route('POST', 'second_step', '/reset'),
   // Email codes: a sign-in's code, a sign-up's code and forgot password's code, each with a new one after 60 s.
-  emailCode: route('POST', 'email_code', '', CODES_PENDING),
-  emailCodeVerify: route('POST', 'email_code_verify', '', CODES_PENDING),
-  emailCodeResend: route('POST', 'email_code', '/resend', CODES_PENDING),
-  signUpCode: route('POST', 'sign_up_code', '', CODES_PENDING),
-  signUpResend: route('POST', 'sign_up', '/resend', CODES_PENDING),
-  passwordForgotVerify: route('POST', 'password_forgot_verify', '', CODES_PENDING),
-  passwordForgotResend: route('POST', 'password_forgot', '/resend', CODES_PENDING),
+  emailCode: route('POST', 'email_code'),
+  emailCodeVerify: route('POST', 'email_code_verify'),
+  emailCodeResend: route('POST', 'email_code', '/resend'),
+  signUpCode: route('POST', 'sign_up_code'),
+  signUpResend: route('POST', 'sign_up', '/resend'),
+  passwordForgotVerify: route('POST', 'password_forgot_verify'),
+  passwordForgotResend: route('POST', 'password_forgot', '/resend'),
   // The second step's other ways: "Use another way".
-  secondStepMethod: route('POST', 'second_step', '/method', CODES_PENDING),
+  secondStepMethod: route('POST', 'second_step', '/method'),
 
   // Identity and Access: the signed-in person accepts an invite.
   inviteAccept: route('POST', 'invites', '/accept'),
@@ -185,17 +188,23 @@ export const ROUTES = {
   passkeyRename: route('PATCH', 'passkeys', '/{passkeyId}'),
   // Two-step verification, for the Security settings: what is set up, an authenticator app, a phone,
   // which is used first, on for oneself, removing one, new recovery codes, forgetting remembered devices.
-  security: route('GET', 'security', '', CODES_PENDING),
-  securityChange: route('PATCH', 'security', '', CODES_PENDING),
-  securityTotp: route('POST', 'security', '/totp', CODES_PENDING),
-  securityTotpConfirm: route('POST', 'security', '/totp/confirm', CODES_PENDING),
-  securitySms: route('POST', 'security', '/sms', CODES_PENDING),
-  securitySmsConfirm: route('POST', 'security', '/sms/confirm', CODES_PENDING),
-  securityRemove: route('DELETE', 'security', '/{method}', CODES_PENDING),
-  securityRecoveryCodes: route('POST', 'security', '/recovery-codes', CODES_PENDING),
-  securityForgetDevices: route('DELETE', 'security', '/devices', CODES_PENDING),
+  security: route('GET', 'security'),
+  securityChange: route('PATCH', 'security'),
+  securityTotp: route('POST', 'security', '/totp'),
+  securityTotpConfirm: route('POST', 'security', '/totp/confirm'),
+  securitySms: route('POST', 'security', '/sms'),
+  securitySmsConfirm: route('POST', 'security', '/sms/confirm'),
+  securityRemove: route('DELETE', 'security', '/{method}'),
+  securityRecoveryCodes: route('POST', 'security', '/recovery-codes'),
+  securityForgetDevices: route('DELETE', 'security', '/devices'),
   // Changing the password while signed in.
-  passwordChange: route('POST', 'password_change', '', CODES_PENDING),
+  passwordChange: route('POST', 'password_change'),
+  // The passkey offer: whether to offer one now, and the person's answer (Not now, Don't ask again).
+  passkeyOffer: route('GET', 'passkeys', '/offer'),
+  passkeyOfferAnswer: route('POST', 'passkeys', '/offer'),
+  // The signed-in person's own password: whether it may go, and removing it.
+  accountPassword: route('GET', 'account_password'),
+  accountPasswordRemove: route('DELETE', 'account_password'),
 
   // Accounts.
   me: route('GET', 'accounts', '/me'),

@@ -55,7 +55,7 @@ describe('contract: the SDK calls only what Bridge promises at version 2', () =>
   });
 
   it('every route before sign-in is public, and every signed-in route takes a person', () => {
-    const beforeSignIn = ['signIn', 'token', 'revoke', 'introspect', 'jwks', 'signInOptions', 'signInRequest', 'signUp', 'signUpVerify', 'passwordForgot', 'passwordSet', 'magicLink', 'magicLinkVerify', 'passkeySignInOptions', 'passkeySignIn', 'passkeySetupLink', 'passkeySetupOptions', 'passkeySetup', 'invitePreview', 'socialStart', 'socialFinish', 'secondStep', 'secondStepSetup', 'secondStepResend', 'secondStepReset', 'flagsVisitorEvaluate', 'liveVisitorChannels', 'liveVisitorHistory', 'liveConnection'];
+    const beforeSignIn = ['signIn', 'token', 'revoke', 'introspect', 'jwks', 'signInOptions', 'signInRequest', 'signUp', 'signUpVerify', 'passwordForgot', 'passwordSet', 'magicLink', 'magicLinkVerify', 'passkeySignInOptions', 'passkeySignIn', 'passkeySetupLink', 'passkeySetupOptions', 'passkeySetup', 'invitePreview', 'socialStart', 'socialFinish', 'companyLoginStart', 'companyLoginFinish', 'emailCode', 'emailCodeVerify', 'emailCodeResend', 'signUpCode', 'signUpResend', 'passwordForgotVerify', 'passwordForgotResend', 'secondStep', 'secondStepSetup', 'secondStepResend', 'secondStepReset', 'secondStepMethod', 'flagsVisitorEvaluate', 'liveVisitorChannels', 'liveVisitorHistory', 'liveConnection'];
     for (const { name, key } of routes) {
       const endpoint = promised.get(key);
       if (endpoint === undefined) continue;
