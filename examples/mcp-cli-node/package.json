@@ -1,0 +1,21 @@
+{
+  "name": "acme-mcp-cli-example",
+  "private": true,
+  "version": "0.0.0",
+  "description": "A plain Node app protected by The Bridge: an MCP endpoint with one tool, an API route, and its own CLI.",
+  "type": "module",
+  "bin": {
+    "acme": "./cli.mjs"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "acme": "node cli.mjs"
+  },
+  "engines": {
+    "node": ">=22.14"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@nebulr-group/bridge-auth-core": "file:../.."
+  }
+}
