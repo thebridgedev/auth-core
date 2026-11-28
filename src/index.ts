@@ -16,7 +16,7 @@ registerInstance();
 export { createBridge } from './bridge.js';
 export type { Bridge, BridgeEvents, BridgeOptions } from './bridge.js';
 
-export { BridgeError, checkoutSetupProblem, isBridgeError, managedByProvider, waitMinutes } from './core/errors.js';
+export { BridgeError, checkoutSetupProblem, fieldProblems, isBridgeError, managedByProvider, waitMinutes } from './core/errors.js';
 export type { BridgeErrorKind, LimitReached, Problem } from './core/errors.js';
 export { API_VERSION } from './core/routes.js';
 export type { IssuerMetadata } from './core/discovery.js';

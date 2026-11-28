@@ -202,6 +202,21 @@ export function managedByProvider(error: unknown): string | null {
   return isBridgeError(error, 'managed-by-provider') ? (error.provider ?? 'provider') : null;
 }
 
+/**
+ * Why each of the app's fields was refused, by its label, when `me.update` sent values Bridge refused (`invalid`, the
+ * problem's `fields`): for showing each message under its own field. Empty for any other error.
+ */
+export function fieldProblems(error: unknown): Readonly<Record<string, string>> {
+  const given = isBridgeError(error) ? error.problem?.['fields'] : undefined;
+  if (!Array.isArray(given)) return {};
+  const problems: Record<string, string> = {};
+  for (const each of given as unknown[]) {
+    const field = each !== null && typeof each === 'object' ? (each as Record<string, unknown>) : {};
+    if (typeof field['label'] === 'string' && typeof field['message'] === 'string') problems[field['label']] = field['message'];
+  }
+  return problems;
+}
+
 export function isBridgeError(value: unknown, kind?: BridgeErrorKind): value is BridgeError {
   return value instanceof BridgeError && (kind === undefined || value.kind === kind);
 }

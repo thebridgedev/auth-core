@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BridgeError, errorFromAnswer, managedByProvider } from '../../core/errors.js';
+import { BridgeError, errorFromAnswer, fieldProblems, managedByProvider } from '../../core/errors.js';
 import { ROUTES } from '../../core/routes.js';
 import { needsRecheck } from '../../recheck.js';
 import { readEmailLink } from '../../sign-in.js';
@@ -158,5 +158,29 @@ describe('the pieces', () => {
     await expect(client.me.get()).resolves.toMatchObject({ language: null, customFields: [{ label: 'jobTitle', value: 'Engineer' }] });
     await expect(client.me.update({ language: 'sv', customFields: [{ label: 'jobTitle', value: 'Lead' }] })).resolves.toMatchObject({ language: 'sv', customFields: [{ value: 'Lead' }] });
     await expect(client.me.update({ language: 'xx' as never })).rejects.toMatchObject({ kind: 'invalid' });
+  });
+
+  it('a refused value of the app\'s fields names each wrong field, as Bridge answers it, and nothing is saved', async () => {
+    const { fake } = issuerWithPeople();
+    fake.addPerson({
+      email: 'ben@acme.test',
+      password: PASSWORD,
+      customFields: [
+        { label: 'employeeId', userLabel: 'Employee number', type: 'integer', value: null, editable: true },
+        { label: 'costCentre', userLabel: 'Cost centre', type: 'text', value: 'CC-1', editable: false },
+      ],
+      workspaces: [{ id: 'ws-acme', name: 'Acme' }],
+    });
+    const client = clientOn(fake);
+    await client.signIn.start({ email: 'ben@acme.test', password: PASSWORD });
+    await expect(client.me.get()).resolves.toMatchObject({ customFields: [{ label: 'employeeId', editable: true }, { label: 'costCentre', editable: false }] });
+    const refused = await client.me.update({ customFields: [{ label: 'employeeId', value: 'forty-two' }, { label: 'costCentre', value: 'CC-9' }] }).catch((error: unknown) => error);
+    expect(refused).toMatchObject({ kind: 'invalid', status: 400 });
+    expect(fieldProblems(refused)).toEqual({ employeeId: 'Employee number must be a valid integer.', costCentre: 'Cost centre cannot be changed here.' });
+    await expect(client.me.get()).resolves.toMatchObject({ customFields: [{ value: null }, { value: 'CC-1' }] });
+    await expect(client.me.update({ customFields: [{ label: 'employeeId', value: '42' }] })).resolves.toMatchObject({ customFields: [{ value: '42' }, { value: 'CC-1' }] });
+    // The same reading of Bridge's own answer.
+    expect(fieldProblems(errorFromAnswer(400, { type: 'urn:bridge:problem:bad-request', title: 'Bad request', status: 400, fields: [{ label: 'badge', message: 'badge must be in the field\'s pattern.' }, { label: 1 }] }))).toEqual({ badge: "badge must be in the field's pattern." });
+    expect(fieldProblems(new Error('x'))).toEqual({});
   });
 });

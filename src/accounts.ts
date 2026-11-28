@@ -24,8 +24,9 @@ export interface ProfileField {
   readonly userLabel?: string;
   readonly type: 'text' | 'email' | 'phone' | 'number' | 'integer' | 'regex' | 'boolean' | (string & {});
   readonly regex?: string;
+  /** The person's value in the workspace their session is for, or null for none yet. */
   readonly value: string | null;
-  /** False for a field the person may see but not change. @default true */
+  /** Whether the person may change it here: the app's field settings say so. False shows it read-only. */
   readonly editable?: boolean;
 }
 
@@ -37,7 +38,10 @@ export interface Me {
   readonly phoneNumber: string | null;
   /** The person's own language (one of `USER_LANGUAGES`), or null when they chose none: screens and emails use it after the screen's own. */
   readonly language?: UserLanguage | null;
-  /** The app's own fields the profile shows, when the app collects any. */
+  /**
+   * The app's own fields, with the person's values in the workspace their session is for: only the fields the app
+   * defines, in its order. Absent when the session has no workspace.
+   */
   readonly customFields?: readonly ProfileField[];
   readonly onboarded: boolean;
   readonly consentsToPrivacyPolicy: boolean;
@@ -61,7 +65,10 @@ export interface MeUpdate {
   readonly phoneNumber?: string;
   /** The person's own language, or null for none. */
   readonly language?: UserLanguage | null;
-  /** New values for the app's own fields, by label. */
+  /**
+   * New values for the app's own fields, by label: only fields whose `editable` is true, in the session's workspace.
+   * Bridge checks each by the field's rules; a refusal (`invalid`) names every wrong one, read with {@link fieldProblems}.
+   */
   readonly customFields?: readonly { readonly label: string; readonly value: string }[];
   readonly onboarded?: boolean;
   readonly consentsToPrivacyPolicy?: boolean;

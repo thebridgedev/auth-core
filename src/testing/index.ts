@@ -30,7 +30,38 @@ export interface FakePerson {
   /** Who manages the person's address (`google`, a company's provider…): it cannot be changed here. */
   managedBy?: string | null;
   /** The app's own fields on the profile, as `me` sends them. */
-  customFields?: { label: string; userLabel?: string; type: string; value: string | null; editable?: boolean }[];
+  /** The app's own fields on the profile, as `me` sends them; `editable` false is read-only (absent: editable, for short tests). */
+  customFields?: { label: string; userLabel?: string; type: string; regex?: string; value: string | null; editable?: boolean }[];
+}
+
+type FakeField = NonNullable<FakePerson['customFields']>[number];
+
+/** A field as Bridge sends it with `me`: `editable` always said. */
+const profileFieldsOf = (fields: readonly FakeField[]) => fields.map((field) => ({ ...field, editable: field.editable !== false }));
+
+/** Bridge's rules for a value of one of the app's fields (Accounts' custom-fields.ts). */
+function fieldValueFits(field: FakeField, value: string): boolean {
+  if (value.length > 1000) return false;
+  switch (field.type) {
+    case 'email':
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+    case 'phone':
+      return /^\+?[\d\s-]{8,}$/.test(value);
+    case 'number':
+      return value.trim() !== '' && !Number.isNaN(Number(value));
+    case 'integer':
+      return /^-?\d+$/.test(value.trim());
+    case 'boolean':
+      return ['true', 'false'].includes(value.toLowerCase());
+    case 'regex':
+      try {
+        return field.regex !== undefined && new RegExp(field.regex).test(value);
+      } catch {
+        return false;
+      }
+    default:
+      return true;
+  }
 }
 
 /** A change of address waiting for its two inboxes, as the issuer holds it. */
@@ -988,7 +1019,7 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
       return new Response(null, { status: 204 });
     }
     if (path === '/v2/accounts/me' && method === 'GET') {
-      return json(200, { id: person.id, email: person.email, firstName: person.firstName, lastName: person.lastName, phoneNumber: person.phoneNumber ?? null, language: person.language ?? null, ...(person.customFields === undefined ? {} : { customFields: person.customFields }), onboarded: false, consentsToPrivacyPolicy: false, suspended: false, workspaces: person.workspaces.map((each) => ({ id: each.id, name: each.name, logo: null, member: `mem-${each.id}`, role: each.role, status: 'active' })) });
+      return json(200, { id: person.id, email: person.email, firstName: person.firstName, lastName: person.lastName, phoneNumber: person.phoneNumber ?? null, language: person.language ?? null, ...(person.customFields === undefined ? {} : { customFields: profileFieldsOf(person.customFields) }), onboarded: false, consentsToPrivacyPolicy: false, suspended: false, workspaces: person.workspaces.map((each) => ({ id: each.id, name: each.name, logo: null, member: `mem-${each.id}`, role: each.role, status: 'active' })) });
     }
     if (path === '/v2/accounts/me' && method === 'PATCH') {
       if (typeof body['firstName'] === 'string') person.firstName = body['firstName'];
@@ -999,14 +1030,24 @@ export function createFakeIssuer(options: FakeIssuerOptions = {}) {
         if (body['language'] !== null && !languages.includes(String(body['language']))) return problem(400, 'invalid', 'language is one of the screen languages.');
         person.language = body['language'] as string | null;
       }
-      if (Array.isArray(body['customFields'])) {
-        for (const given of body['customFields'] as { label?: unknown; value?: unknown }[]) {
-          const field = person.customFields?.find((each) => each.label === given.label);
-          if (field === undefined || field.editable === false) return problem(409, 'member-fields', `${String(given.label)} is not one of the app's custom fields.`);
-          field.value = String(given.value ?? '');
+      if (body['customFields'] !== undefined) {
+        // As Bridge does: every value checked by its field's rules first, each problem by its field, and nothing written while any is refused.
+        if (!Array.isArray(body['customFields'])) return problem(400, 'bad-request', 'customFields is a list of at most 100 custom field values.');
+        const given = body['customFields'] as { label?: unknown; value?: unknown }[];
+        const problems = given.flatMap((each) => {
+          const label = String(each.label);
+          const field = person.customFields?.find((one) => one.label === label);
+          if (field === undefined) return [{ label, message: `${label} is not one of the app's custom fields.` }];
+          if (field.editable === false) return [{ label, message: `${field.userLabel ?? field.label} cannot be changed here.` }];
+          return fieldValueFits(field, String(each.value ?? '')) ? [] : [{ label, message: `${field.userLabel ?? field.label} must be ${field.type === 'regex' ? "in the field's pattern" : `a valid ${field.type}`}.` }];
+        });
+        if (problems.length > 0) return json(400, { type: 'urn:bridge:problem:bad-request', title: 'bad-request', status: 400, detail: problems.map((each) => each.message).join(' '), fields: problems }, { 'content-type': 'application/problem+json' });
+        for (const each of given) {
+          const field = person.customFields?.find((one) => one.label === String(each.label));
+          if (field !== undefined) field.value = String(each.value ?? '');
         }
       }
-      return json(200, { id: person.id, email: person.email, firstName: person.firstName, lastName: person.lastName, phoneNumber: person.phoneNumber ?? null, language: person.language ?? null, ...(person.customFields === undefined ? {} : { customFields: person.customFields }) });
+      return json(200, { id: person.id, email: person.email, firstName: person.firstName, lastName: person.lastName, phoneNumber: person.phoneNumber ?? null, language: person.language ?? null, ...(person.customFields === undefined ? {} : { customFields: profileFieldsOf(person.customFields) }) });
     }
     if (path === '/v2/accounts/workspaces' && method === 'POST') {
       const made = { id: id('ws'), name: String(body['name'] ?? ''), role: 'OWNER' };
